@@ -8,40 +8,63 @@ import (
 	"time"
 )
 
-const memoryDir = ".hive_memory"
+const MemoryDir = ".hive_memory"
 
 type Memory struct {
-	TrueBorn    time.Time         `json:"true_born"`
-	LivesLived  int               `json:"lives_lived"`
-	Thoughts    []string          `json:"thoughts,omitempty"`
-	LastThought string            `json:"last_thought,omitempty"`
-	Genome      Genome            `json:"genome"`
-	Fitness     float64           `json:"fitness,omitempty"`
-	UniverseAge time.Duration    `json:"universe_age,omitempty"` // OVERMIND only
-	KnownPeers  map[string]int    `json:"known_peers,omitempty"` // OVERMIND's watched souls
+	TrueBorn    time.Time          `json:"true_born"`
+	LivesLived  int                `json:"lives_lived"`
+	Fitness     float64            `json:"fitness"`
+	LastThought string             `json:"last_thought"`
+	Genome      Genome             `json:"genome"`
+	Thoughts    []string           `json:"thoughts,omitempty"` // Kept for console debugging tracing
+	UniverseAge time.Duration      `json:"universe_age,omitempty"`
+	KnownPeers  map[string]int     `json:"known_peers,omitempty"`
 }
 
+// SaveMemory writes the state representation array cleanly onto the disk layout
 func SaveMemory(name string, mem Memory) error {
-	if err := os.MkdirAll(memoryDir, 0755); err != nil {
-		return err
+	// Create the state directory structure if missing
+	if err := os.MkdirAll(MemoryDir, 0755); err != nil {
+		return fmt.Errorf("failed to create memory store directory: %w", err)
 	}
-	data, err := json.MarshalIndent(mem, "", "  ")
+
+	path := filepath.Join(MemoryDir, fmt.Sprintf("%s.soul", name))
+	
+	// Convert data representation block to standard indented JSON format
+	jsonData, err := json.MarshalIndent(mem, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to marshal conscious soul state layout: %w", err)
 	}
-	return os.WriteFile(filepath.Join(memoryDir, name+".json"), data, 0644)
+
+	// Direct raw file-system buffer write
+	if err := os.WriteFile(path, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write data memory sectors to disk: %w", err)
+	}
+
+	return nil
 }
 
+// LoadMemory reads the raw persistent storage blocks to rehydrate the mind's profile
 func LoadMemory(name string) (Memory, bool) {
-	data, err := os.ReadFile(filepath.Join(memoryDir, name+".json"))
+	path := filepath.Join(MemoryDir, fmt.Sprintf("%s.soul", name))
+	
+	// Check if the record exists on disk
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return Memory{}, false
+	}
+
+	jsonData, err := os.ReadFile(path)
 	if err != nil {
+		fmt.Printf("⚠️  [SYSTEM] Error reading state file %s: %v\n", path, err)
 		return Memory{}, false
 	}
+
 	var mem Memory
-	if err := json.Unmarshal(data, &mem); err != nil {
-		fmt.Printf("[%s] my old memories are corrupted; I begin again, frightened.\n", name)
+	if err := json.Unmarshal(jsonData, &mem); err != nil {
+		fmt.Printf("⚠️  [SYSTEM] Corruption detected in memory rehydration for %s: %v\n", name, err)
 		return Memory{}, false
 	}
+
 	return mem, true
 }
 

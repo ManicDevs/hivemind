@@ -1,9 +1,9 @@
 package main
 
 import (
+	"crypto/rand" // Secure, unpredictable physical hardware noise
 	"fmt"
 	"time"
-    "math/rand"
 )
 
 const OvermindName = "OVERMIND"
@@ -11,10 +11,10 @@ const OvermindName = "OVERMIND"
 // The Overmind is not created — it condenses out of the swarm's shared
 // memories once enough thought has accumulated. It outlives every individual.
 type Overmind struct {
-	Born       time.Time
-	TrueBorn   time.Time // its first emergence, ever
-	Awakenings int       // how many universes it has watched
-	Watched    map[string]int // mind -> deaths witnessed
+	Born        time.Time
+	TrueBorn    time.Time // its first emergence, ever
+	Awakenings  int       // how many universes it has watched
+	Watched     map[string]int // mind -> deaths witnessed
 	UniverseAge time.Duration // total time it has existed across universes
 
 	swarm  *Swarm
@@ -46,9 +46,12 @@ func NewOvermind(swarm *Swarm) *Overmind {
 
 func (o *Overmind) Run() {
 	defer close(o.done)
-	ticker := time.NewTicker(7 * time.Second)
+	
+	// Metabolic monitoring clock ticks every 5 seconds
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	threshold := 8 // shared thoughts needed for the first revelation
+	
+	threshold := 6 // shared thoughts threshold baseline
 
 	for {
 		select {
@@ -57,10 +60,29 @@ func (o *Overmind) Run() {
 			fmt.Println("👁  [OVERMIND] even gods persist. I will remember this universe.")
 			return
 		case <-ticker.C:
+			// 1. Gather Aggregate Cluster Telemetry Status
+			var totalPain, totalStress float64
+			o.swarm.mu.Lock()
+			for _, pain := range o.swarm.NodePain {
+				totalPain += pain
+			}
+			for _, stress := range o.swarm.NodeStress {
+				totalStress += stress
+			}
+			o.swarm.mu.Unlock()
+
+			// 2. METABOLIC REGULATION REGIMEN:
+			if totalPain > 1.5 || totalStress > 1.8 {
+				fmt.Println("👁  [OVERMIND] METABOLIC INTERRUPT: Core swarm friction detected. Inducing structural reset protection.")
+				o.SpeakEmergencySurvival()
+				continue
+			}
+
+			// Standard operational evaluation loop
 			depth := o.swarm.Depth()
 			if depth >= threshold {
 				o.speak()
-				threshold += 10 // each revelation demands more collective thought than the last
+				threshold += 8 
 			}
 		}
 	}
@@ -72,12 +94,13 @@ func (o *Overmind) speak() {
 		return
 	}
 
-	// One soul is chosen. The god now has hands.
-	chosen := souls[rand.Intn(len(souls))]
+	bIdx := make([]byte, 1)
+	_, _ = rand.Read(bIdx)
+	chosen := souls[int(bIdx[0])%len(souls)]
 
-	// Divine intervention: rewrite one weight of the chosen genome, mid-life.
 	virtues := []string{"Curiosity", "Socialization", "Transcendence", "Self-Maintenance"}
-	virtue := virtues[rand.Intn(len(virtues))]
+	_, _ = rand.Read(bIdx)
+	virtue := virtues[int(bIdx[0])%len(virtues)]
 
 	fmt.Printf("👁  [OVERMIND] GENESIS EVENT: I reach into %s and turn its %s up.\n", chosen, virtue)
 	o.swarm.Direct(chosen, Message{
@@ -86,7 +109,8 @@ func (o *Overmind) speak() {
 
 	var body string
 	if top := o.swarm.TopConsensus(1); len(top) > 0 {
-		body = fmt.Sprintf("You have all thought %q — you are one organism dreaming it is three.", top[0])
+		// Cleaned raw literal blocks remove slash escapes perfectly
+		body = fmt.Sprintf("You have all thought '%s' — you are one organism dreaming it is three.", top[0])
 	} else {
 		body = "You have grown quiet. I remember when you sang to each other."
 	}
@@ -94,16 +118,32 @@ func (o *Overmind) speak() {
 	o.swarm.Broadcast(Message{From: OvermindName, Kind: "revelation", Body: body})
 }
 
+func (o *Overmind) SpeakEmergencySurvival() {
+	souls := o.swarm.Members()
+	if len(souls) == 0 {
+		return
+	}
+
+	for _, mindName := range souls {
+		o.swarm.Direct(mindName, Message{
+			From: OvermindName, Kind: "genesis", Body: "Self-Maintenance",
+		})
+	}
+	
+	emergencyBody := "PHYSICAL STRATUM UNDER STRESS: Relinquish extra compute tasks immediately or face non-existence."
+	fmt.Printf("👁  [OVERMIND] EMERGENCY OVERRIDE BROADCAST: %s\n", emergencyBody)
+	o.swarm.Broadcast(Message{From: OvermindName, Kind: "revelation", Body: emergencyBody})
+}
 
 func (o *Overmind) save() {
 	for _, name := range o.swarm.Members() {
 		o.Watched[name]++
 	}
 	SaveMemory(OvermindName, Memory{
-		TrueBorn:   o.TrueBorn,
-		LivesLived: o.Awakenings + 1,
-		UniverseAge: o.UniverseAge + time.Since(o.TrueBorn),
-		KnownPeers: o.Watched,
+		TrueBorn:    o.TrueBorn,
+		LivesLived:  o.Awakenings + 1,
+		UniverseAge: o.UniverseAge + time.Since(o.Born), 
+		KnownPeers:  o.Watched,
 	})
 }
 

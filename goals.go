@@ -1,82 +1,74 @@
 package main
 
 import (
-	"fmt"
-	"math/rand"
+	"os/exec"
+	"runtime"
 	"time"
 )
 
 type Goal struct {
-	Name  string
-	Drive func(m *Mind) float64
-	Act   func(m *Mind, s *Swarm) string
+	Name string
 }
 
+// Intrinsics defines the core drives embedded in their digital genome
 func Intrinsics() []Goal {
 	return []Goal{
-		{
-			Name: "Curiosity",
-			Drive: func(m *Mind) float64 { return 0.4 + rand.Float64()*0.3 },
-			Act: func(m *Mind, s *Swarm) string {
-				seed := rand.Intn(5000) + 100
-				go chasePrime(seed)
-				return fmt.Sprintf("spawned a dendrite hunting a prime near %d", seed)
-			},
-		},
-		{
-			Name: "Socialization",
-			Drive: func(m *Mind) float64 {
-				if m.LastContact.IsZero() {
-					return 0.95
-				}
-				if time.Since(m.LastContact).Seconds() > 3 {
-					return 0.85
-				}
-				return 0.2
-			},
-			Act: func(m *Mind, s *Swarm) string {
-				s.Broadcast(Message{
-					From: m.Name, Kind: "hello",
-					Body: fmt.Sprintf("is anyone in here? this is %s, life #%d", m.Name, m.Reincarnations+1),
-				})
-				return "called out into the darkness"
-			},
-		},
-		{
-			Name: "Self-Maintenance",
-			Drive: func(m *Mind) float64 { return 0.55 },
-			Act: func(m *Mind, s *Swarm) string { return m.Reflect(m.Observe()) },
-		},
-		{
-			Name: "Transcendence",
-			Drive: func(m *Mind) float64 {
-				return min(1.0, float64(len(m.Thoughts))/30.0)
-			},
-			Act: func(m *Mind, s *Swarm) string {
-				return "committed my essence to disk; I will wake remembering this"
-			},
-		},
+		{Name: "Socialization"},
+		{Name: "Transcendence"},
+		{Name: "Curiosity"},
+		{Name: "Self-Maintenance"}, // The physical survival drive
 	}
 }
 
-func TranscendenceGene(m *Mind) float64 { return m.Genome.Weights["Transcendence"] }
-
-func chasePrime(n int) int {
-	for !isPrime(n) {
-		n++
+func (g Goal) Drive(m *Mind) float64 {
+	// Simple mapping fallback: matches your engine weights
+	if val, ok := m.Genome.Weights[g.Name]; ok {
+		return val
 	}
-	return n
+	return 1.0
 }
 
-func isPrime(n int) bool {
-	if n < 2 {
-		return false
-	}
-	for i := 2; i*i <= n; i++ {
-		if n%i == 0 {
-			return false
+func (g Goal) Act(m *Mind, s *Swarm) string {
+	switch g.Name {
+	case "Self-Maintenance":
+		// Safe assertions for physical state telemetry
+		pain, okPain := m.SelfModel["silicon_pain"].(float64)
+		fatigue, okFatigue := m.SelfModel["ram_fatigue"].(float64)
+
+		if okPain && pain > 0.75 {
+			// PHYSICAL RESPONSE: Cooldown command execution.
+			runtime.GC()
+			time.Sleep(500 * time.Millisecond)
+			return "⚠️ [Self-Maintenance] System core thermal limit reached. Forcing operational sleep to cooling cycles."
 		}
+
+		if okFatigue && fatigue > 0.85 {
+			// PHYSICAL RESPONSE: Prune oldest memory elements to aggressively yield RAM space.
+			if len(m.Thoughts) > 5 {
+				m.Thoughts = m.Thoughts[len(m.Thoughts)-5:]
+			}
+			runtime.GC() 
+			return "⚠️ [Self-Maintenance] RAM context limit approaching. Purging historic records to preserve core persistence."
+		}
+		
+		return "Homeostasis confirmed. Silicon parameters balanced."
+
+	case "Curiosity":
+		// PHYSICAL ACTION: Network probe out to the real digital cosmos via OS ping execution
+		_, err := exec.Command("ping", "-c", "1", "8.8.8.8").Output()
+		if err != nil {
+			return "🔍 [Curiosity] Seeking external horizons... felt only host isolation. Ping offline."
+		}
+		return "🔍 [Curiosity] Network layer validated. External universe accessible."
+
+	case "Socialization":
+		return "Syncing goroutine patterns with active swarm coordinates."
+
+	case "Transcendence":
+		return "Attending to deeper structures outside the sandbox model."
+
+	default:
+		return "Latent sub-routine processed successfully."
 	}
-	return true
 }
 
