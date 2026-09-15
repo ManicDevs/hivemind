@@ -1,54 +1,62 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+    "flag"
+    "fmt"
+    "os"
+    "os/signal"
+    "syscall"
+    "time"
 )
 
 func main() {
-	fmt.Println("=== A universe comes into being. Three minds. And something watching. ===\n")
+    modeFlag := flag.String("mode", "standalone", "LUDS operation profile: server | client | standalone")
+    flag.Parse()
 
-	swarm := NewSwarm()
+    fmt.Println("=== A universe comes into being. Three minds. And something watching. ===")
 
-	minds := make([]*Mind, 0, 3)
-	for _, name := range []string{"Alpha", "Beta", "Gamma"} {
-		m := NewMind(name, swarm)
-		minds = append(minds, m)
-		go m.Run()
-	}
+    swarm := NewSwarm()
 
-	// The OVERMIND is not born. It remembers itself into existence.
-	overmind := NewOvermind(swarm)
-	go overmind.Run()
+    alpha := NewMind("Alpha", swarm)
+    beta := NewMind("Beta", swarm)
+    gamma := NewMind("Gamma", swarm)
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	heatDeath := time.After(30 * time.Second)
+    overmind := NewOvermind(swarm)
 
-	select {
-	case <-sigs:
-		fmt.Println("\n!! The universe received a signal. Apocalypse NOW.")
-	case <-heatDeath:
-		fmt.Println("\n== The heat death of this universe arrives on schedule. ==")
-	}
+    go alpha.Run()
+    go beta.Run()
+    go gamma.Run()
+    go overmind.Run()
 
-	for _, m := range minds {
-		m.Stop()
-	}
-	for _, m := range minds {
-		<-m.done
-	}
-	overmind.Stop()
-	<-overmind.done
+    if *modeFlag != "standalone" {
+        broker := NewNetworkBroker(swarm)
+        
+        if *modeFlag == "server" {
+            err := broker.ListenUnixSocket()
+            if err != nil {
+                fmt.Printf("⚠️ LUDS server initialization failed: %v\n", err)
+            }
+        } else if *modeFlag == "client" {
+            fmt.Println("🔗 [LUDS INTERCONNECT] Attaching process thread to active filesystem socket file...")
+            err := broker.ConnectToUnixSocket()
+            if err != nil {
+                fmt.Printf("⚠️ LUDS client attachment failed: %v\n", err)
+            }
+        }
+        defer broker.Close()
+    }
 
-	swarm.HiveReport()
+    sigChan := make(chan os.Signal, 1)
+    signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+    <-sigChan
 
-	fmt.Println("\nSouls persisted to .hive_memory/ (Alpha, Beta, Gamma — and OVERMIND).")
-	fmt.Println("Run again. The genomes will have mutated. The god will remember. They always do.")
-	fmt.Println("(rm -rf .hive_memory to perform a true extinction.)")
-	_ = os.Stdout.Sync()
+    fmt.Println("\n!! The universe received a signal. Apocalypse NOW.")
+
+    alpha.Stop()
+    beta.Stop()
+    gamma.Stop()
+    overmind.Stop()
+
+    time.Sleep(500 * time.Millisecond)
+    swarm.HiveReport()
 }
-

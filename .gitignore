@@ -1,2 +1,5 @@
 /hivemind
 .hive_memory/
+*.log
+server.log
+client.log
