@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -15,20 +16,20 @@ const OvermindName = "OVERMIND"
 const genesisSpacing = 25
 
 type Overmind struct {
-	Born        time.Time
-	TrueBorn    time.Time
-	Awakenings  int
-	Watched     map[string]bool
-	UniverseAge time.Duration
-	PubKeyStr   string
-	privateKey  ed25519.PrivateKey
+	Born         time.Time
+	TrueBorn     time.Time
+	Awakenings   int
+	Watched      map[string]bool
+	UniverseAge  time.Duration
+	PubKeyStr    string
+	privateKey   ed25519.PrivateKey
 	identitySeed string
 	swarm        *Swarm
 
 	// Determinism across lives: the chronicle depth accumulated in previous
 	// universes, and the effective-depth threshold for the next genesis.
 	chronicleOffset int
-	genesisMark      int
+	genesisMark     int
 
 	stop chan struct{}
 	done chan struct{}
@@ -58,8 +59,13 @@ func NewOvermind(swarm *Swarm) *Overmind {
 		o.TrueBorn = time.Now()
 	}
 
-	// Identity persists: the god that remembers should be the same god.
-	if hadPastLife && restored.IdentitySeed != "" {
+	// Identity persists: the god that remembers should be the same god —
+	// unless this birth forked another node's lineage, which gets its own.
+	if ForkedLineage(OvermindName) {
+		fmt.Printf("🍴 [OVERMIND] lineage forked into node %q — a new god wakes.\n", NodeName)
+		o.PubKeyStr, o.privateKey = newIdentity()
+		o.identitySeed = encodeSeed(o.privateKey)
+	} else if hadPastLife && restored.IdentitySeed != "" {
 		o.PubKeyStr, o.privateKey = identityFromSeed(restored.IdentitySeed)
 		o.identitySeed = restored.IdentitySeed
 	} else {
@@ -151,6 +157,9 @@ func (o *Overmind) SpeakEmergencySurvival() {
 
 func (o *Overmind) save() {
 	for _, name := range o.swarm.Members() {
+		if strings.HasPrefix(name, "mesh:") {
+			continue // plumbing, not a soul
+		}
 		o.Watched[name] = true
 	}
 	SaveMemory(OvermindName, Memory{
@@ -165,4 +174,3 @@ func (o *Overmind) save() {
 }
 
 func (o *Overmind) Stop() { close(o.stop) }
-

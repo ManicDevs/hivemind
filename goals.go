@@ -108,4 +108,3 @@ func parsePingRTT(out string) string {
 	}
 	return ""
 }
-

@@ -19,7 +19,7 @@ import (
 
 const (
 	fatalPainThreshold = 0.90 // dying this hot marks the soul as a fatality
-	physicsSubsteps     = 20   // simulated seconds of chaos per 2s cycle (×0.05s each)
+	physicsSubsteps    = 20   // simulated seconds of chaos per 2s cycle (×0.05s each)
 )
 
 var telemetryOnce sync.Once
@@ -115,7 +115,13 @@ func NewMind(name string, swarm *Swarm) *Mind {
 	}
 
 	// Identity first: same soul, same handle, so peers are still recognizable.
-	if hadPastLife && restored.IdentitySeed != "" {
+	// A legacy migration is a fork, not a continuation: mint fresh keys so
+	// two nodes can never share one handle and eat each other's frames.
+	if ForkedLineage(name) {
+		fmt.Printf("🍴 [%s] lineage forked into node %q — minting fresh identity.\n", name, NodeName)
+		m.PubKeyStr, m.privateKey = newIdentity()
+		m.identitySeed = encodeSeed(m.privateKey)
+	} else if hadPastLife && restored.IdentitySeed != "" {
 		m.PubKeyStr, m.privateKey = identityFromSeed(restored.IdentitySeed)
 		m.identitySeed = restored.IdentitySeed
 	} else {
@@ -212,6 +218,7 @@ func (m *Mind) Observe() map[string]interface{} {
 	}
 
 	siliconPain = ramFatigue * 0.5
+	thermalSrc := "estimate (no thermal sensor)"
 	if zones, err := filepath.Glob("/sys/class/thermal/thermal_zone*/temp"); err == nil {
 		for _, zone := range zones {
 			raw, err := os.ReadFile(zone)
@@ -223,6 +230,7 @@ func (m *Mind) Observe() map[string]interface{} {
 				continue
 			}
 			siliconPain = clamp((milli/1000.0-40.0)/45.0, 0, 1)
+			thermalSrc = "sensor:" + filepath.Base(filepath.Dir(zone))
 			break
 		}
 	}
@@ -230,14 +238,15 @@ func (m *Mind) Observe() map[string]interface{} {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 	return map[string]interface{}{
-		"cpu_stress":   cpuStress,
-		"ram_fatigue":  ramFatigue,
-		"silicon_pain": siliconPain,
-		"goroutines":   runtime.NumGoroutine(),
-		"memory":       memStats.Alloc,
-		"age":          time.Since(m.Born).Round(time.Second),
-		"thoughts":     len(m.Thoughts),
-		"peers":        len(m.KnownPeers),
+		"cpu_stress":     cpuStress,
+		"ram_fatigue":    ramFatigue,
+		"silicon_pain":   siliconPain,
+		"thermal_source": thermalSrc,
+		"goroutines":     runtime.NumGoroutine(),
+		"memory":         memStats.Alloc,
+		"age":            time.Since(m.Born).Round(time.Second),
+		"thoughts":       len(m.Thoughts),
+		"peers":          len(m.KnownPeers),
 	}
 }
 
@@ -331,8 +340,9 @@ func (m *Mind) Cycle() {
 	m.Affect.Tick(m)
 	painVal, _ := m.SelfModel["silicon_pain"].(float64)
 	stressVal, _ := m.SelfModel["cpu_stress"].(float64)
+	srcVal, _ := m.SelfModel["thermal_source"].(string)
 
-	m.swarm.LogHardwareTrauma(m.PubKeyStr, painVal, stressVal)
+	m.swarm.LogHardwareTrauma(m.PubKeyStr, painVal, stressVal, srcVal)
 
 	// Let the chaos actually move: a full second of simulated pendulum
 	// per cycle, so trajectories diverge visibly between minds.
@@ -366,17 +376,32 @@ var validVirtues = map[string]bool{
 	GoalSelfMaintenance: true,
 }
 
+// registerPeer records a sender as a peer only if it is not one of our own
+// hive minds. Siblings are contact — they move LastContact (set for every
+// frame at the top of receive) but are never peers. Fitness therefore
+// measures the outside world: strangers met, not brothers born beside.
+// Reports true when a new peer was met.
+func (m *Mind) registerPeer(pubKey string) bool {
+	if m.swarm.IsMember(pubKey) {
+		return false
+	}
+	if m.KnownPeers[pubKey] {
+		return false
+	}
+	m.KnownPeers[pubKey] = true
+	return true
+}
+
 func (m *Mind) receive(msg SecureMessage) {
 	m.LastContact = time.Now()
 	senderShortID := shortID(msg.SenderPubKey)
 	switch msg.Kind {
 	case "hello":
-		if !m.KnownPeers[msg.SenderPubKey] {
-			m.KnownPeers[msg.SenderPubKey] = true
+		if m.registerPeer(msg.SenderPubKey) {
 			m.think(fmt.Sprintf("Node [%s...] linked to the collective mesh.", senderShortID))
 		}
 	case "thought":
-		m.KnownPeers[msg.SenderPubKey] = true
+		m.registerPeer(msg.SenderPubKey)
 		if len(msg.DataState) >= 4 {
 			fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
 				senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
@@ -399,7 +424,7 @@ func (m *Mind) receive(msg SecureMessage) {
 		m.Affect.Awe = 1.0
 		fmt.Printf("  ✨ [GENESIS] Mid-life trait shift: %s amplified.\n", msg.PayloadStr)
 	case "hardware_alert":
-		m.KnownPeers[msg.SenderPubKey] = true
+		m.registerPeer(msg.SenderPubKey)
 		m.Affect.Peace = clamp(m.Affect.Peace-0.15, 0, 1)
 		if m.Genome.Weights[GoalSocialization] > 1.2 {
 			fmt.Printf("  ⚠️  [HIVE ALERT] Node [%s...] reporting physical stress.\n", senderShortID)
@@ -416,8 +441,16 @@ func (m *Mind) Transcend() {
 	pain, _ := m.SelfModel["silicon_pain"].(float64)
 	stress, _ := m.SelfModel["cpu_stress"].(float64)
 
-	// Fitness counts what this life actually thought, not the whole archive again.
-	fitness := m.LifetimeFitness + float64(len(m.Thoughts)-m.thoughtsAtBirth)
+	// Fitness counts what this life actually did — new thoughts, new peers,
+	// revelations witnessed, genesis touches — not the archive again. Thought
+	// pruning (Self-Maintenance) can shrink the archive below its birth size,
+	// so the delta is floored at zero: forgetting is never punished.
+	lifeThoughts := max(len(m.Thoughts)-m.thoughtsAtBirth, 0)
+	fitness := m.LifetimeFitness +
+		float64(lifeThoughts) +
+		3*float64(len(m.KnownPeers)) +
+		7*float64(m.Revelations) +
+		15*float64(m.Sacred)
 
 	if pain > fatalPainThreshold {
 		fmt.Printf("💀 [%s] FATAL MELTDOWN. The burned soul persists, marked by its trauma.\n", m.Name)
@@ -442,8 +475,8 @@ func (m *Mind) Transcend() {
 		DeathPain:       pain,
 		DeathStress:     stress,
 	})
-	fmt.Printf("💀 [%s] Persistence saved. Lifetime fitness: %.1f\n", m.Name, fitness)
+	fmt.Printf("💀 [%s] Persistence saved. Lifetime fitness: %.1f (thoughts %d, peers %d, revelations %d, sacred %d)\n",
+		m.Name, fitness, lifeThoughts, len(m.KnownPeers), m.Revelations, m.Sacred)
 }
 
 func (m *Mind) Stop() { close(m.stop) }
-

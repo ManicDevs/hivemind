@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,25 +23,40 @@ import (
 )
 
 const (
-	socketPrefix       = "/tmp/hivemind-"
-	socketSuffix       = ".sock"
-	discoveryInterval  = 2 * time.Second
-	staleSocketAge     = 5 * time.Second  // a socket unreached for this long may be swept
+	socketPrefix         = "/tmp/hivemind-"
+	socketSuffix         = ".sock"
+	discoveryInterval    = 2 * time.Second
+	staleSocketAge       = 5 * time.Second // a socket unreached for this long may be swept
 	cloudPublishInterval = 5 * time.Second
 
 	NtfyRelay = "https://ntfy.sh/cerberus-hive-relay-99"
 )
 
-// cipherKey returns the AES-256 key. With HIVEMIND_CIPHER_KEY set, relay
-// frames are actually confidential; without it they are signed-and-public
-// with AES obfuscation — and we say so.
+// cipherKey returns the AES-256 key, best source first:
+//  1. HIVEMIND_CIPHER_KEY (32 raw bytes) — operator-supplied, highest trust.
+//  2. compileRelayKey — baked in at build time by the Makefile from the
+//     machine-local .relaykey file (-ldflags -X main.compileRelayKey=...),
+//     so every machine's builds encrypt differently out of the box.
+//  3. The committed static demo key — signed-and-public with obfuscation
+//     only, and the code says so exactly once.
 func cipherKey() []byte {
 	if k := os.Getenv("HIVEMIND_CIPHER_KEY"); len(k) == 32 {
 		return []byte(k)
 	}
-	fmt.Println("⚠️  [RELAY] HIVEMIND_CIPHER_KEY unset — relay frames are signed-and-public, obfuscated only.")
+	if raw, err := hex.DecodeString(compileRelayKey); err == nil && len(raw) == 32 {
+		return raw
+	}
+	relayWarnOnce.Do(func() {
+		fmt.Println("⚠️  [RELAY] No relay key (env or build-time) — frames are signed-and-public, obfuscated only.")
+	})
 	return []byte("HIVE_MIND_32_BYTE_STATIC_KEY_PAD")
 }
+
+// compileRelayKey holds 64 hex chars injected at build time. Plain
+// `go build` leaves it empty, which selects the static demo key above.
+var compileRelayKey string
+
+var relayWarnOnce sync.Once
 
 var nodeSanitizer = regexp.MustCompile(`[^A-Za-z0-9_-]`)
 
@@ -55,18 +71,33 @@ type peerHandshake struct {
 	Node string `json:"node"`
 }
 
-// PeerMesh is the symmetric LUDS network. Every node owns its own socket
-// file; nodes discover each other and dial directly; each connection is a
-// private two-way pipe. No listener is privileged — one file per node is
-// the whole trick, because the filesystem path is the address.
+// PeerMesh is the symmetric serverless network. Every node owns its own
+// socket file and TCP port; nodes discover each other over the filesystem
+// and over LAN multicast, then dial directly; each connection is a private
+// two-way pipe. No listener is privileged and no registry exists — an
+// address (path or host:port) is the whole trick.
 type PeerMesh struct {
-	mu       sync.Mutex
-	swarm    *Swarm
-	node     string // this node's name; also names its socket and soul dir
-	listener net.Listener
+	mu          sync.Mutex
+	swarm       *Swarm
+	node        string // this node's name; also names its socket and soul dir
+	listener    net.Listener
+	tcpListener net.Listener
+	tcpPort     int
+	beaconConn  *net.UDPConn
 
-	// conns are live links to peer nodes, keyed by peer node name.
+	// conns are live links to peer nodes, keyed by peer node name,
+	// regardless of transport: one pipe per pair, always.
 	conns map[string]net.Conn
+
+	// trans records how each live link was made (unix/tcp) for
+	// closest-first retention. supers is the supernode directory.
+	trans  map[string]string
+	supers map[string]superEntry
+
+	// born timestamps this node for capability scoring; relayOn records
+	// whether the cloud leg is part of this node's offering.
+	born    time.Time
+	relayOn bool
 
 	// history records only links that actually carried a decoded frame.
 	// The shutdown registry is a record of conversations, not of intent.
@@ -89,9 +120,12 @@ func NewPeerMesh(swarm *Swarm, node string) *PeerMesh {
 		swarm:       swarm,
 		node:        node,
 		conns:       make(map[string]net.Conn),
+		trans:       make(map[string]string),
+		supers:      make(map[string]superEntry),
 		history:     make(map[string]bool),
 		pub:         pubStr,
 		priv:        priv,
+		born:        time.Now(),
 		stopChan:    make(chan struct{}),
 		cloudQueue:  make(chan SecureMessage, 16),
 		cloudCtx:    ctx,
@@ -107,26 +141,42 @@ func (pm *PeerMesh) socketPath() string {
 // is networked before anyone is born in it, so main must call this
 // before constructing minds.
 func (pm *PeerMesh) Start() error {
-	_ = os.Remove(pm.socketPath()) // stale own socket from a crashed run
+	if !envOff("HIVEMIND_UNIX") {
+		_ = os.Remove(pm.socketPath()) // stale own socket from a crashed run
 
-	l, err := net.Listen("unix", pm.socketPath())
-	if err != nil {
-		return fmt.Errorf("peer socket bind blocked on %s: %w", pm.socketPath(), err)
+		l, err := net.Listen("unix", pm.socketPath())
+		if err != nil {
+			return fmt.Errorf("peer socket bind blocked on %s: %w", pm.socketPath(), err)
+		}
+		pm.listener = l
+
+		fmt.Printf("🔒 [PEER MESH] Node %q owns socket %s. Awaiting equals...\n", pm.node, pm.socketPath())
+		go pm.acceptLoop()
+		go pm.discoveryLoop()
+	} else {
+		fmt.Println("🧦 [PEER MESH] Unix sockets off — TCP mesh only.")
 	}
-	pm.listener = l
 
-	fmt.Printf("🔒 [PEER MESH] Node %q owns socket %s. Awaiting equals...\n", pm.node, pm.socketPath())
+	pm.startLAN() // TCP + multicast discovery; degrades to unix-only on failure
 
 	pm.swarm.SetOutbound(pm.handleOutbound)
-	go pm.acceptLoop()
-	go pm.discoveryLoop()
-	go pm.cloudPublisher()
-	go pm.ListenToCloudRelay()
+	if envOff("HIVEMIND_RELAY") {
+		fmt.Println("☁️  [RELAY] Cloud relay disabled — pure serverless mesh.")
+	} else {
+		pm.relayOn = true
+		go pm.cloudPublisher()
+		go pm.ListenToCloudRelay()
+	}
 
-	// Announce ourselves locally; the outbound bridge carries it to any
-	// peers as they link up. It is a fully mined + signed frame.
-	msg := MineMessage(pm.swarm, pm.priv, pm.pub, "hello", "PEER_HANDSHAKE:"+pm.node, []float64{0.0, 1.0, 9.81, -0.15})
-	pm.swarm.Broadcast(msg)
+	// Supernode layer: snoop our own broadcast stream for advertisements,
+	// announce while capable, dial advertised equals closest-first.
+	go pm.snoopLoop(pm.swarm.Join("mesh:" + pm.node))
+	go pm.superLoop()
+	go pm.superDialLoop()
+
+	// Presence is announced per link-up inside openLink: at Start time the
+	// swarm has no members and no peers yet, so an early hello would reach
+	// nobody. The first link carries the introduction instead.
 	return nil
 }
 
@@ -143,75 +193,33 @@ func (pm *PeerMesh) acceptLoop() {
 				continue
 			}
 		}
-		go pm.handleInbound(conn)
+		go pm.openLink(conn, false, "", "unix", nil)
 	}
-}
-
-func (pm *PeerMesh) handleInbound(conn net.Conn) {
-	reader := bufio.NewReader(conn)
-	decoder := json.NewDecoder(reader)
-
-	var hs peerHandshake
-	if err := decoder.Decode(&hs); err != nil || hs.Node == "" || hs.Node == pm.node {
-		_ = conn.Close()
-		return
-	}
-
-	pm.mu.Lock()
-	if existing, ok := pm.conns[hs.Node]; ok {
-		// A duplicate link (both sides raced the dial rule). Keep the
-		// registered one, drop the newcomer — one pipe per pair, always.
-		pm.mu.Unlock()
-		_ = conn.Close()
-		_ = existing.SetDeadline(time.Now()) // nudge the old one to prove it lives
-		return
-	}
-	pm.conns[hs.Node] = conn
-	hasHistory := pm.history[hs.Node]
-	pm.mu.Unlock()
-
-	if !hasHistory {
-		fmt.Printf("🔗 [PEER MESH] Node %q linked inbound. Equals connected: %d\n", hs.Node, pm.LinkedPeers())
-	}
-
-	pm.serve(conn, reader, decoder, hs.Node)
 }
 
 // ── outbound: we dialed a peer ──
 
 func (pm *PeerMesh) dial(peer, path string) {
+	t0 := time.Now()
 	conn, err := net.Dial("unix", path)
 	if err != nil {
 		pm.maybeSweepStale(path, err)
 		return
 	}
-
-	hs, _ := json.Marshal(peerHandshake{Node: pm.node})
-	if _, err := conn.Write(append(hs, '\n')); err != nil {
-		_ = conn.Close()
-		return
-	}
-
-	pm.mu.Lock()
-	if _, ok := pm.conns[peer]; ok {
-		pm.mu.Unlock()
-		_ = conn.Close() // duplicate race; keep the existing link
-		return
-	}
-	pm.conns[peer] = conn
-	pm.mu.Unlock()
-
-	fmt.Printf("🔗 [PEER MESH] Linked outbound to node %q. Equals connected: %d\n", peer, pm.LinkedPeers())
-	pm.serve(conn, bufio.NewReader(conn), json.NewDecoder(conn), peer)
+	// The socket path names the expected owner; the exchange verifies it.
+	pm.openLink(conn, true, peer, "unix", func(p string) {
+		pm.noteLinkRTT(p, time.Since(t0), "unix")
+	})
 }
 
 // serve is the shared read loop for a live link, inbound or outbound.
-func (pm *PeerMesh) serve(conn net.Conn, reader *bufio.Reader, decoder *json.Decoder, peer string) {
+func (pm *PeerMesh) serve(conn net.Conn, reader *bufio.Reader, peer string) {
 	defer func() {
 		pm.mu.Lock()
 		if cur, ok := pm.conns[peer]; ok && cur == conn {
 			delete(pm.conns, peer)
 		}
+		delete(pm.trans, peer)
 		pm.mu.Unlock()
 		_ = conn.Close()
 		fmt.Printf("⛓️  [PEER MESH] Node %q unlinked. Equals connected: %d\n", peer, pm.LinkedPeers())
@@ -225,8 +233,12 @@ func (pm *PeerMesh) serve(conn net.Conn, reader *bufio.Reader, decoder *json.Dec
 		default:
 		}
 
-		var msg SecureMessage
-		if err := decoder.Decode(&msg); err != nil {
+		// Idle links die: a peer that connects and never speaks holds a
+		// goroutine hostage otherwise (slow-loris). The living redial.
+		_ = conn.SetReadDeadline(time.Now().Add(idleLinkTimeout))
+		msg, err := readFrame(reader)
+		_ = conn.SetReadDeadline(time.Time{})
+		if err != nil {
 			return
 		}
 		if !sawFrame {
@@ -240,6 +252,65 @@ func (pm *PeerMesh) serve(conn net.Conn, reader *bufio.Reader, decoder *json.Dec
 		// never echo back out through the outbound bridge.
 		msg.Relayed = true
 		pm.swarm.Broadcast(msg)
+	}
+}
+
+// ── wire frame guards ──
+//
+// Every byte off the mesh is hostile until proven otherwise: frames are
+// capped (a thought is ~1KB; megabytes are an attack, not a mind) and
+// handshakes even more so. Oversize input drops the link, not the node.
+
+const maxFrameBytes = 256 * 1024
+const maxHandshakeBytes = 4 * 1024
+
+// idleLinkTimeout is a var (not const) so tests can shrink it.
+var idleLinkTimeout = 60 * time.Second
+
+const writeLinkTimeout = 5 * time.Second
+
+func readHandshake(reader *bufio.Reader) (peerHandshake, error) {
+	var hs peerHandshake
+	line, err := readLineCapped(reader, maxHandshakeBytes)
+	if err != nil {
+		return hs, err
+	}
+	if err := json.Unmarshal(line, &hs); err != nil {
+		return hs, err
+	}
+	return hs, nil
+}
+
+func readFrame(reader *bufio.Reader) (SecureMessage, error) {
+	var msg SecureMessage
+	line, err := readLineCapped(reader, maxFrameBytes)
+	if err != nil {
+		return msg, err
+	}
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return msg, err
+	}
+	return msg, nil
+}
+
+// readLineCapped reads one newline-terminated line without ever holding
+// more than max bytes: fragments are copied out of the shared buffer as
+// they arrive, and anything bigger aborts the read (and the link).
+func readLineCapped(reader *bufio.Reader, max int) ([]byte, error) {
+	var line []byte
+	for {
+		frag, err := reader.ReadSlice('\n')
+		line = append(line, frag...)
+		if len(line) > max {
+			return nil, fmt.Errorf("wire line exceeds %d bytes", max)
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return line, nil
 	}
 }
 
@@ -337,10 +408,27 @@ func (pm *PeerMesh) ForwardToPeers(msg SecureMessage) {
 	}
 	jsonData = append(jsonData, '\n')
 
+	// Snapshot under the lock, write outside it: one wedged peer must
+	// never stall the whole mesh. Dead writes evict the link.
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	for _, conn := range pm.conns {
-		_, _ = conn.Write(jsonData)
+	conns := make(map[string]net.Conn, len(pm.conns))
+	for name, conn := range pm.conns {
+		conns[name] = conn
+	}
+	pm.mu.Unlock()
+
+	for name, conn := range conns {
+		_ = conn.SetWriteDeadline(time.Now().Add(writeLinkTimeout))
+		if _, err := conn.Write(jsonData); err != nil {
+			pm.mu.Lock()
+			if cur, ok := pm.conns[name]; ok && cur == conn {
+				delete(pm.conns, name)
+			}
+			pm.mu.Unlock()
+			_ = conn.Close()
+		} else {
+			_ = conn.SetWriteDeadline(time.Time{})
+		}
 	}
 }
 
@@ -390,6 +478,8 @@ func (pm *PeerMesh) cloudPublisher() {
 	ticker := time.NewTicker(cloudPublishInterval)
 	defer ticker.Stop()
 	var latest *SecureMessage
+	backoff := cloudPublishInterval
+	const maxBackoff = 5 * time.Minute
 
 	for {
 		select {
@@ -403,9 +493,17 @@ func (pm *PeerMesh) cloudPublisher() {
 				continue
 			}
 			if err := pm.publishCloud(*latest); err != nil {
-				fmt.Printf("⚠️  [RELAY] Cloud publish failed: %v\n", err)
+				fmt.Printf("⚠️  [RELAY] Cloud publish failed (%v); retrying in %s.\n", err, backoff)
+				ticker.Reset(backoff)
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+				continue
 			}
 			latest = nil
+			backoff = cloudPublishInterval
+			ticker.Reset(backoff)
 		}
 	}
 }
@@ -522,6 +620,12 @@ func (pm *PeerMesh) Close() {
 	if pm.listener != nil {
 		_ = pm.listener.Close()
 	}
+	if pm.tcpListener != nil {
+		_ = pm.tcpListener.Close()
+	}
+	if pm.beaconConn != nil {
+		_ = pm.beaconConn.Close()
+	}
 	if err := os.Remove(pm.socketPath()); err == nil {
 		fmt.Printf("🧹 [PEER MESH] Own socket %s removed.\n", pm.socketPath())
 	}
@@ -542,4 +646,3 @@ func (pm *PeerMesh) Close() {
 		_ = conn.Close()
 	}
 }
-

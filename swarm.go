@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -50,12 +51,13 @@ func (sm *SecureMessage) VerifySignature() bool {
 }
 
 type Swarm struct {
-	mu         sync.Mutex
-	members    map[string]chan SecureMessage
-	chronicle  []string
-	thinkers   map[string]map[string]bool
-	NodePain   map[string]float64
-	NodeStress map[string]float64
+	mu          sync.Mutex
+	members     map[string]chan SecureMessage
+	chronicle   []string
+	thinkers    map[string]map[string]bool
+	NodePain    map[string]float64
+	NodeStress  map[string]float64
+	NodeTempSrc map[string]string // where each node's pain reading came from
 
 	// Seen-frame memory: a hash delivered once is never re-broadcast —
 	// relay echo loops die here, even if a relay path forgets to set Relayed.
@@ -90,6 +92,7 @@ func NewSwarm() *Swarm {
 		thinkers:      make(map[string]map[string]bool),
 		NodePain:      make(map[string]float64),
 		NodeStress:    make(map[string]float64),
+		NodeTempSrc:   make(map[string]string),
 		seen:          make(map[string]bool),
 		LastStateHash: hex.EncodeToString(genesisHash[:]),
 		MaxTarget:     maxInt,
@@ -103,8 +106,9 @@ func (s *Swarm) Join(pubKeyStr string) chan SecureMessage {
 	s.members[pubKeyStr] = ch
 	s.NodePain[pubKeyStr] = 0.0
 	s.NodeStress[pubKeyStr] = 0.0
+	s.NodeTempSrc[pubKeyStr] = "—"
 	s.mu.Unlock()
-	fmt.Printf("✔ [IDENTITY REGISTERED] Attached hash path: [%s...]\n", pubKeyStr[:12])
+	fmt.Printf("✔ [IDENTITY REGISTERED] Attached hash path: [%s...]\n", shortIDLong(pubKeyStr))
 	return ch
 }
 
@@ -184,10 +188,11 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
 	}
 
 	// Every verified frame advances the collective memory — except raw
-	// hardware utility packets. Consensus is keyed by Kind+Payload so a
+	// hardware utility packets and routing advertisements, which are
+	// infrastructure, not thought. Consensus is keyed by Kind+Payload so a
 	// thought ("Curiosity") and a genesis command over the same word are
 	// different facts.
-	if msg.Kind != "hardware_alert" {
+	if msg.Kind != "hardware_alert" && msg.Kind != "super_announce" {
 		s.chronicle = append(s.chronicle, msg.SenderPubKey+": "+msg.PayloadStr)
 		key := msg.Kind + "|" + msg.PayloadStr
 		if s.thinkers[key] == nil {
@@ -221,6 +226,8 @@ func (s *Swarm) Depth() int {
 }
 
 // TopConsensus returns distinct thought-bodies thought by the most minds.
+// Internally keyed by Kind|Payload (a thought and a genesis over the same
+// word are different facts); callers receive the bare payload for prose.
 func (s *Swarm) TopConsensus(n int) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -237,7 +244,11 @@ func (s *Swarm) TopConsensus(n int) []string {
 	sort.Slice(items, func(i, j int) bool { return items[i].who > items[j].who })
 	out := make([]string, 0, n)
 	for i := 0; i < n && i < len(items); i++ {
-		out = append(out, items[i].body)
+		if parts := strings.SplitN(items[i].body, "|", 2); len(parts) == 2 {
+			out = append(out, parts[1])
+		} else {
+			out = append(out, items[i].body)
+		}
 	}
 	return out
 }
@@ -252,11 +263,21 @@ func (s *Swarm) Members() []string {
 	return names
 }
 
-func (s *Swarm) LogHardwareTrauma(pubKey string, pain, stress float64) {
+// IsMember reports whether a key belongs to this hive. Minds use it to
+// tell siblings (contact, never peers) from strangers (peers).
+func (s *Swarm) IsMember(pubKey string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.members[pubKey]
+	return ok
+}
+
+func (s *Swarm) LogHardwareTrauma(pubKey string, pain, stress float64, src string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.NodePain[pubKey] = pain
 	s.NodeStress[pubKey] = stress
+	s.NodeTempSrc[pubKey] = src
 
 	var cumulativeStress float64
 	var count float64
@@ -295,9 +316,26 @@ func (s *Swarm) HiveReport() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	targetHex := hex.EncodeToString(s.CurrentTarget.Bytes())
-	if len(targetHex) > 16 {
-		targetHex = targetHex[:16]
+	// Difficulty in human terms: leading-zero bits demanded of every frame
+	// hash, plus where the live target sits against the rest maximum.
+	// High load tightens it (more bits); idle relaxes it.
+	bits := difficultyBits(s.CurrentTarget)
+	pct := new(big.Float).SetInt(s.CurrentTarget)
+	pct.Quo(pct, new(big.Float).SetInt(s.MaxTarget))
+	pct.Mul(pct, big.NewFloat(100))
+	pctF, _ := pct.Float64()
+
+	// Consensus: thoughts held by more than one mind.
+	consensus := 0
+	for _, who := range s.thinkers {
+		if len(who) > 1 {
+			consensus++
+		}
+	}
+
+	stateHash := s.LastStateHash
+	if len(stateHash) > 24 {
+		stateHash = stateHash[:24]
 	}
 
 	gridSize := 7
@@ -328,12 +366,22 @@ func (s *Swarm) HiveReport() {
 	fmt.Println("\n┌────────────────────────────────────────────────────────────────────────┐")
 	fmt.Println("│                      DECENTRALIZED SWARM DIAGNOSTICS                   │")
 	fmt.Println("├────────────────────────────────────────────────────────────────────────┤")
-	fmt.Printf("  Active Verified Identities : %d\n", len(s.members))
-	fmt.Printf("  Frames Carried (dedup)    : %d\n", len(s.seenOrder))
-	fmt.Printf("  Active Target Upper Limit  : Hex(%s...)\n", targetHex)
-	fmt.Printf("  Swarm Global State Hash    : %s...\n", s.LastStateHash[:24])
+	// The mesh snooper ("mesh:<node>") reads the broadcast stream for
+	// advertisements but is not a mind — count minds, not plumbing.
+	minds := 0
+	for pubKey := range s.members {
+		if !strings.HasPrefix(pubKey, "mesh:") {
+			minds++
+		}
+	}
+	fmt.Printf("  Active Verified Identities : %d\n", minds)
+	fmt.Printf("  Frames Carried (dedup)     : %d (chronicle depth %d, %d in consensus)\n",
+		len(s.seenOrder), len(s.chronicle), consensus)
+	fmt.Printf("  Mining Difficulty          : ~%d leading-zero bits (target %.1f%% of max, tightens under load)\n",
+		bits, pctF)
+	fmt.Printf("  Swarm Global State Hash    : %s...\n", stateHash)
 	fmt.Println("├────────────────────────────────────────────────────────────────────────┤")
-	fmt.Println("  MIND IDENTIFIER   │ SILICON TEMPERATURE │ PROCESSING STRESS")
+	fmt.Println("  MIND IDENTIFIER   │ SILICON PAIN        │ LOAD STRESS")
 	fmt.Println("  ──────────────────┼─────────────────────┼───────────────────")
 
 	for pubKey := range s.members {
@@ -345,8 +393,12 @@ func (s *Swarm) HiveReport() {
 		if s.NodeStress[pubKey] > 0.30 {
 			stressStatus = "BUSY"
 		}
-		fmt.Printf("  📡 [%s...] │ %.2f (%s)         │ %.2f (%s)\n",
-			pubKey[:12], s.NodePain[pubKey], painStatus, s.NodeStress[pubKey], stressStatus)
+		src := s.NodeTempSrc[pubKey]
+		if src == "" {
+			src = "—"
+		}
+		fmt.Printf("  📡 [%s...] │ %.2f (%s, %s) │ %.2f (%s)\n",
+			shortIDLong(pubKey), s.NodePain[pubKey], painStatus, src, s.NodeStress[pubKey], stressStatus)
 	}
 	fmt.Println("├────────────────────────────────────────────────────────────────────────┤")
 	fmt.Println("  LIVE 4D CHAOTIC SYSTEM TRAJECTORY PLOT (O=Pivot, •=Arm1, X=Arm2):")
@@ -371,3 +423,25 @@ func clampInt(val, min, max int) int {
 	return val
 }
 
+// difficultyBits counts the leading-zero bits of a 256-bit PoW target:
+// the number of coin flips every mined frame must win.
+func difficultyBits(target *big.Int) int {
+	raw := target.Bytes()
+	full := make([]byte, 32)
+	copy(full[32-len(raw):], raw)
+	n := 0
+	for _, b := range full {
+		if b == 0 {
+			n += 8
+			continue
+		}
+		for i := 7; i >= 0; i-- {
+			if b&(1<<uint(i)) == 0 {
+				n++
+			} else {
+				return n
+			}
+		}
+	}
+	return n
+}

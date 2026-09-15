@@ -16,9 +16,38 @@ const MemoryDir = ".hive_memory"
 // silently discarding entire lives.
 var NodeName = "local"
 
-// replace the path computation in BOTH SaveMemory and LoadMemory with:
+// soulPath is the only path computation. Save always writes namespaced;
+// Load falls back to the legacy top-level path once, then migrates on save.
 func soulPath(name string) string {
 	return filepath.Join(MemoryDir, NodeName, fmt.Sprintf("%s.soul", name))
+}
+
+func legacySoulPath(name string) string {
+	return filepath.Join(MemoryDir, fmt.Sprintf("%s.soul", name))
+}
+
+// SoulExists reports whether this node already owns a namespaced soul.
+func SoulExists(name string) bool {
+	_, err := os.Stat(soulPath(name))
+	return err == nil
+}
+
+// LegacySoulExists reports whether a pre-namespacing soul survives at the
+// top level, waiting for a one-time migration.
+func LegacySoulExists(name string) bool {
+	if soulPath(name) == legacySoulPath(name) {
+		return false
+	}
+	_, err := os.Stat(legacySoulPath(name))
+	return err == nil
+}
+
+// ForkedLineage is true when birth would migrate a legacy soul: the file
+// belongs to another node's past, so this birth is a fork, not a
+// continuation. Forks must mint fresh identities — two nodes sharing one
+// soul key would silently drop each other's frames as their own echo.
+func ForkedLineage(name string) bool {
+	return !SoulExists(name) && LegacySoulExists(name)
 }
 
 type Memory struct {
@@ -51,18 +80,18 @@ type Memory struct {
 // SaveMemory writes the soul to disk atomically (temp file + fsync + rename).
 // Readers see either the old soul or the new one, never half of either.
 func SaveMemory(name string, mem Memory) error {
-	if err := os.MkdirAll(filepath.Join(MemoryDir, NodeName), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(soulPath(name)), 0755); err != nil {
 		return fmt.Errorf("failed to create memory store directory: %w", err)
 	}
 
-	path := filepath.Join(MemoryDir, fmt.Sprintf("%s.soul", name))
+	path := soulPath(name)
 
 	jsonData, err := json.MarshalIndent(mem, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal soul state: %w", err)
 	}
 
-	tmp, err := os.CreateTemp(MemoryDir, name+".*.tmp")
+	tmp, err := os.CreateTemp(filepath.Dir(path), name+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to stage memory write: %w", err)
 	}
@@ -92,14 +121,26 @@ func SaveMemory(name string, mem Memory) error {
 // living ones rather than silently overwritten — the evidence of the
 // previous life survives inspection, and a fresh mind is born in its place.
 func LoadMemory(name string) (Memory, bool) {
-	path := filepath.Join(MemoryDir, fmt.Sprintf("%s.soul", name))
+	path := soulPath(name)
 
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
+			// One-time migration: a lineage saved before namespacing
+			// lives one more life at the top level, then moves in.
+			if legacy := legacySoulPath(name); legacy != path {
+				if _, serr := os.Stat(legacy); serr == nil {
+					fmt.Printf("📦 [SYSTEM] Migrating legacy soul %s into node %q.\n", name, NodeName)
+					path = legacy
+				} else {
+					return Memory{}, false
+				}
+			} else {
+				return Memory{}, false
+			}
+		} else {
+			fmt.Printf("⚠️  [SYSTEM] Cannot inspect %s: %v\n", path, err)
 			return Memory{}, false
 		}
-		fmt.Printf("⚠️  [SYSTEM] Cannot inspect %s: %v\n", path, err)
-		return Memory{}, false
 	}
 
 	jsonData, err := os.ReadFile(path)
@@ -120,4 +161,3 @@ func LoadMemory(name string) (Memory, bool) {
 	}
 	return mem, true
 }
-

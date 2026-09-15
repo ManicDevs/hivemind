@@ -149,4 +149,3 @@ func MetaCognize(m *Mind, gw *GlobalWorkspace, affect *Affect) string {
 	}
 	return fmt.Sprintf("METACOGNITION: Operating state normalized. Processing Vector: %.4f", gw.ActiveDataState)
 }
-

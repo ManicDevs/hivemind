@@ -85,4 +85,3 @@ func (g Genome) Diff(old Genome) string {
 	}
 	return strings.Join(changes, "  ")
 }
-
