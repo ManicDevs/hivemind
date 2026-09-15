@@ -1,5 +1,7 @@
+/bin/
 /hivemind
 .hive_memory/
+.relaykey
 *.log
 server.log
 client.log

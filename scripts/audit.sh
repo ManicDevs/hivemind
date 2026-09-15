@@ -19,7 +19,7 @@ if ! go vet ./...; then
 fi
 echo "  ✔ go vet clean"
 
-if ! go build -o hivemind .; then
+if ! go build -o bin/hivemind .; then
     echo "❌ build failed"
     exit 1
 fi

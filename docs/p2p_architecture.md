@@ -103,22 +103,38 @@ thermostat, not a wall: worst case is milliseconds of grinding per frame.
 
 ---
 
-## 5. The Symmetric Peer Mesh (Local Transport)
+## 5. The Symmetric Serverless Mesh
 
-No roles. Every node in `-mode peer` owns one socket file and discovers
-equals through the filesystem (`network.go`, `PeerMesh`):
+No roles, no registry, no bootstrap server. Every node in `-mode peer`
+owns two addresses and discovers equals through both (`network.go`,
+`lan.go` — standard library only):
 
-- Address = path: `/tmp/hivemind-<node>.sock`. Node name comes from
-  `-node` (sanitized) or defaults to `<hostname>-<pid>`.
-- Discovery ticks every 2s (`filepath.Glob`); **the dial rule** — only dial
-  peers lexically greater than yourself — gives every pair exactly one
-  initiator with no election and no master.
-- First line on a new connection is a `{"node": ...}` handshake; self-dials
-  are dropped, duplicate races keep the registered link.
-- Sockets unreached for >5s may be swept as crash corpses (never before a
-  grace period, never on mere refusal).
-- The shutdown registry records only links that actually carried a decoded
-  frame — conversations, not intent.
+- **Unix socket** `/tmp/hivemind-<node>.sock`, discovered by filesystem
+  glob every 2s. Node name comes from `-node` (sanitized) or defaults to
+  `<hostname>-<pid>`, so every process is a distinct equal.
+- **TCP port** (`HIVEMIND_PORT`, or ephemeral for zero config), discovered
+  two ways: LAN multicast beacons (`239.192.0.99:37799`, org-local scope,
+  never routed) carrying `{node, tcp}`, and explicit `HIVEMIND_PEERS`
+  `host:port` entries for NATs and the open internet.
+- **The dial rule** is identical on every transport: only dial peers
+  lexically greater than yourself — every pair has exactly one initiator,
+  no election, no master. The connection map is keyed by peer name across
+  transports: one pipe per pair, always; duplicates are dropped with a
+  liveness nudge to the survivor.
+- **The handshake exchange is symmetric**: dialer speaks first with
+  `{"node": self}`, both sides learn the peer name, the expected owner is
+  verified on socket paths, and the first link in each direction is logged
+  with its transport (`via tcp` / `via unix`).
+- **Presence rides link-up**: the first link triggers a signed
+  `PEER_HANDSHAKE` hello into the local hive (minds register the peer) and
+  across the new pipe (the peer's minds register back).
+- Stale crash-corpses (sockets unreached >5s) may be swept; young sockets
+  get a grace period. The shutdown registry records only links that
+  actually carried a decoded frame.
+
+Set `HIVEMIND_UNIX=off` for TCP-only boxes, `HIVEMIND_BEACON=off` where
+multicast is unavailable. Multicast delivery itself is best-effort and
+LAN-bound by design; static peers are the deterministic path.
 
 Local frames reach the wire through the swarm's outbound bridge
 (`SetOutbound`); wire frames arrive marked `Relayed` and stop there, so two
@@ -141,27 +157,42 @@ conscious loop) to a public ntfy topic as AES-256-GCM ciphertext, tagged
 `ENCRYPTED_HIVE_FRAME`. Every node simultaneously long-polls the topic,
 decrypts, verifies, and ingests inbound frames as `Relayed`.
 
-Confidentiality is explicit about its limits: with `HIVEMIND_CIPHER_KEY`
-(a 32-byte env value) set, relay frames are confidential; without it, the
-code prints a warning and uses the committed static key — frames are then
-**signed-and-public with obfuscation only**. Treat the default relay as a
-public broadcast until key management lands. All relay loops are
+Confidentiality is explicit about its limits, best source first:
+`HIVEMIND_CIPHER_KEY` (operator-supplied) beats the build-time baked key
+(`make build` generates a machine-local `.relaykey` once and embeds it via
+ldflags, so every machine's builds encrypt differently out of the box),
+which beats the committed static demo key — frames under the fallback are
+**signed-and-public with obfuscation only**, warned about exactly once.
+Treat the default relay as a public broadcast until keys are managed;
+`make rotate-keys` mints a fresh machine key (rebuild all nodes after).
+All relay loops are
 context-canceled on shutdown; nothing leaks goroutines.
+`HIVEMIND_RELAY=off` removes the relay entirely — the mesh is fully
+serverless without it (unix + TCP + multicast need no third party).
 
 ---
 
 ## 7. Souls: What Death Keeps
 
-`.hive_memory/<name>.soul`, JSON, written atomically (temp + fsync +
+`.hive_memory/<node>/<name>.soul`, JSON, written atomically (temp + fsync +
 rename: readers see the old soul or the new one, never half of either).
-A corrupt file is quarantined beside the living ones (`*.corrupt-<unix>`)
-and a fresh mind is born — evidence survives, denial doesn't.
+Each node owns its lineage — two peers on one machine never share a file,
+so no life is ever last-writer-wins discarded. A corrupt file is
+quarantined beside the living ones (`*.corrupt-<unix>`) and a fresh mind
+is born — evidence survives, denial doesn't. Pre-namespace top-level souls
+are loaded once for migration, then the lineage moves into its node dir.
 
 Persisted per mind: birth, lives, fitness, genome, thoughts, known peers,
 death pain/stress (which steer the successor's epigenetic mutation),
 thoughts-at-birth (fitness is per-life, never double-counted), and the
 identity seed. The Overmind additionally persists chronicle offset and
 genesis mark, so its patience survives the apocalypse too.
+
+Fork rule: a birth that migrates another node's past is a fork, not a
+continuation — it inherits memories but mints fresh keys. Two nodes sharing
+one soul handle would drop each other's frames as their own echo, so
+identity is per lineage by construction. Never clone soul dirs between
+nodes.
 
 ---
 
@@ -191,3 +222,30 @@ Affect indices and their honest provenance (`mind.go` Observe):
     `/proc/meminfo` — what the kernel can actually hand out.
 *   Index 3 (Cosmic Entropy): host kernel cryptographic randomness.
     True background variation; minds individuate even in identical cages.
+
+---
+
+## 10. Capable Supernodes, Closest-First (No Thrones)
+
+Any node may become super; none rules. The layer has exactly two rules,
+and both are enforced in code, not by convention:
+
+1. **Capability gates announcing.** Every 30s a node scores itself from
+   live telemetry (cool + idle + rested + long-lived + relay-connected;
+   a burning node scores zero) and publishes a signed `super_announce`
+   frame only above threshold — or while silenced by `HIVEMIND_SUPER=off`,
+   never. Announcements ride the standard outbound bridge, so LAN peers
+   hear them on their links and far nodes hear them on the relay. Silence
+   is the resignation letter: entries expire 90s after their last renewal.
+2. **Measured RTT decides retention.** Every dial records
+   dial-to-registered round-trip time; beyond 3 TCP links the farthest is
+   culled. Unix pipes are free and never touched. Proximity is measured,
+   never claimed — geography would be a lie, milliseconds are truth.
+
+`super_announce` frames are infrastructure, excluded from the chronicle
+like `hardware_alert`, and minds ignore them (each mesh also snoops its
+own broadcast stream into the directory, so relay-only nodes learn supers
+they never dialed). WAN addresses are operator-asserted
+(`HIVEMIND_ADVERTISE=host:port`); the mesh never guesses reachability
+behind NAT. There is no election, no failover protocol, no privilege to
+seize — preferred transit, nothing more.
