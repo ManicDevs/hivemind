@@ -51,7 +51,7 @@ func (g Goal) Act(m *Mind, s *Swarm) string {
 			return "⚠️ [Self-Maintenance] RAM context limit approaching. Purging historic records to preserve core persistence."
 		}
 		
-		return "Homeostasis confirmed. Silicon parameters balanced."
+		return "Homeostasis confirmed. " + m.Reflect(m.SelfModel)
 
 	case "Curiosity":
 		// PHYSICAL ACTION: Network probe out to the real digital cosmos via OS ping execution

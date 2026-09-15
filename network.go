@@ -4,8 +4,10 @@ import (
     "bufio"
     "crypto/aes"
     "crypto/cipher"
+    "crypto/ed25519"
     "crypto/rand"
     "encoding/base64"
+    "encoding/hex"
     "encoding/json"
     "fmt"
     "io"
@@ -19,7 +21,7 @@ import (
 
 const (
     SocketPath = "/tmp/hivemind.sock"
-    NtfyTopic  = "cerberus-hive-relay-99"
+    NtfyRelay  = "https://ntfy.sh/cerberus-hive-relay-99"
     CipherKey  = "HIVE_MIND_32_BYTE_STATIC_KEY_PAD"
 )
 
@@ -30,15 +32,27 @@ type NetworkBroker struct {
     peers      map[string]net.Conn
     history    map[string]bool
     isServer   bool
+    pub        string
+    priv       ed25519.PrivateKey
     stopChan   chan struct{}
     doneChan   chan struct{}
 }
 
 func NewNetworkBroker(swarm *Swarm) *NetworkBroker {
+    pub, priv, err := ed25519.GenerateKey(rand.Reader)
+    pubStr := hex.EncodeToString(pub)
+    if err != nil {
+        dummyBytes := make([]byte, 32)
+        _, _ = rand.Read(dummyBytes)
+        priv = ed25519.NewKeyFromSeed(dummyBytes)
+        pubStr = hex.EncodeToString(priv.Public().(ed25519.PublicKey))
+    }
     return &NetworkBroker{
         swarm:    swarm,
         peers:    make(map[string]net.Conn),
         history:  make(map[string]bool),
+        pub:      pubStr,
+        priv:     priv,
         stopChan: make(chan struct{}),
         doneChan: make(chan struct{}),
     }
@@ -98,6 +112,7 @@ func (nb *NetworkBroker) ListenUnixSocket() error {
     
     fmt.Printf("🔒 [LOCAL IPC BRIDGE] Active unix domain socket listener locked on: %s\n", SocketPath)
 
+    nb.swarm.SetOutbound(nb.handleOutbound)
     go nb.acceptConnections()
     go nb.ListenToCloudRelay()
     return nil
@@ -114,12 +129,16 @@ func (nb *NetworkBroker) acceptConnections() {
                 continue
             }
         }
-        
+
+        // Accepted links are full peers: without storing them, the server
+        // could hear clients but never speak back — a half-duplex mesh.
+        key := conn.RemoteAddr().String()
         nb.mu.Lock()
+        nb.peers[key] = conn
         nb.history[SocketPath] = true
         nb.mu.Unlock()
-        
-        go nb.HandleConnection(conn)
+
+        go nb.HandleConnection(conn, key)
     }
 }
 
@@ -147,25 +166,29 @@ func (nb *NetworkBroker) ConnectToUnixSocket() error {
     nb.mu.Unlock()
 
     fmt.Printf("🔒 [LUDS LINK SECURED] Connection interface bound to socket file: %s\n", SocketPath)
-    
-    msg := SecureMessage{
-        Kind:       "hello",
-        PayloadStr: "LUDS_CLIENT_HANDSHAKE",
-        DataState:  []float64{0.0, 1.0, 9.81, -0.15},
-        Timestamp:  time.Now().UnixNano(),
-    }
-    jsonData, _ := json.Marshal(msg)
-    _, _ = conn.Write(append(jsonData, '\n'))
 
-    go nb.HandleConnection(conn)
+    // The handshake is a fully mined + signed frame like any other —
+    // unverified greetings are dropped by the swarm, including our own.
+    // It rides the standard path: local broadcast first (our own minds
+    // register the link), the outbound bridge carries it to the server.
+    nb.swarm.SetOutbound(nb.handleOutbound)
+    msg := MineMessage(nb.swarm, nb.priv, nb.pub, "hello", "LUDS_CLIENT_HANDSHAKE", []float64{0.0, 1.0, 9.81, -0.15})
+    nb.swarm.Broadcast(msg)
+
+    go nb.HandleConnection(conn, SocketPath)
     go nb.ListenToCloudRelay()
     return nil
 }
 
-func (nb *NetworkBroker) HandleConnection(conn net.Conn) {
+func (nb *NetworkBroker) handleOutbound(msg SecureMessage) {
+    nb.ForwardToUnixPeers(msg)
+    go nb.PublishToCloudRelay(msg)
+}
+
+func (nb *NetworkBroker) HandleConnection(conn net.Conn, key string) {
     defer func() {
         nb.mu.Lock()
-        delete(nb.peers, SocketPath)
+        delete(nb.peers, key)
         nb.mu.Unlock()
         conn.Close()
     }()
@@ -177,10 +200,10 @@ func (nb *NetworkBroker) HandleConnection(conn net.Conn) {
             break
         }
 
-        if nb.swarm.Broadcast(msg) {
-            nb.ForwardToUnixPeers(msg)
-            go nb.PublishToCloudRelay(msg)
-        }
+        // Wire frames are marked relayed: they join the local hive but
+        // never echo back out through the outbound bridge.
+        msg.Relayed = true
+        nb.swarm.Broadcast(msg)
     }
 }
 
@@ -209,7 +232,7 @@ func (nb *NetworkBroker) PublishToCloudRelay(msg SecureMessage) {
         return
     }
 
-    url := "https://ntfy.sh" + NtfyTopic
+    url := NtfyRelay
     req, err := http.NewRequest("POST", url, strings.NewReader(encryptedString))
     if err != nil {
         return
@@ -227,7 +250,7 @@ func (nb *NetworkBroker) PublishToCloudRelay(msg SecureMessage) {
 }
 
 func (nb *NetworkBroker) ListenToCloudRelay() {
-    url := "https://ntfy.sh" + NtfyTopic + "/json"
+    url := NtfyRelay + "/json"
     
     for {
         select {

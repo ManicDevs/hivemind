@@ -21,7 +21,9 @@ type Memory struct {
 	KnownPeers  map[string]int     `json:"known_peers,omitempty"`
 }
 
-// SaveMemory writes the state representation array cleanly onto the disk layout
+// SaveMemory writes the state representation array cleanly onto the disk layout.
+// The write is atomic (temp file + fsync + rename): two mesh nodes sharing one
+// memory dir used to interleave writes and corrupt souls mid-byte.
 func SaveMemory(name string, mem Memory) error {
 	// Create the state directory structure if missing
 	if err := os.MkdirAll(MemoryDir, 0755); err != nil {
@@ -29,16 +31,35 @@ func SaveMemory(name string, mem Memory) error {
 	}
 
 	path := filepath.Join(MemoryDir, fmt.Sprintf("%s.soul", name))
-	
+
 	// Convert data representation block to standard indented JSON format
 	jsonData, err := json.MarshalIndent(mem, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal conscious soul state layout: %w", err)
 	}
 
-	// Direct raw file-system buffer write
-	if err := os.WriteFile(path, jsonData, 0644); err != nil {
+	tmp, err := os.CreateTemp(MemoryDir, name+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to stage memory write: %w", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(jsonData); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("failed to write data memory sectors to disk: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("failed to flush memory sectors to disk: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("failed to close staged memory write: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("failed to commit data memory sectors to disk: %w", err)
 	}
 
 	return nil

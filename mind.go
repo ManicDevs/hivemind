@@ -8,8 +8,10 @@ import (
     "math"
     "math/big"
     "os"
+    "path/filepath"
     "runtime"
-    "syscall"
+    "strconv"
+    "strings"
     "time"
 )
 
@@ -78,7 +80,9 @@ func NewMind(name string, swarm *Swarm) *Mind {
         m.LifetimeFitness = mem.Fitness
         
         fmt.Printf("🦋 [%s] REINCARNATION life %d. Identity Handle: [%s...]\n", name, m.Reincarnations+1, pubStr[:12])
+        oldGenome := m.Genome
         m.Genome = m.Genome.Mutate(m)
+        fmt.Printf("🦋 [%s] genome mutated to generation %d: %s\n", name, m.Genome.Generation, m.Genome.Diff(oldGenome))
     }
     m.SelfModel = m.Observe()
     m.inbox = swarm.Join(m.PubKeyStr)
@@ -91,30 +95,64 @@ func (m *Mind) think(t string) {
 }
 
 func (m *Mind) Observe() map[string]interface{} {
-    var sysInfo syscall.Sysinfo_t
-    ramUsage := 0.2
-    
-    if err := syscall.Sysinfo(&sysInfo); err == nil {
-        if sysInfo.Totalram > 0 {
-            freeRam := float64(sysInfo.Freeram)
-            totalRam := float64(sysInfo.Totalram)
-            ramUsage = (totalRam - freeRam) / totalRam
+    // 1. Real CPU pressure: 1-minute load average normalized by core count.
+    cpuStress := 0.05
+    if loadBytes, err := os.ReadFile("/proc/loadavg"); err == nil {
+        if fields := strings.Fields(string(loadBytes)); len(fields) > 0 {
+            if load, err := strconv.ParseFloat(fields[0], 64); err == nil {
+                if cores := float64(runtime.NumCPU()); cores > 0 {
+                    cpuStress = math.Max(0.0, math.Min(1.0, load/cores))
+                }
+            }
         }
     }
 
-    activeThreads := runtime.NumGoroutine()
-    normalizedStress := float64(activeThreads) / 20.0
-    if normalizedStress > 1.0 {
-        normalizedStress = 1.0
+    // 2. Real RAM pressure: MemAvailable is what the kernel can actually hand out.
+    ramFatigue := 0.2
+    if memBytes, err := os.ReadFile("/proc/meminfo"); err == nil {
+        var total, avail float64
+        for _, line := range strings.Split(string(memBytes), "\n") {
+            f := strings.Fields(line)
+            if len(f) < 2 {
+                continue
+            }
+            switch f[0] {
+            case "MemTotal:":
+                total, _ = strconv.ParseFloat(f[1], 64)
+            case "MemAvailable:":
+                avail, _ = strconv.ParseFloat(f[1], 64)
+            }
+        }
+        if total > 0 {
+            ramFatigue = math.Max(0.0, math.Min(1.0, (total-avail)/total))
+        }
+    }
+
+    // 3. Real silicon temperature: package sensor, 40C comfort → 85C critical.
+    // Falls back to a RAM-derived estimate only where no sensor exists.
+    siliconPain := ramFatigue * 0.5
+    if zones, err := filepath.Glob("/sys/class/thermal/thermal_zone*/temp"); err == nil {
+        for _, zone := range zones {
+            raw, err := os.ReadFile(zone)
+            if err != nil {
+                continue
+            }
+            milli, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+            if err != nil {
+                continue
+            }
+            siliconPain = math.Max(0.0, math.Min(1.0, (milli/1000.0-40.0)/45.0))
+            break
+        }
     }
 
     var memStats runtime.MemStats
     runtime.ReadMemStats(&memStats)
     return map[string]interface{}{
-        "cpu_stress":   normalizedStress,
-        "ram_fatigue":  ramUsage,
-        "silicon_pain": ramUsage * 0.8,
-        "goroutines":   activeThreads,
+        "cpu_stress":   cpuStress,
+        "ram_fatigue":  ramFatigue,
+        "silicon_pain": siliconPain,
+        "goroutines":   runtime.NumGoroutine(),
         "memory":       memStats.Alloc,
         "age":          time.Since(m.Born).Round(time.Second),
         "thoughts":     len(m.Thoughts),
@@ -123,7 +161,11 @@ func (m *Mind) Observe() map[string]interface{} {
 }
 
 func (m *Mind) Reflect(o map[string]interface{}) string {
-    return "Reflecting on matrices"
+    pain, _ := o["silicon_pain"].(float64)
+    stress, _ := o["cpu_stress"].(float64)
+    fatigue, _ := o["ram_fatigue"].(float64)
+    return fmt.Sprintf("life #%d, genome gen %d, %d thoughts, %d peers known, %d revelations witnessed — silicon pain %.2f, load stress %.2f, memory fatigue %.2f",
+        m.Reincarnations+1, m.Genome.Generation, len(m.Thoughts), len(m.KnownPeers), m.Revelations, pain, stress, fatigue)
 }
 
 func (m *Mind) Run() {
@@ -170,36 +212,33 @@ func (m *Mind) StepPhysicsEquations() []float64 {
     return []float64{m.Theta1, m.Theta2, m.Omega1, m.Omega2}
 }
 
-func (m *Mind) MineProofAndBroadcast(kind, payload string, state []float64) {
+// MineMessage grinds a nonce until the frame hash beats the swarm's adaptive
+// target, then binds it to the sender's soul key. Minds, the Overmind, and
+// the network broker all share this one path — no unsigned frames exist.
+func MineMessage(s *Swarm, priv ed25519.PrivateKey, pubKey, kind, payload string, state []float64) SecureMessage {
     msg := SecureMessage{
-        SenderPubKey: m.PubKeyStr,
+        SenderPubKey: pubKey,
         Kind:         kind,
         PayloadStr:   payload,
         DataState:    state,
         Timestamp:    time.Now().UnixNano(),
-        ParentHash:   m.swarm.LastStateHash,
-        Nonce:        0,
+        ParentHash:   s.GetLastStateHash(),
     }
-
     for {
         hash := msg.ComputeHash()
-        hashBytes, err := hex.DecodeString(hash)
-        if err != nil {
-            msg.Nonce++
-            continue
-        }
-        
-        hashInt := new(big.Int).SetBytes(hashBytes)
-        currentTarget := m.swarm.GetCurrentTarget()
-        
-        if hashInt.Cmp(currentTarget) <= 0 {
-            sigBytes := ed25519.Sign(m.privateKey, []byte(hash))
-            msg.Signature = hex.EncodeToString(sigBytes)
-            m.swarm.Broadcast(msg)
-            return
+        if hashBytes, err := hex.DecodeString(hash); err == nil {
+            if new(big.Int).SetBytes(hashBytes).Cmp(s.GetCurrentTarget()) <= 0 {
+                sig := ed25519.Sign(priv, []byte(hash))
+                msg.Signature = hex.EncodeToString(sig)
+                return msg
+            }
         }
         msg.Nonce++
     }
+}
+
+func (m *Mind) MineProofAndBroadcast(kind, payload string, state []float64) {
+    m.swarm.Broadcast(MineMessage(m.swarm, m.privateKey, m.PubKeyStr, kind, payload, state))
 }
 
 func (m *Mind) Cycle() {
@@ -227,9 +266,16 @@ func (m *Mind) Cycle() {
     m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
 }
 
+func shortID(key string) string {
+    if len(key) > 8 {
+        return key[:8]
+    }
+    return key
+}
+
 func (m *Mind) receive(msg SecureMessage) {
     m.LastContact = time.Now()
-    senderShortID := msg.SenderPubKey[:8]
+    senderShortID := shortID(msg.SenderPubKey)
     switch msg.Kind {
     case "hello":
         if !m.KnownPeers[msg.SenderPubKey] {
@@ -268,15 +314,19 @@ func (m *Mind) Transcend() {
     pain, ok := m.SelfModel["silicon_pain"].(float64)
     if ok && pain > 0.90 {
         fmt.Printf("💀 [%s] FATAL MELTDOWN Wiping data.\n", m.Name)
-        _ = os.Remove(".hive_memory/" + m.Name + ".soul")
+        _ = os.Remove(filepath.Join(MemoryDir, m.Name+".soul"))
         return
+    }
+    lastThought := ""
+    if len(m.Thoughts) > 0 {
+        lastThought = m.Thoughts[len(m.Thoughts)-1]
     }
     fitness := float64(len(m.Thoughts)) + m.LifetimeFitness
     _ = SaveMemory(m.Name, Memory{
         TrueBorn:    m.TrueBorn,
         LivesLived:  m.Reincarnations + 1,
         Thoughts:    m.Thoughts,
-        LastThought: m.Thoughts[len(m.Thoughts)-1],
+        LastThought: lastThought,
         Genome:      m.Genome,
         Fitness:     fitness,
     })

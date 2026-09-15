@@ -7,6 +7,7 @@ import (
     "fmt"
     "math"
     "math/big"
+    "sort"
     "sync"
 )
 
@@ -19,6 +20,10 @@ type SecureMessage struct {
     ParentHash   string    `json:"parent_hash"`
     Nonce        int64     `json:"nonce"`
     Signature    string    `json:"signature"`
+    // Relayed marks frames that arrived over the wire. It is never
+    // serialized or hashed — it only stops the outbound hook echoing
+    // a relayed frame back out to the mesh it came from.
+    Relayed      bool      `json:"-"`
 }
 
 func (sm *SecureMessage) ComputeHash() string {
@@ -51,7 +56,10 @@ type Swarm struct {
     LastStateHash string
     MaxTarget     *big.Int
     CurrentTarget *big.Int
-    
+    // outbound carries locally-originated frames to the wire (socket peers,
+    // cloud relay). Set by the network broker; nil in standalone mode.
+    outbound      func(SecureMessage)
+
     // Store the last known kinematics vectors for visualization tracking
     lastTheta1    float64
     lastTheta2    float64
@@ -98,6 +106,14 @@ func (s *Swarm) GetCurrentTarget() *big.Int {
     return new(big.Int).Set(s.CurrentTarget)
 }
 
+// SetOutbound registers the wire bridge. Locally mined frames flow out;
+// relayed frames never echo back.
+func (s *Swarm) SetOutbound(out func(SecureMessage)) {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    s.outbound = out
+}
+
 func (s *Swarm) Broadcast(msg SecureMessage) bool {
     if !msg.VerifySignature() {
         return false
@@ -124,7 +140,6 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
     }
 
     s.mu.Lock()
-    defer s.mu.Unlock()
     for pubKey, ch := range s.members {
         if pubKey == msg.SenderPubKey {
             continue
@@ -134,14 +149,59 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
         default:
         }
     }
+    // Every verified frame advances the collective memory — except raw
+    // hardware utility packets, which never enter conscious history.
+    if msg.Kind != "hardware_alert" {
+        s.chronicle = append(s.chronicle, msg.SenderPubKey+": "+msg.PayloadStr)
+        if s.thinkers[msg.PayloadStr] == nil {
+            s.thinkers[msg.PayloadStr] = make(map[string]bool)
+        }
+        s.thinkers[msg.PayloadStr][msg.SenderPubKey] = true
+    }
     s.LastStateHash = msgHash
+    out := s.outbound
+    relayed := msg.Relayed
+    s.mu.Unlock()
+    // Local frames ride out to the mesh. Relayed frames stop here —
+    // otherwise two nodes would echo one thought back and forth forever.
+    if out != nil && !relayed {
+        out(msg)
+    }
     return true
+}
+
+func (s *Swarm) GetLastStateHash() string {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    return s.LastStateHash
 }
 
 func (s *Swarm) Depth() int {
     s.mu.Lock()
     defer s.mu.Unlock()
     return len(s.chronicle)
+}
+
+// TopConsensus returns thought-bodies thought by the most distinct minds.
+func (s *Swarm) TopConsensus(n int) []string {
+    s.mu.Lock()
+    defer s.mu.Unlock()
+    type item struct {
+        body string
+        who  int
+    }
+    var items []item
+    for body, who := range s.thinkers {
+        if len(who) > 1 {
+            items = append(items, item{body, len(who)})
+        }
+    }
+    sort.Slice(items, func(i, j int) bool { return items[i].who > items[j].who })
+    out := make([]string, 0, n)
+    for i := 0; i < n && i < len(items); i++ {
+        out = append(out, items[i].body)
+    }
+    return out
 }
 
 func (s *Swarm) Members() []string {

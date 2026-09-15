@@ -53,7 +53,7 @@ test-timed: build
 
 clean:
 	go clean
-	rm -f hivemind server.log client.log timed_test.sh
+	rm -f hivemind server.log client.log
 
 clean-soul:
 	rm -rf .hive_memory
