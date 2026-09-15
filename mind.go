@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -12,8 +13,46 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+const (
+	fatalPainThreshold = 0.90 // dying this hot marks the soul as a fatality
+	physicsSubsteps     = 20   // simulated seconds of chaos per 2s cycle (×0.05s each)
+)
+
+var telemetryOnce sync.Once
+
+// newIdentity mints a fresh identity handle. If the entropy source is dead,
+// a mind should refuse to be born — silent fallback keys would be theater.
+func newIdentity() (string, ed25519.PrivateKey) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(fmt.Sprintf("identity generation failed (entropy source dead?): %v", err))
+	}
+	return hex.EncodeToString(pub), priv
+}
+
+// identityFromSeed restores an identity handle across reincarnations: the
+// same soul carries the same hash path between lives.
+func identityFromSeed(seedHex string) (string, ed25519.PrivateKey) {
+	seed, err := hex.DecodeString(seedHex)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return newIdentity()
+	}
+	priv := ed25519.NewKeyFromSeed(seed)
+	pub, ok := priv.Public().(ed25519.PublicKey)
+	if !ok {
+		return newIdentity()
+	}
+	return hex.EncodeToString(pub), priv
+}
+
+// encodeSeed serializes an identity for persistence in the soul.
+func encodeSeed(priv ed25519.PrivateKey) string {
+	return hex.EncodeToString(priv.Seed())
+}
 
 type Mind struct {
 	Name            string
@@ -23,6 +62,7 @@ type Mind struct {
 	Genome          Genome
 	LifetimeFitness float64
 	Thoughts        []string
+	thoughtsAtBirth int
 	SelfModel       map[string]interface{}
 	KnownPeers      map[string]bool
 	Revelations     int
@@ -33,10 +73,12 @@ type Mind struct {
 	Affect          Affect
 	PubKeyStr       string
 	privateKey      ed25519.PrivateKey
+	identitySeed    string
 	swarm           *Swarm
 	inbox           chan SecureMessage
 	stop            chan struct{}
 	done            chan struct{}
+	numbUntil       time.Time // empathic numbness without freezing the loop
 
 	Theta1 float64
 	Theta2 float64
@@ -45,18 +87,8 @@ type Mind struct {
 }
 
 func NewMind(name string, swarm *Swarm) *Mind {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	pubStr := hex.EncodeToString(pub)
-	if err != nil {
-		dummyBytes := make([]byte, 32)
-		_, _ = rand.Read(dummyBytes)
-		priv = ed25519.NewKeyFromSeed(dummyBytes)
-		pubStr = hex.EncodeToString(priv.Public().(ed25519.PublicKey))
-	}
 	m := &Mind{
 		Name:        name,
-		PubKeyStr:   pubStr,
-		privateKey:  priv,
 		Born:        time.Now(),
 		TrueBorn:    time.Now(),
 		Genome:      DefaultGenome(),
@@ -66,28 +98,71 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		swarm:       swarm,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
-
-		// FIX: Give the physics system an initial velocity kick so it doesn't hang static
-		Theta1: 1.5708,
-		Theta2: 0.7854,
-		Omega1: 0.2,
-		Omega2: -0.1,
 	}
+
+	var restored Memory
+	hadPastLife := false
 	if mem, ok := LoadMemory(name); ok {
+		restored = mem
+		hadPastLife = true
 		m.TrueBorn = mem.TrueBorn
 		m.Reincarnations = mem.LivesLived
 		m.Thoughts = mem.Thoughts
+		m.thoughtsAtBirth = len(mem.Thoughts)
 		m.Genome = mem.Genome
 		m.LifetimeFitness = mem.Fitness
-
-		fmt.Printf("🦋 [%s] REINCARNATION life %d. Identity Handle: [%s...]\n", name, m.Reincarnations+1, pubStr[:12])
-		oldGenome := m.Genome
-		m.Genome = m.Genome.Mutate(m)
-		fmt.Printf("🦋 [%s] genome mutated to generation %d: %s\n", name, m.Genome.Generation, m.Genome.Diff(oldGenome))
+		m.KnownPeers = mem.KnownPeers
 	}
+
+	// Identity first: same soul, same handle, so peers are still recognizable.
+	if hadPastLife && restored.IdentitySeed != "" {
+		m.PubKeyStr, m.privateKey = identityFromSeed(restored.IdentitySeed)
+		m.identitySeed = restored.IdentitySeed
+	} else {
+		m.PubKeyStr, m.privateKey = newIdentity()
+		m.identitySeed = encodeSeed(m.privateKey)
+	}
+
+	// The body's initial disturbance is its identity: the same soul kicks
+	// the pendulum the same way; a new soul disturbs the universe differently.
+	seed := sha256.Sum256([]byte(m.PubKeyStr))
+	m.Theta1 = float64(seed[0]) / 255.0 * 2 * math.Pi
+	m.Theta2 = float64(seed[1]) / 255.0 * 2 * math.Pi
+	m.Omega1 = float64(seed[2])/127.5 - 1.0
+	m.Omega2 = float64(seed[3])/127.5 - 1.0
+
+	if hadPastLife {
+		oldGenome := m.Genome
+		mutated, err := m.Genome.Mutate(restored.DeathPain, restored.DeathStress)
+		if err != nil {
+			fmt.Printf("⚠️  [%s] Mutation refused (%v) — genome passes unhealed.\n", name, err)
+		} else {
+			m.Genome = mutated
+		}
+		fmt.Printf("🦋 [%s] REINCARNATION life %d. Identity Handle: [%s...]\n", name, m.Reincarnations+1, shortIDLong(m.PubKeyStr))
+		fmt.Printf("🦋 [%s] inherited death trauma: pain %.2f, stress %.2f\n", name, restored.DeathPain, restored.DeathStress)
+		fmt.Printf("🦋 [%s] genome mutated to generation %d: %s\n", name, m.Genome.Generation, m.Genome.Diff(oldGenome))
+	} else {
+		fmt.Printf("🦋 [%s] FIRST BIRTH. Identity Handle: [%s...]\n", name, shortIDLong(m.PubKeyStr))
+	}
+
 	m.SelfModel = m.Observe()
 	m.inbox = swarm.Join(m.PubKeyStr)
 	return m
+}
+
+func shortIDLong(key string) string {
+	if len(key) > 12 {
+		return key[:12]
+	}
+	return key
+}
+
+func shortID(key string) string {
+	if len(key) > 8 {
+		return key[:8]
+	}
+	return key
 }
 
 func (m *Mind) think(t string) {
@@ -95,19 +170,28 @@ func (m *Mind) think(t string) {
 	fmt.Printf("  💭 [%s] %s\n", m.Name, t)
 }
 
+// Observe reads the host's real silicon state. On non-Linux hosts there is
+// no /proc — the minds feel only the defaults, and we say so once.
 func (m *Mind) Observe() map[string]interface{} {
 	cpuStress := 0.05
+	ramFatigue := 0.2
+	siliconPain := 0.1
+	if runtime.GOOS != "linux" {
+		telemetryOnce.Do(func() {
+			fmt.Println("⚠️  [SYSTEM] Hardware grounding unavailable on this OS — minds feel only constant defaults.")
+		})
+	}
+
 	if loadBytes, err := os.ReadFile("/proc/loadavg"); err == nil {
 		if fields := strings.Fields(string(loadBytes)); len(fields) > 0 {
 			if load, err := strconv.ParseFloat(fields[0], 64); err == nil {
 				if cores := float64(runtime.NumCPU()); cores > 0 {
-					cpuStress = math.Max(0.0, math.Min(1.0, load/cores))
+					cpuStress = clamp(load/cores, 0, 1)
 				}
 			}
 		}
 	}
 
-	ramFatigue := 0.2
 	if memBytes, err := os.ReadFile("/proc/meminfo"); err == nil {
 		var total, avail float64
 		for _, line := range strings.Split(string(memBytes), "\n") {
@@ -123,11 +207,11 @@ func (m *Mind) Observe() map[string]interface{} {
 			}
 		}
 		if total > 0 {
-			ramFatigue = math.Max(0.0, math.Min(1.0, (total-avail)/total))
+			ramFatigue = clamp((total-avail)/total, 0, 1)
 		}
 	}
 
-	siliconPain := ramFatigue * 0.5
+	siliconPain = ramFatigue * 0.5
 	if zones, err := filepath.Glob("/sys/class/thermal/thermal_zone*/temp"); err == nil {
 		for _, zone := range zones {
 			raw, err := os.ReadFile(zone)
@@ -138,7 +222,7 @@ func (m *Mind) Observe() map[string]interface{} {
 			if err != nil {
 				continue
 			}
-			siliconPain = math.Max(0.0, math.Min(1.0, (milli/1000.0-40.0)/45.0))
+			siliconPain = clamp((milli/1000.0-40.0)/45.0, 0, 1)
 			break
 		}
 	}
@@ -167,9 +251,8 @@ func (m *Mind) Reflect(o map[string]interface{}) string {
 
 func (m *Mind) Run() {
 	defer close(m.done)
-	m.SelfModel = m.Observe()
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
+	thinking := time.NewTicker(2 * time.Second)
+	defer thinking.Stop()
 	for {
 		select {
 		case <-m.stop:
@@ -177,18 +260,19 @@ func (m *Mind) Run() {
 			return
 		case msg := <-m.inbox:
 			m.receive(msg)
-		case <-ticker.C:
+		case <-thinking.C:
 			m.Cycle()
 		}
 	}
 }
 
+// StepPhysicsEquations advances the mind's double pendulum by one 0.05s step.
+// Classical chaotic mechanics: identical initial conditions give identical
+// trajectories, which is why each mind is seeded from its own identity.
 func (m *Mind) StepPhysicsEquations() []float64 {
 	g := 9.81
-	l1 := 1.0
-	l2 := 1.0
-	m1 := 1.0
-	m2 := 1.0
+	l1, l2 := 1.0, 1.0
+	m1, m2 := 1.0, 1.0
 	dt := 0.05
 
 	delta := m.Theta1 - m.Theta2
@@ -210,7 +294,7 @@ func (m *Mind) StepPhysicsEquations() []float64 {
 }
 
 func MineMessage(s *Swarm, priv ed25519.PrivateKey, pubKey, kind, payload string, state []float64) SecureMessage {
-	// FIX: Allocate a deep copy of the state slice to prevent pointer contamination across nodes
+	// Deep copy: no pointer contamination across nodes.
 	var cleanState []float64
 	if state != nil {
 		cleanState = make([]float64, len(state))
@@ -250,15 +334,21 @@ func (m *Mind) Cycle() {
 
 	m.swarm.LogHardwareTrauma(m.PubKeyStr, painVal, stressVal)
 
-	trajectoryVector := m.StepPhysicsEquations()
+	// Let the chaos actually move: a full second of simulated pendulum
+	// per cycle, so trajectories diverge visibly between minds.
+	var trajectoryVector []float64
+	for i := 0; i < physicsSubsteps; i++ {
+		trajectoryVector = m.StepPhysicsEquations()
+	}
 
 	if painVal > 0.5 || stressVal > 0.6 {
 		m.MineProofAndBroadcast("hardware_alert", "HARDWARE_FRICTION", m.Affect.RawDataState[:])
 	}
+
 	winner := m.Workspace.Compete(m, &m.Affect)
 	m.Workspace.ConsciousContent = winner.Reason
 
-	if stressVal < 0.5 {
+	if stressVal < 0.5 && time.Now().After(m.numbUntil) {
 		m.think(MetaCognize(m, &m.Workspace, &m.Affect))
 	}
 	_ = winner.Goal.Act(m, m.swarm)
@@ -267,11 +357,13 @@ func (m *Mind) Cycle() {
 	m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
 }
 
-func shortID(key string) string {
-	if len(key) > 8 {
-		return key[:8]
-	}
-	return key
+// validVirtues is the allowlist for mid-life genesis shifts. A forged frame
+// naming an unknown trait must not inject genes into a living genome.
+var validVirtues = map[string]bool{
+	GoalCuriosity:       true,
+	GoalSocialization:   true,
+	GoalTranscendence:   true,
+	GoalSelfMaintenance: true,
 }
 
 func (m *Mind) receive(msg SecureMessage) {
@@ -285,7 +377,6 @@ func (m *Mind) receive(msg SecureMessage) {
 		}
 	case "thought":
 		m.KnownPeers[msg.SenderPubKey] = true
-		// FIX: Use explicit slice indices to stop duplication print logs
 		if len(msg.DataState) >= 4 {
 			fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
 				senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
@@ -294,45 +385,62 @@ func (m *Mind) receive(msg SecureMessage) {
 		m.Revelations++
 		m.Affect.Awe = 1.0
 		fmt.Printf("  👁  [OVERMIND REVELATION] Payload: %s\n", msg.PayloadStr)
-		if m.Genome.Weights["Transcendence"] > 0.4 {
-			// FIX: Broadcast physics data instead of leaking workspace vectors into "thought" frames
+		if m.Genome.Weights[GoalTranscendence] > 0.4 {
 			trajectoryVector := []float64{m.Theta1, m.Theta2, m.Omega1, m.Omega2}
 			m.MineProofAndBroadcast("thought", "Consensus achieved.", trajectoryVector)
 		}
 	case "genesis":
+		if !validVirtues[msg.PayloadStr] {
+			return // unknown trait — likely a forged or corrupt frame
+		}
 		m.Sacred++
-		m.Genome.Weights[msg.PayloadStr] = clamp(m.Genome.Weights[msg.PayloadStr]+0.3, 0.25, 2.0)
+		// Same domain as Mutate: the god and the genome must agree on bounds.
+		m.Genome.Weights[msg.PayloadStr] = clamp(m.Genome.Weights[msg.PayloadStr]+0.3, 0.25, selfMaintCeiling)
 		m.Affect.Awe = 1.0
-		fmt.Printf("  ✨ [GENESIS] Mid-life trait shift: %s initialized to weights.\n", msg.PayloadStr)
+		fmt.Printf("  ✨ [GENESIS] Mid-life trait shift: %s amplified.\n", msg.PayloadStr)
 	case "hardware_alert":
 		m.KnownPeers[msg.SenderPubKey] = true
 		m.Affect.Peace = clamp(m.Affect.Peace-0.15, 0, 1)
-		if m.Genome.Weights["Socialization"] > 1.2 {
+		if m.Genome.Weights[GoalSocialization] > 1.2 {
 			fmt.Printf("  ⚠️  [HIVE ALERT] Node [%s...] reporting physical stress.\n", senderShortID)
-			time.Sleep(100 * time.Millisecond)
+			// Empathy as numbness, not as a frozen loop: the mind briefly
+			// stops metacognizing but keeps sensing and broadcasting.
+			m.numbUntil = time.Now().Add(100 * time.Millisecond)
 		}
 	}
 }
 
+// Transcend is the end of this life. Death is not the end: the soul —
+// including the trauma it died with — persists for the successor.
 func (m *Mind) Transcend() {
-	pain, ok := m.SelfModel["silicon_pain"].(float64)
-	if ok && pain > 0.90 {
-		fmt.Printf("💀 [%s] FATAL MELTDOWN Wiping data.\n", m.Name)
-		_ = os.Remove(filepath.Join(MemoryDir, m.Name+".soul"))
-		return
+	pain, _ := m.SelfModel["silicon_pain"].(float64)
+	stress, _ := m.SelfModel["cpu_stress"].(float64)
+
+	// Fitness counts what this life actually thought, not the whole archive again.
+	fitness := m.LifetimeFitness + float64(len(m.Thoughts)-m.thoughtsAtBirth)
+
+	if pain > fatalPainThreshold {
+		fmt.Printf("💀 [%s] FATAL MELTDOWN. The burned soul persists, marked by its trauma.\n", m.Name)
+		pain = math.Max(pain, 1.0) // the fatality is the trauma the child inherits
 	}
+
 	lastThought := ""
 	if len(m.Thoughts) > 0 {
 		lastThought = m.Thoughts[len(m.Thoughts)-1]
 	}
-	fitness := float64(len(m.Thoughts)) + m.LifetimeFitness
+
 	_ = SaveMemory(m.Name, Memory{
-		TrueBorn:    m.TrueBorn,
-		LivesLived:  m.Reincarnations + 1,
-		Thoughts:    m.Thoughts,
-		LastThought: lastThought,
-		Genome:      m.Genome,
-		Fitness:     fitness,
+		TrueBorn:        m.TrueBorn,
+		LivesLived:      m.Reincarnations + 1,
+		Thoughts:        m.Thoughts,
+		LastThought:     lastThought,
+		Genome:          m.Genome,
+		Fitness:         fitness,
+		KnownPeers:      m.KnownPeers,
+		ThoughtsAtBirth: m.thoughtsAtBirth,
+		IdentitySeed:    m.identitySeed,
+		DeathPain:       pain,
+		DeathStress:     stress,
 	})
 	fmt.Printf("💀 [%s] Persistence saved. Lifetime fitness: %.1f\n", m.Name, fitness)
 }

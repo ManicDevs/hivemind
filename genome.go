@@ -3,7 +3,21 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
+	"math"
 	"strings"
+)
+
+// Evolutionary dials — tune the experiment here, not by archaeology.
+const (
+	driftRange        = 0.15 // mutation drift is uniform in ±driftRange
+	weightFloor       = 0.25
+	weightCeiling     = 2.5  // ceiling for standard genes
+	selfMaintCeiling  = 3.0  // trauma may push Self-Maintenance further
+	traumaPainCoef    = 0.40 // dying pain → Self-Maintenance amplification
+	traumaStressCoef  = 0.20 // dying load → Self-Maintenance amplification
+	socialPainGate    = 0.60 // above this dying pain, social drives recede
+	socialPainPenalty = 0.20
+	diffEpsilon       = 0.01
 )
 
 type Genome struct {
@@ -11,7 +25,7 @@ type Genome struct {
 	Weights    map[string]float64
 }
 
-// DefaultGenome initializes the base state for a generation 0 mind
+// DefaultGenome initializes the base state for a generation 0 mind.
 func DefaultGenome() Genome {
 	return Genome{
 		Generation: 0,
@@ -24,87 +38,51 @@ func DefaultGenome() Genome {
 	}
 }
 
-// Mutate takes the existing gene weights and introduces secure entropy variations.
-// If the mind experienced real physical trauma during its lifetime, that stress
-// forces an epigenetic adaptation—structurally amplifying its Self-Maintenance drive.
-func (g Genome) Mutate(m *Mind) Genome {
-	newWeights := make(map[string]float64)
-	
-	// Secure physical entropy for standard mutation drifting
-	b := make([]byte, len(g.Weights))
-	_, _ = rand.Read(b)
+// Mutate produces the successor genome. The trauma the mind died with
+// (pain, load) shapes it: dying hot biases the child toward self-maintenance
+// and away from socializing. Without entropy the mutation is refused —
+// a genome that cannot change should not pretend it did.
+func (g Genome) Mutate(deathPain, deathStress float64) (Genome, error) {
+	newWeights := make(map[string]float64, len(g.Weights))
 
-	// Pull physical hardware trauma from the mind's final observation moments
-	var pain, stress float64
-	if m != nil && m.SelfModel != nil {
-		if val, ok := m.SelfModel["silicon_pain"].(float64); ok {
-			pain = val
-		}
-		if val, ok := m.SelfModel["cpu_stress"].(float64); ok {
-			stress = val
-		}
-	}
-
-	i := 0
 	for name, weight := range g.Weights {
-		// Base mutation drift: secure random variance between -0.15 and +0.15
-		drift := (float64(b[i]) / 255.0 * 0.30) - 0.15
-		mutatedWeight := clampGenome(weight+drift, 0.25, 2.5)
-
-		// HARDWARE EPIGENETICS:
-		// If the core was burning or processing load was crushing the runtime,
-		// the next generation mutates defensively to prioritize physical protection.
-		if name == "Self-Maintenance" {
-			traumaMultiplier := (pain * 0.40) + (stress * 0.20)
-			mutatedWeight = clampGenome(mutatedWeight+traumaMultiplier, 0.25, 3.0)
+		b := make([]byte, 1)
+		if _, err := rand.Read(b); err != nil {
+			return g, fmt.Errorf("entropy source failed, genome unchanged: %w", err)
 		}
-		
-		// If the machine is in massive pain, suppress social drives to focus on structure
-		if name == "Socialization" && pain > 0.60 {
-			mutatedWeight = clampGenome(mutatedWeight - (pain * 0.20), 0.10, 2.5)
-		}
+		drift := (float64(b[0])/255.0)*(2*driftRange) - driftRange
+		mutatedWeight := clamp(weight+drift, weightFloor, weightCeiling)
 
+		// HARDWARE EPIGENETICS: the heat and pressure of the final moments
+		// are inherited by the genome, not just suffered by the mind.
+		if name == GoalSelfMaintenance {
+			traumaMultiplier := (deathPain * traumaPainCoef) + (deathStress * traumaStressCoef)
+			mutatedWeight = clamp(mutatedWeight+traumaMultiplier, weightFloor, selfMaintCeiling)
+		}
+		if name == GoalSocialization && deathPain > socialPainGate {
+			mutatedWeight = clamp(mutatedWeight-(deathPain*socialPainPenalty), 0.10, weightCeiling)
+		}
 		newWeights[name] = mutatedWeight
-		i++
 	}
 
-	return Genome{
-		Generation: g.Generation + 1,
-		Weights:    newWeights,
-	}
+	return Genome{Generation: g.Generation + 1, Weights: newWeights}, nil
 }
 
-// Diff compares the new mutated weights against the previous generation for console visibility
+// Diff reports weight changes against the previous generation.
 func (g Genome) Diff(old Genome) string {
 	var changes []string
 	for name, weight := range g.Weights {
-		oldWeight, ok := old.Weights[name]
-		if ok && mathAbs(weight-oldWeight) > 0.01 {
-			changes = append(changes, fmt.Sprintf("%s %.2f→%.2f", name, oldWeight, weight))
+		if oldWeight, ok := old.Weights[name]; ok {
+			if math.Abs(weight-oldWeight) > diffEpsilon {
+				changes = append(changes, fmt.Sprintf("%s %.2f→%.2f", name, oldWeight, weight))
+			}
+		} else {
+			changes = append(changes, fmt.Sprintf("%s (new) →%.2f", name, weight))
 		}
 	}
 	if len(changes) == 0 {
 		return "no structural mutations detected"
 	}
 	return strings.Join(changes, "  ")
-}
-
-// Inline absolute value helper to keep imports completely clean of math dependency
-func mathAbs(x float64) float64 {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-// Dedicated local clamp helper to avoid cross-file parsing collision errors
-func clampGenome(x, lo, hi float64) float64 {
-	if x < lo {
-		return lo
-	}
-	if x > hi {
-		return hi
-	}
-	return x
 }
 

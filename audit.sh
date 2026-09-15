@@ -1,35 +1,37 @@
 #!/bin/bash
-# ── HIVEMIND SYSTEM INTEGRITY & DIAGNOSTIC AUDIT ──
+# hivemind audit — formatting, vet, build, tests.
+# Exits non-zero on any failure. Every claim below is checked, not narrated.
+set -u
 
-echo "🔍 [SYSTEM AUDIT] Beginning global integration verification pass..."
-echo ""
+echo "🔍 hivemind audit"
 
-# 1. Structural File Existence Checks
-for file in main.go mind.go swarm.go network.go Makefile; do
-    if [ -f "$file" ]; then
-        echo "  ✔ File sector found: $file"
-    else
-        echo "  ❌ CRITICAL BUG: Missing core sector: $file"
-    fi
-done
+unformatted="$(gofmt -l .)"
+if [ -n "$unformatted" ]; then
+    echo "❌ gofmt: unformatted files:"
+    echo "$unformatted"
+    exit 1
+fi
+echo "  ✔ gofmt clean"
 
-echo ""
+if ! go vet ./...; then
+    echo "❌ go vet failed"
+    exit 1
+fi
+echo "  ✔ go vet clean"
 
-# 2. Syntax Validation Pass
-echo "🛠️ [COMPILER SWEEP] Validating Go package dependency tree..."
-go vet ./... 2>&1
-if [ $? -eq 0 ]; then
-    echo "  ✔ All internal type definitions and memory scopes match cleanly."
+if ! go build -o hivemind .; then
+    echo "❌ build failed"
+    exit 1
+fi
+echo "  ✔ build ok"
+
+if go test ./... -race -count=1 > /tmp/hivemind-audit-test.log 2>&1; then
+    echo "  ✔ tests (with -race) pass"
 else
-    echo "  ❌ Compilation diagnostics flagged structural errors above."
+    echo "❌ tests failed:"
+    cat /tmp/hivemind-audit-test.log
+    exit 1
 fi
 
-echo ""
+echo "✅ audit clean (fmt, vet, build, race)"
 
-# 3. Native Execution Compilation Pass
-echo "⚡ [BUILD TARGET] Generating production executable binary..."
-make build
-if [ $? -eq 0 ]; then
-    echo ""
-    echo "✨ [AUDIT COMPLETE] System architecture is fully unified and ready."
-fi

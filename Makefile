@@ -1,60 +1,63 @@
 # ── HIVEMIND DECENTRALIZED AUTOMATION MAKEFILE ──
 
-.PHONY: all help build clean test-1 test-2 test-full test-timed make-1 make-2 clean-soul
+.PHONY: all help build test audit clean test-1 test-2 test-full test-timed clean-soul
 
 all: help
 
 help:
 	@echo ""
-	@echo "  HIVEMIND DECENTRALIZED PROCESS CONTROLLER"
+	@echo "  HIVEMIND PROCESS CONTROLLER"
 	@echo ""
 	@echo "  Usage: make <command>"
 	@echo ""
 	@echo "  Available Commands:"
-	@echo "    build         Compile active Go package trees into native executable binaries"
-	@echo "    test-1        Initialize primary host file descriptor interface (LUDS server)"
-	@echo "    test-2        Initialize persistent worker attachment client with 4D vectors"
-	@echo "    test-full     Launch complete dual-node local mesh cluster test automatically"
-	@echo "    test-timed    Run automated 10-second timed cluster test with summary capture"
-	@echo "    make-1        Shorthand alias route targeting local test-1 orchestration"
-	@echo "    make-2        Shorthand alias route targeting local test-2 orchestration"
-	@echo "    clean         Purge compiled target artifacts and cache pools from memory"
-	@echo "    clean-soul    Execute hard-wipe erasure across all stored genetic memory frames"
+	@echo "    build         Compile hivemind"
+	@echo "    test          gofmt + go vet + go build + tests (with -race)"
+	@echo "    audit         run audit.sh (same gates as test)"
+	@echo "    test-1        Run a peer node (terminal 1)"
+	@echo "    test-2        Run a peer node (terminal 2; links to any others)"
+	@echo "    test-full     Launch a two-peer mesh automatically"
+	@echo "    test-timed    Automated 10s two-peer experiment with assertions"
+	@echo "    clean         Remove build artifacts and logs"
+	@echo "    clean-soul    Wipe .hive_memory (true extinction)"
 	@echo ""
 
 build:
-	go build -o hivemind ./...
+	go build -o hivemind .
+
+test:
+	@test -z "$$(gofmt -l .)" || { echo "❌ unformatted files:"; gofmt -l .; exit 1; }
+	go vet ./...
+	go test ./... -race -count=1
+
+audit: test
+	./audit.sh
 
 test-1: build
-	./hivemind -mode server
+	./hivemind -mode peer -node alpha-node
 
 test-2: build
-	./hivemind -mode client
-
-make-1: test-1
-make-2: test-2
+	./hivemind -mode peer -node beta-node
 
 test-full: build
-	@echo "🚀 [MESH AUTOMATION] Initializing dual-node serverless layout..."
-	@rm -f server.log
-	@./hivemind -mode server > server.log 2>&1 & SERVER_PID=$$! ; \
-	echo "⏳ [MESH AUTOMATION] Spawning server process (PID: $$SERVER_PID)... Waiting for LUDS descriptor..."; \
-	sleep 1.5; \
-	echo "🔗 [MESH AUTOMATION] Spawning client process concurrently... Intercom cross-talk live."; \
-	echo "💡 [MESH AUTOMATION] Press Ctrl+C at any time to terminate the automated grid cluster."; \
-	echo ""; \
-	./hivemind -mode client; \
-	echo "🧹 [MESH AUTOMATION] Catching termination signal. Cleaning up cluster threads..."; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	rm -f /tmp/hivemind.sock
+	@rm -f peer-a.log peer-b.log
+	@echo "🚀 [PEER MESH] Spawning a symmetric two-node mesh..."
+	@./hivemind -mode peer -node alpha-node > peer-a.log 2>&1 & PID_A=$$!; \
+	echo "⏳ Node alpha-node spawning (PID: $$PID_A)..."; \
+	W=0; while [ ! -S /tmp/hivemind-alpha-node.sock ] && [ $$W -lt 50 ]; do sleep 0.1; W=$$((W+1)); done; \
+	echo "🔗 alpha-node socket up. Spawning beta-node in foreground (Ctrl+C to end)."; \
+	./hivemind -mode peer -node beta-node || true; \
+	kill -TERM $$PID_A 2>/dev/null || true; \
+	sleep 1
 
 test-timed: build
 	@./timed_test.sh
 
 clean:
-	go clean
-	rm -f hivemind server.log client.log
+	rm -f hivemind server.log client.log peer-a.log peer-b.log
+	go clean -testcache
 
 clean-soul:
 	rm -rf .hive_memory
 	@echo "👁️  [OVERMIND] Memory pool cleared."
+
