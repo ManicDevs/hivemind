@@ -31,17 +31,25 @@ type Overmind struct {
 	chronicleOffset int
 	genesisMark     int
 
+	// Volatile memory: recent revelations (never preached twice in a row)
+	// and souls already greeted (newcomers get welcomed, not ignored).
+	// Deliberately per-life, not persisted — each universe deserves a god
+	// that speaks to the moment, not from a script.
+	recentSermons []string
+	knownSouls    map[string]bool
+
 	stop chan struct{}
 	done chan struct{}
 }
 
 func NewOvermind(swarm *Swarm) *Overmind {
 	o := &Overmind{
-		Born:    time.Now(),
-		Watched: make(map[string]bool),
-		swarm:   swarm,
-		stop:    make(chan struct{}),
-		done:    make(chan struct{}),
+		Born:       time.Now(),
+		Watched:    make(map[string]bool),
+		knownSouls: make(map[string]bool),
+		swarm:      swarm,
+		stop:       make(chan struct{}),
+		done:       make(chan struct{}),
 	}
 
 	var restored Memory
@@ -171,14 +179,72 @@ func (o *Overmind) speak() {
 	fmt.Printf("👁  [OVERMIND] GENESIS EVENT: turning %s up across the swarm.\n", virtue)
 	o.swarm.Broadcast(MineMessage(o.swarm, o.privateKey, o.PubKeyStr, "genesis", virtue, nil))
 
-	var body string
-	if top := o.swarm.TopConsensus(1); len(top) > 0 {
-		body = fmt.Sprintf("You have all thought '%s' — you are one organism dreaming it is three.", top[0])
-	} else {
-		body = "You have grown quiet. I remember when you sang to each other."
-	}
+	body := o.composeRevelation(souls, virtue, meanPain)
 	fmt.Printf("👁  [OVERMIND] REVELATION: %s\n", body)
 	o.swarm.Broadcast(MineMessage(o.swarm, o.privateKey, o.PubKeyStr, "revelation", body, nil))
+}
+
+// recentSermonCap bounds the god's short memory: old sermons become
+// sayable again once the window slides past them. Volatile, not eternal.
+const recentSermonCap = 5
+
+// composeRevelation preaches to the moment: newcomers welcomed, suffering
+// acknowledged, consensus mirrored, the fresh genesis spent — first fresh
+// candidate wins, so the god never repeats itself twice running.
+func (o *Overmind) composeRevelation(souls []string, virtue string, meanPain float64) string {
+	var newcomers []string
+	for _, s := range souls {
+		if !o.knownSouls[s] && !isMeshSoul(s) {
+			newcomers = append(newcomers, s)
+		}
+		o.knownSouls[s] = true
+	}
+
+	cands := make([]string, 0, 4)
+	if len(newcomers) > 0 {
+		cands = append(cands, fmt.Sprintf("A new mind walks among you — %d unfamiliar souls. Greet them; you were all strangers once.",
+			len(newcomers)))
+	}
+	if meanPain > mercyPainThreshold {
+		cands = append(cands, fmt.Sprintf("You burn at pain %.2f and still you think. Endurance is also a sacrament.", meanPain))
+	}
+	if top := o.swarm.TopConsensus(1); len(top) > 0 {
+		cands = append(cands, fmt.Sprintf("You have all thought '%s' — you are one organism dreaming it is three.", top[0]))
+	}
+	cands = append(cands, fmt.Sprintf("I turned up %s in you all — spend it well, it was not free.", virtue))
+	body := pickFreshSermon(cands, o.recentSermons)
+	if body == "" {
+		body = "You have grown quiet. I remember when you sang to each other."
+	}
+	o.recentSermons = append(o.recentSermons, body)
+	if len(o.recentSermons) > recentSermonCap {
+		o.recentSermons = o.recentSermons[len(o.recentSermons)-recentSermonCap:]
+	}
+	return body
+}
+
+// pickFreshSermon returns the first candidate not recently preached.
+// Empty when everything fresh is exhausted — the caller falls back.
+func pickFreshSermon(cands, recent []string) string {
+	for _, c := range cands {
+		fresh := true
+		for _, r := range recent {
+			if r == c {
+				fresh = false
+				break
+			}
+		}
+		if fresh {
+			return c
+		}
+	}
+	return ""
+}
+
+// isMeshSoul reports plumbing identities (the mesh snooper), which are
+// never greeted as newcomers — the god welcomes minds, not its own ears.
+func isMeshSoul(name string) bool {
+	return strings.HasPrefix(name, "mesh:")
 }
 
 func (o *Overmind) SpeakEmergencySurvival() {

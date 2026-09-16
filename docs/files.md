@@ -151,8 +151,11 @@ souls, identity seed, chronicle offset, genesis mark. Ticks every 5s:
 metabolic override on aggregate pain/stress, else speaks when effective
 depth (`offset + swarm.Depth()`) crosses the mark — first at offset+15,
 then every `genesisSpacing` (25), rare by design. Speech is a signed
-genesis (random virtue, whole swarm) plus a signed revelation quoting top
-consensus; entropy failure means silence, never a default virtue. Saves
+genesis (mercy override on burning swarms, caprice otherwise) plus a
+signed revelation composed fresh from the moment — newcomers welcomed,
+suffering acknowledged, consensus mirrored, the fresh virtue spent — with
+a 5-sermon memory so it never repeats itself twice running; entropy
+failure means silence, never a default virtue. Saves
 offset+mark+seed so patience survives the apocalypse; `mesh:` plumbing
 never pollutes the watched souls.
 

@@ -739,3 +739,20 @@ func TestMetacognitionBranches(t *testing.T) {
 		}
 	}
 }
+
+// Sermons stay volatile and on point: fresh candidates win, repeats are
+// refused while the window holds them, exhaustion falls back honestly.
+func TestPickFreshSermon(t *testing.T) {
+	if got := pickFreshSermon([]string{"a", "b"}, nil); got != "a" {
+		t.Fatalf("empty memory picked %q, want a", got)
+	}
+	if got := pickFreshSermon([]string{"a", "b"}, []string{"a"}); got != "b" {
+		t.Fatalf("repeat not skipped: %q", got)
+	}
+	if got := pickFreshSermon([]string{"a"}, []string{"a"}); got != "" {
+		t.Fatalf("exhaustion must fall back, got %q", got)
+	}
+	if got := pickFreshSermon(nil, nil); got != "" {
+		t.Fatalf("no candidates must fall back, got %q", got)
+	}
+}
