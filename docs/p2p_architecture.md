@@ -227,6 +227,29 @@ Affect indices and their honest provenance (`mind.go` Observe):
 
 ## 10. Capable Supernodes, Closest-First (No Thrones)
 
+Any node may become super; none rules. Two rules, both enforced in code:
+
+1. **Capability gates announcing.** Every 30s a node scores itself from
+   live telemetry (cool + idle + rested + long-lived + relay-connected;
+   a burning node scores zero) and publishes a signed `super_announce`
+   frame only above threshold — or while silenced by `HIVEMIND_SUPER=off`,
+   never. Announcements ride the standard outbound bridge, so LAN peers
+   hear them on their links and far nodes hear them on the relay. Silence
+   is the resignation letter: entries expire 90s after their last renewal.
+2. **Measured RTT decides retention.** Every dial records
+   dial-to-registered round-trip time; beyond 3 TCP links the farthest is
+   culled (with a 5-minute cooling-off so redial loops don't churn).
+   Unix pipes are free and never touched. Proximity is measured, never
+   claimed — milliseconds are truth, geography would be a lie.
+
+`super_announce` frames are infrastructure, excluded from the chronicle
+like `hardware_alert`, and minds ignore them (each mesh also snoops its
+own broadcast stream into the directory, so relay-only nodes learn supers
+they never dialed). WAN addresses are operator-asserted
+(`HIVEMIND_ADVERTISE=host:port`); the mesh never guesses reachability
+behind NAT. There is no election, no failover protocol, no privilege to
+seize — preferred transit, nothing more.
+
 Any node may become super; none rules. The layer has exactly two rules,
 and both are enforced in code, not by convention:
 

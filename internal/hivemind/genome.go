@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"crypto/rand"

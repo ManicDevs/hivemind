@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"crypto/ed25519"
@@ -480,3 +480,7 @@ func (m *Mind) Transcend() {
 }
 
 func (m *Mind) Stop() { close(m.stop) }
+
+// Done reports when this mind's goroutine has fully exited. The entrypoint
+// waits on it so no soul is read before it is written.
+func (m *Mind) Done() <-chan struct{} { return m.done }

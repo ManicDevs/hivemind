@@ -1,5 +1,5 @@
 /bin/
-/hivemind
+/logs/
 .hive_memory/
 .relaykey
 *.log

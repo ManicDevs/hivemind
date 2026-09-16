@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"bufio"
@@ -554,5 +554,31 @@ func TestSuperAnnounceEndToEnd(t *testing.T) {
 	pmA.mu.Unlock()
 	if selfListed {
 		t.Fatal("A listed itself as super")
+	}
+}
+
+// Cooling-off: a freshly culled peer is skipped by every redial path
+// until the cooldown lapses; then it becomes dialable again.
+func TestCulledCooldown(t *testing.T) {
+	pm := &PeerMesh{node: "test", conns: make(map[string]net.Conn), trans: make(map[string]string), supers: make(map[string]superEntry)}
+	pm.mu.Lock()
+	pm.culled = map[string]time.Time{"hot": time.Now()}
+	pm.culled["cold"] = time.Now().Add(-2 * culledCooldown)
+	pm.mu.Unlock()
+
+	if !pm.culledRecently("hot") {
+		t.Fatal("freshly culled peer not cooling off")
+	}
+	if pm.culledRecently("cold") {
+		t.Fatal("stale cull entry never cleared")
+	}
+	if pm.culledRecently("stranger") {
+		t.Fatal("unknown peer reported culled")
+	}
+	pm.mu.Lock()
+	_, stillThere := pm.culled["cold"]
+	pm.mu.Unlock()
+	if stillThere {
+		t.Fatal("expired cull entry not reaped on read")
 	}
 }

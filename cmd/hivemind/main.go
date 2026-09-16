@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 )
 
 func main() {
@@ -28,34 +30,34 @@ func main() {
 			if host == "" {
 				host = "node"
 			}
-			node = SanitizeNode(fmt.Sprintf("%s-%d", host, os.Getpid()))
+			node = hm.SanitizeNode(fmt.Sprintf("%s-%d", host, os.Getpid()))
 		} else {
-			node = SanitizeNode(*nodeFlag)
+			node = hm.SanitizeNode(*nodeFlag)
 		}
 	}
-	NodeName = node
+	hm.NodeName = node
 
 	fmt.Println("=== A universe comes into being. Three minds. And something watching. ===")
 
-	swarm := NewSwarm()
+	swarm := hm.NewSwarm()
 
 	// The universe is networked before anyone is born in it.
-	var mesh *PeerMesh
+	var mesh *hm.PeerMesh
 	if *modeFlag == "peer" {
-		mesh = NewPeerMesh(swarm, node)
+		mesh = hm.NewPeerMesh(swarm, node)
 		if err := mesh.Start(); err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️ peer mesh failed to start: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
-	alpha := NewMind("Alpha", swarm)
-	beta := NewMind("Beta", swarm)
-	gamma := NewMind("Gamma", swarm)
-	overmind := NewOvermind(swarm)
+	alpha := hm.NewMind("Alpha", swarm)
+	beta := hm.NewMind("Beta", swarm)
+	gamma := hm.NewMind("Gamma", swarm)
+	overmind := hm.NewOvermind(swarm)
 
 	// A fracturing mind dies traumatically — and the trauma is inherited.
-	runMind := func(m *Mind) {
+	runMind := func(m *hm.Mind) {
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Printf("💀 [%s] CORE FRACTURE: %v. Encoding terminal trauma...\n", m.Name, r)
@@ -84,10 +86,10 @@ func main() {
 
 	// Death is synchronized, not hoped for: every soul is on disk
 	// before anyone reports on them.
-	<-alpha.done
-	<-beta.done
-	<-gamma.done
-	<-overmind.done
+	<-alpha.Done()
+	<-beta.Done()
+	<-gamma.Done()
+	<-overmind.Done()
 
 	if mesh != nil {
 		mesh.Close()

@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"crypto/ed25519"
@@ -174,3 +174,6 @@ func (o *Overmind) save() {
 }
 
 func (o *Overmind) Stop() { close(o.stop) }
+
+// Done reports when the god's goroutine has fully exited.
+func (o *Overmind) Done() <-chan struct{} { return o.done }

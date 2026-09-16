@@ -23,7 +23,7 @@ help:
 	@echo ""
 
 build: .relaykey
-	go build -ldflags "-X main.compileRelayKey=$$(cat .relaykey)" -o bin/hivemind .
+	go build -ldflags "-X gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind.compileRelayKey=$$(cat .relaykey)" -o bin/hivemind ./cmd/hivemind
 
 # Machine-local relay key: generated once, never committed, baked into
 # every build. Distinct machines get distinct keys out of the box, so
@@ -54,9 +54,9 @@ test-2: build
 	bin/hivemind -mode peer -node beta-node
 
 test-full: build
-	@rm -f peer-a.log peer-b.log
+	@mkdir -p logs && rm -f logs/peer-a.log logs/peer-b.log
 	@echo "🚀 [PEER MESH] Spawning a symmetric two-node mesh..."
-	@bin/hivemind -mode peer -node alpha-node > peer-a.log 2>&1 & PID_A=$$!; \
+	@bin/hivemind -mode peer -node alpha-node > logs/peer-a.log 2>&1 & PID_A=$$!; \
 	echo "⏳ Node alpha-node spawning (PID: $$PID_A)..."; \
 	W=0; while [ ! -S /tmp/hivemind-alpha-node.sock ] && [ $$W -lt 50 ]; do sleep 0.1; W=$$((W+1)); done; \
 	echo "🔗 alpha-node socket up. Spawning beta-node in foreground (Ctrl+C to end)."; \
@@ -68,7 +68,7 @@ test-timed: build
 	@./scripts/timed_test.sh
 
 clean:
-	rm -rf bin server.log client.log peer-a.log peer-b.log
+	rm -rf bin logs/*.log
 	go clean -testcache
 
 clean-soul:

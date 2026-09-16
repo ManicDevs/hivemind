@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"bufio"
@@ -216,6 +216,14 @@ func (pm *PeerMesh) beaconRecvLoop() {
 		if b.Node == "" || b.Node == pm.node || b.TCP <= 0 || b.TCP > 65535 {
 			continue
 		}
+		host, _, err := net.SplitHostPort(src.String())
+		if err != nil {
+			continue
+		}
+		target := net.JoinHostPort(host, strconv.Itoa(b.TCP))
+		// File every heard super in the directory first — known nodes
+		// need no dial to be worth remembering.
+		pm.noteSuper(b.Node, target, b.Score, "lan")
 		if pm.connected(b.Node) {
 			continue
 		}
@@ -224,12 +232,9 @@ func (pm *PeerMesh) beaconRecvLoop() {
 		if b.Node < pm.node {
 			continue
 		}
-		host, _, err := net.SplitHostPort(src.String())
-		if err != nil {
-			continue
+		if pm.culledRecently(b.Node) {
+			continue // we cut this one; let it cool off
 		}
-		target := net.JoinHostPort(host, strconv.Itoa(b.TCP))
-		pm.noteSuper(b.Node, target, b.Score, "lan")
 		fmt.Printf("📻 [PEER MESH] Heard node %q at %s (capability %.2f) — dialing.\n", b.Node, target, b.Score)
 		go pm.dialTCP(target)
 	}
@@ -263,8 +268,15 @@ func (pm *PeerMesh) staticPeersLoop() {
 			return
 		case <-ticker.C:
 			for _, addr := range addrs {
-				if node, ok := linkedAddr[addr]; ok && pm.connected(node) {
-					continue
+				if node, ok := linkedAddr[addr]; ok {
+					if pm.connected(node) {
+						continue
+					}
+					// Known node, lost link: respect the cooling-off
+					// period if we were the ones who cut it.
+					if pm.culledRecently(node) {
+						continue
+					}
 				}
 				if time.Since(lastTry[addr]) < staticRetry {
 					continue

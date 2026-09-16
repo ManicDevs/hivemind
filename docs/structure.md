@@ -9,25 +9,29 @@ Protocol details live in `p2p_architecture.md`; this file is the map.
 
 ```
 hivemind/
-├── main.go            # entrypoint: flags, mesh startup, mind lifecycle, graceful death
-├── mind.go            # the Mind: observe → affect → compete → act → broadcast
-├── conscious.go       # affect vectors, workspace competition, metacognition
-├── genome.go          # heritable drive weights, epigenetic mutation, diff
-├── goals.go           # the four intrinsic drives and what each one does
-├── swarm.go           # signed broadcast gate, PoW target, chronicle, telemetry
-├── overmind.go        # emergent god: genesis, revelations, metabolic override
-├── network.go         # PeerMesh: unix sockets, handshake exchange, cloud relay
-├── lan.go             # serverless transport: TCP, multicast discovery, static peers
-├── memory.go          # .soul persistence: atomic writes, quarantine, namespaces
+├── cmd/hivemind/main.go   # thin entrypoint: flags, mesh startup, lifecycle
+├── internal/hivemind/     # the whole organism (single package, stdlib only)
+│   ├── mind.go            # the Mind: observe → affect → compete → act → broadcast
+│   ├── conscious.go       # affect vectors, workspace competition, metacognition
+│   ├── genome.go          # heritable drive weights, epigenetic mutation, diff
+│   ├── goals.go           # the four intrinsic drives and what each one does
+│   ├── swarm.go           # signed broadcast gate, PoW target, chronicle, telemetry
+│   ├── overmind.go        # emergent god: genesis, revelations, metabolic override
+│   ├── network.go         # PeerMesh: unix sockets, handshake exchange, cloud relay
+│   ├── lan.go             # serverless transport: TCP, multicast discovery, static peers
+│   ├── super.go           # capable supernodes, closest-first retention
+│   ├── memory.go          # .soul persistence: atomic writes, quarantine, namespaces
+│   └── hivemind_test.go   # unit tests: identity, gate, consensus, mesh hostility
 ├── docs/
 │   ├── p2p_architecture.md  # wire protocol specification
 │   └── structure.md         # this file
-├── Makefile           # build / test / mesh / extinction targets
-├── bin/               # built binary lives here (gitignored, `make build`)
 ├── scripts/
 │   ├── audit.sh       # file check + vet + build gate
 │   └── timed_test.sh  # 10s two-peer experiment with pass/fail assertions
-├── go.mod             # module gitlab.torproject.org/cerberus-droid/hivemind, stdlib only
+├── Makefile           # build / test / mesh / extinction targets
+├── bin/               # built binary lives here (gitignored, `make build`)
+├── logs/              # run logs land here (gitignored, never the root)
+├── go.mod             # module gitlab.torproject.org/cerberus-droid/hivemind
 ├── LICENSE            # MIT
 └── .hive_memory/      # souls (gitignored runtime state, see below)
 ```

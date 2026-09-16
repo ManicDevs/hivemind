@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"bufio"
@@ -91,8 +91,10 @@ type PeerMesh struct {
 
 	// trans records how each live link was made (unix/tcp) for
 	// closest-first retention. supers is the supernode directory.
+	// culled remembers recently cut links so redial loops back off.
 	trans  map[string]string
 	supers map[string]superEntry
+	culled map[string]time.Time
 
 	// born timestamps this node for capability scoring; relayOn records
 	// whether the cloud leg is part of this node's offering.
@@ -122,6 +124,7 @@ func NewPeerMesh(swarm *Swarm, node string) *PeerMesh {
 		conns:       make(map[string]net.Conn),
 		trans:       make(map[string]string),
 		supers:      make(map[string]superEntry),
+		culled:      make(map[string]time.Time),
 		history:     make(map[string]bool),
 		pub:         pubStr,
 		priv:        priv,

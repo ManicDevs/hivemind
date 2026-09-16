@@ -1,4 +1,4 @@
-package main
+package hivemind
 
 import (
 	"encoding/json"
@@ -97,7 +97,7 @@ func (pm *PeerMesh) noteSuper(node, addr string, score float64, transport string
 	}
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
-	_, isNew := pm.supers[node]
+	_, exists := pm.supers[node]
 	e, ok := pm.supers[node]
 	if !ok {
 		e = superEntry{Node: node, RTT: time.Hour}
@@ -109,7 +109,7 @@ func (pm *PeerMesh) noteSuper(node, addr string, score float64, transport string
 	e.Transport = transport
 	e.LastSeen = time.Now()
 	pm.supers[node] = e
-	if isNew {
+	if !exists {
 		fmt.Printf("⭐ [PEER MESH] Super %q known (capability %.2f via %s).\n", node, score, transport)
 	}
 }
@@ -117,8 +117,13 @@ func (pm *PeerMesh) noteSuper(node, addr string, score float64, transport string
 // noteLinkRTT records a measured dial-to-registered round trip, then
 // enforces closest-first: beyond maxTCPSuperLinks TCP pipes, the
 // highest-RTT one is closed. Unix pipes are free and never culled.
+// A culled peer gets a cooling-off period so the mesh doesn't spend
+// itself redialing a link it just cut.
 func (pm *PeerMesh) noteLinkRTT(peer string, rtt time.Duration, transport string) {
 	pm.mu.Lock()
+	if pm.culled == nil {
+		pm.culled = make(map[string]time.Time) // tolerate hand-built meshes (tests)
+	}
 	pm.trans[peer] = transport
 	if transport == "tcp" {
 		if e, ok := pm.supers[peer]; ok {
@@ -149,6 +154,7 @@ func (pm *PeerMesh) noteLinkRTT(peer string, rtt time.Duration, transport string
 	if tcpLinks > maxTCPSuperLinks && worst != "" {
 		if cur, ok := pm.conns[worst]; ok {
 			delete(pm.conns, worst)
+			pm.culled[worst] = time.Now()
 			drop = cur
 		}
 	}
@@ -157,6 +163,27 @@ func (pm *PeerMesh) noteLinkRTT(peer string, rtt time.Duration, transport string
 		fmt.Printf("📏 [PEER MESH] Culling farthest TCP link %q (RTT %s) — keeping closest %d.\n", worst, worstRTT.Round(time.Millisecond), maxTCPSuperLinks)
 		_ = drop.Close()
 	}
+}
+
+// culledCooldown is how long a cut link stays cut before the mesh may
+// reconsider it. Without this, static redial would re-establish every
+// culled pipe within seconds and churn forever.
+const culledCooldown = 5 * time.Minute
+
+// culledRecently reports whether a peer was cut (or failed) too recently
+// to deserve another dial attempt.
+func (pm *PeerMesh) culledRecently(peer string) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	since, ok := pm.culled[peer]
+	if !ok {
+		return false
+	}
+	if time.Since(since) > culledCooldown {
+		delete(pm.culled, peer)
+		return false
+	}
+	return true
 }
 
 // pruneSupers forgets entries whose lease lapsed without renewal.
@@ -239,6 +266,9 @@ func (pm *PeerMesh) dialSupers() {
 		}
 		if node < pm.node {
 			continue // dial rule: exactly one initiator per pair
+		}
+		if ts, ok := pm.culled[node]; ok && time.Since(ts) <= culledCooldown {
+			continue // cut recently; let it cool off
 		}
 		cands = append(cands, cand{node, e.Addr})
 	}
