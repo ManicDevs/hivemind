@@ -66,6 +66,8 @@ make test-1         # terminal 1: peer node alpha-node
 make test-2         # terminal 2: peer node beta-node (links automatically)
 make test-full      # both peers at once, beta-node in foreground
 make test-timed     # automated 10s two-peer experiment + assertions
+make up             # supervised mesh: raise peer nodes as child mains
+make rotate-keys    # wipe machine-local relay key (next build mints fresh)
 make clean-soul     # true extinction: wipe .hive_memory
 ```
 
@@ -82,3 +84,14 @@ addresses. Environment knobs (all optional):
 | `HIVEMIND_RELAY=off` | disable the cloud relay (pure serverless) |
 | `HIVEMIND_CIPHER_KEY` | 32-byte relay encryption key (default: machine-local build-time key, else static demo key — public broadcast, not private) |
 
+
+## Roadmap
+
+Done: symmetric peering, duplex mesh with assertions, persistent soul
+identities, real-sensor telemetry, collective chronicle, cross-node
+Overmind revelations, wire hardening, entrainment, reflective
+metacognition, backtrace entrypoint, supervised multi-node runs.
+
+Open: multicast delivery proof on a real LAN, WAN relay publish proof
+from a constrained host, `go test -race` on a gcc machine, genome
+long-run dynamics review, cipher-key rotation across live nodes.

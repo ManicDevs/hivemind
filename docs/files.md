@@ -90,9 +90,11 @@ Three mechanisms, no mysticism:
   deliberately multiplicative so health never grants a permanent additive
   throne). Winner takes `AttendingTo`; the reason string logs the exact
   drive × gene numbers so bids are auditable.
-- `MetaCognize` — reads the winning vector back: thermal warnings,
-  compute warnings, else the normalized operating line. The mind watches
-  the numbers it just chose by.
+- `MetaCognize` — reads the winning vector back (thermal/compute alarms)
+  and the last 8 verdicts kept in `History`: rising-pain alarm, 3-cycle
+  grooves, attentional shifts named from→to, runner-up near-misses within
+  10%, rising-peace calm. Priority order is pinned by tests — the mind
+  watches its trajectory, not just its instant.
 
 ## `internal/hivemind/genome.go` — heritable personality
 

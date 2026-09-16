@@ -25,13 +25,22 @@ if ! go build -o bin/hivemind ./cmd/hivemind; then
 fi
 echo "  ✔ build ok"
 
+RACE_MODE="race"
 if go test ./... -race -count=1 > /tmp/hivemind-audit-test.log 2>&1; then
     echo "  ✔ tests (with -race) pass"
+elif grep -q "requires cgo" /tmp/hivemind-audit-test.log; then
+    echo "  ⚠️  no C compiler here — race detector unavailable, running plain tests instead"
+    RACE_MODE="plain (race unavailable here)"
+    if ! go test ./... -count=1; then
+        echo "❌ tests failed"
+        exit 1
+    fi
+    echo "  ✔ tests (plain) pass — rerun with -race on a gcc machine"
 else
     echo "❌ tests failed:"
     cat /tmp/hivemind-audit-test.log
     exit 1
 fi
 
-echo "✅ audit clean (fmt, vet, build, race)"
+echo "✅ audit clean (fmt, vet, build, $RACE_MODE)"
 

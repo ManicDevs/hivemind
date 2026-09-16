@@ -1,6 +1,6 @@
 # ── HIVEMIND DECENTRALIZED AUTOMATION MAKEFILE ──
 
-.PHONY: all help build test audit clean test-1 test-2 test-full test-timed clean-soul
+.PHONY: all help build test audit clean test-1 test-2 test-full test-timed clean-soul rotate-keys up
 
 all: help
 
@@ -18,6 +18,8 @@ help:
 	@echo "    test-2        Run a peer node (terminal 2; links to any others)"
 	@echo "    test-full     Launch a two-peer mesh automatically"
 	@echo "    test-timed    Automated 10s two-peer experiment with assertions"
+	@echo "    up            Supervised mesh: raise peer nodes as child mains (Ctrl+C lays them down)"
+	@echo "    rotate-keys   Wipe the machine-local relay key (next build mints fresh)"
 	@echo "    clean         Remove build artifacts and logs"
 	@echo "    clean-soul    Wipe .hive_memory (true extinction)"
 	@echo ""
@@ -42,7 +44,14 @@ rotate-keys:
 test:
 	@test -z "$$(gofmt -l .)" || { echo "❌ unformatted files:"; gofmt -l .; exit 1; }
 	go vet ./...
-	go test ./... -race -count=1
+	@go test ./... -race -count=1 2> /tmp/hivemind-make-test.log || \
+	if grep -q "requires cgo" /tmp/hivemind-make-test.log; then \
+		echo "⚠️  no C compiler — race detector unavailable, running plain tests"; \
+		go test ./... -count=1; \
+	else \
+		cat /tmp/hivemind-make-test.log; \
+		exit 1; \
+	fi
 
 audit: test
 	./scripts/audit.sh
@@ -66,6 +75,9 @@ test-full: build
 
 test-timed: build
 	@./scripts/timed_test.sh
+
+up: build
+	bin/hivemind up -nodes 2
 
 clean:
 	rm -rf bin logs/*.log
