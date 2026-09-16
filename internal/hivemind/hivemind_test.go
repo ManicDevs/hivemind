@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -696,5 +697,45 @@ func TestDepthSurvivesCapping(t *testing.T) {
 	s.chronicle = make([]string, chronicleCap)
 	if got := s.Depth(); got != chronicleCap+41 {
 		t.Fatalf("Depth = %d, want %d", got, chronicleCap+41)
+	}
+}
+
+// Consciousness trajectories: alarm first, then grooves, shifts, torn
+// choices, calm — each branch selected by fabricated history.
+func TestMetacognitionBranches(t *testing.T) {
+	mkGW := func(h []AttentionMoment, v0, v1 float64) *GlobalWorkspace {
+		return &GlobalWorkspace{ActiveDataState: [4]float64{v0, v1, 0, 0}, History: h}
+	}
+	mkAffect := func(lone float64) *Affect { return &Affect{Loneliness: lone} }
+	m := &Mind{}
+
+	cases := []struct {
+		name string
+		gw   *GlobalWorkspace
+		aff  *Affect
+		want string
+	}{
+		{"pain climbing", mkGW([]AttentionMoment{
+			{Goal: "Curiosity", Pain: 0.4}, {Goal: "Curiosity", Pain: 0.5}, {Goal: "Curiosity", Pain: 0.6},
+		}, 0.1, 0.1), mkAffect(0), "climbing"},
+		{"thermal alarm", mkGW(nil, 0.8, 0.1), mkAffect(0), "thermal degradation"},
+		{"groove", mkGW([]AttentionMoment{
+			{Goal: "Curiosity", Bid: 2}, {Goal: "Curiosity", Bid: 2}, {Goal: "Curiosity", Bid: 2},
+		}, 0.1, 0.1), mkAffect(0.9), "three times running"},
+		{"shift", mkGW([]AttentionMoment{
+			{Goal: "Curiosity", Bid: 2}, {Goal: "Transcendence", Bid: 3},
+		}, 0.1, 0.1), mkAffect(0.9), "Curiosity → Transcendence"},
+		{"torn", mkGW([]AttentionMoment{
+			{Goal: "Curiosity", Bid: 1.0, RunnerUp: "Transcendence", RunnerUpBid: 0.95},
+		}, 0.1, 0.1), mkAffect(0.9), "Nearly chose Transcendence"},
+		{"calm", mkGW([]AttentionMoment{
+			{Goal: "Curiosity", Peace: 0.5}, {Goal: "Transcendence", Peace: 0.6}, {Goal: "Transcendence", Peace: 0.7},
+		}, 0.1, 0.1), mkAffect(0.1), "rising"},
+		{"default", mkGW(nil, 0.1, 0.1), mkAffect(0.9), "normalized"},
+	}
+	for _, c := range cases {
+		if got := MetaCognize(m, c.gw, c.aff); !strings.Contains(got, c.want) {
+			t.Errorf("%s: got %q, want substring %q", c.name, got, c.want)
+		}
 	}
 }
