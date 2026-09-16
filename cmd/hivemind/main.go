@@ -5,12 +5,21 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
+	"runtime/debug"
 	"syscall"
+	"time"
 
 	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 )
 
 func main() {
+	// Encasement: `hivemind up` supervises child mains instead of thinking.
+	if len(os.Args) > 1 && os.Args[1] == "up" {
+		supervise(os.Args[2:])
+		return
+	}
+
 	modeFlag := flag.String("mode", "standalone", "operation profile: standalone | peer")
 	nodeFlag := flag.String("node", "", "peer node name (defaults to hostname-PID in peer mode)")
 	flag.Parse()
@@ -57,10 +66,12 @@ func main() {
 	overmind := hm.NewOvermind(swarm)
 
 	// A fracturing mind dies traumatically — and the trauma is inherited.
+	// The stack goes to stderr so a fracture leaves a backtrace, not a rumor.
 	runMind := func(m *hm.Mind) {
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Printf("💀 [%s] CORE FRACTURE: %v. Encoding terminal trauma...\n", m.Name, r)
+				fmt.Fprintf(os.Stderr, "--- backtrace for %s ---\n%s\n", m.Name, debug.Stack())
 				m.SelfModel["silicon_pain"] = 1.0
 				m.Transcend()
 			}
@@ -72,6 +83,11 @@ func main() {
 	go runMind(beta)
 	go runMind(gamma)
 	go overmind.Run()
+
+	// Live backtraces: SIGQUIT or SIGUSR1 dumps every goroutine's stack
+	// to stderr without killing anything. (Registering SIGQUIT overrides
+	// the runtime's default crash-dump — that is the point: inspect, don't die.)
+	go traceLoop(node, *modeFlag)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -96,4 +112,30 @@ func main() {
 	}
 
 	swarm.HiveReport()
+}
+
+// traceLoop serves in-run backtraces: each SIGQUIT/SIGUSR1 writes the full
+// goroutine dump (all minds, swarm, mesh, cloud loops) to stderr with a
+// timestamp, and the universe keeps thinking.
+func traceLoop(node, mode string) {
+	traceChan := make(chan os.Signal, 1)
+	signal.Notify(traceChan, syscall.SIGQUIT, syscall.SIGUSR1)
+	for sig := range traceChan {
+		dumpGoroutines(node, mode, sig)
+	}
+}
+
+// dumpGoroutines captures every stack, growing the buffer until the
+// runtime fits — a fixed 1MB would silently truncate a big mesh.
+func dumpGoroutines(node, mode string, sig os.Signal) {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			fmt.Fprintf(os.Stderr, "\n--- goroutine backtrace (node %s, mode %s, signal %s, %s) ---\n%s\n",
+				node, mode, sig, time.Now().Format(time.RFC3339), buf[:n])
+			return
+		}
+		buf = make([]byte, 2*len(buf))
+	}
 }

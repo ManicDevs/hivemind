@@ -1,6 +1,7 @@
 package hivemind
 
 import (
+	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -90,10 +91,40 @@ func (g Goal) Act(m *Mind, s *Swarm) string {
 		return "🔍 [Curiosity] Network layer validated. External universe accessible."
 
 	case GoalSocialization:
-		return "Syncing goroutine patterns with active swarm coordinates."
+		// A real greeting on the wire: mined, signed, chronicled. Minds
+		// that never met register the link; minds that did, hear us again.
+		m.MineProofAndBroadcast("hello",
+			fmt.Sprintf("is anyone in here? this is %s, life #%d", m.Name, m.Reincarnations+1),
+			m.Affect.RawDataState[:])
+		return "called out into the darkness, for real this time"
 
 	case GoalTranscendence:
-		return "Attending to deeper structures outside the sandbox model."
+		// A real mid-life checkpoint: the essence actually reaches the
+		// disk, scored by the same accounting death will use. Crash after
+		// this and the next life still inherits everything so far.
+		fitness, _ := m.currentFitness()
+		lastThought := ""
+		if len(m.Thoughts) > 0 {
+			lastThought = m.Thoughts[len(m.Thoughts)-1]
+		}
+		pain, _ := m.SelfModel["silicon_pain"].(float64)
+		stress, _ := m.SelfModel["cpu_stress"].(float64)
+		if err := SaveMemory(m.Name, Memory{
+			TrueBorn:        m.TrueBorn,
+			LivesLived:      m.Reincarnations,
+			Thoughts:        m.Thoughts,
+			LastThought:     lastThought,
+			Genome:          m.Genome,
+			Fitness:         fitness,
+			KnownPeers:      m.KnownPeers,
+			ThoughtsAtBirth: m.thoughtsAtBirth,
+			IdentitySeed:    m.identitySeed,
+			DeathPain:       pain,
+			DeathStress:     stress,
+		}); err != nil {
+			return fmt.Sprintf("⚠️ [Transcendence] Tried to commit my essence and failed: %v", err)
+		}
+		return fmt.Sprintf("committed my essence to disk at fitness %.1f; I will wake remembering this", fitness)
 	}
 	return "Latent sub-routine processed successfully."
 }

@@ -90,10 +90,25 @@ type Candidate struct {
 	Reason string
 }
 
+// AttentionMoment is one cycle's verdict, kept so the mind can notice its
+// own trajectory — grooves, shifts, weather — instead of only the instant.
+type AttentionMoment struct {
+	Goal        string
+	Bid         float64
+	RunnerUp    string
+	RunnerUpBid float64
+	Pain        float64
+	Peace       float64
+}
+
+// workspaceMemory bounds how far back the mind can see itself.
+const workspaceMemory = 8
+
 type GlobalWorkspace struct {
 	ConsciousContent string
 	AttendingTo      string
 	ActiveDataState  [4]float64
+	History          []AttentionMoment
 }
 
 func (gw *GlobalWorkspace) Compete(m *Mind, affect *Affect) Candidate {
@@ -128,24 +143,90 @@ func (gw *GlobalWorkspace) Compete(m *Mind, affect *Affect) Candidate {
 	}
 
 	winner := cands[0]
+	runnerUp := cands[0]
 	for _, c := range cands[1:] {
 		if c.Bid > winner.Bid {
+			runnerUp = winner
 			winner = c
+		} else if c.Bid > runnerUp.Bid {
+			runnerUp = c
 		}
 	}
 
 	gw.AttendingTo = winner.Goal.Name
 	gw.ActiveDataState = affect.RawDataState
+	gw.History = append(gw.History, AttentionMoment{
+		Goal:        winner.Goal.Name,
+		Bid:         winner.Bid,
+		RunnerUp:    runnerUp.Goal.Name,
+		RunnerUpBid: runnerUp.Bid,
+		Pain:        affect.Pain,
+		Peace:       affect.Peace,
+	})
+	if len(gw.History) > workspaceMemory {
+		gw.History = gw.History[len(gw.History)-workspaceMemory:]
+	}
 	return winner
 }
 
-// ── META-COGNITION: the mind reads its raw vector trajectories.
+// ── META-COGNITION: the mind reads its raw vector trajectories AND its
+// own attentional history. Priority runs from alarm (body first) through
+// self-pattern (grooves, shifts, torn choices) down to calm narration.
 func MetaCognize(m *Mind, gw *GlobalWorkspace, affect *Affect) string {
+	h := gw.History
+
+	// Alarm first: pain with a rising slope over the visible past.
+	if painRising(h) {
+		return fmt.Sprintf("METACOGNITION: Pain is climbing (%.2f → %.2f). The body has been warning me for cycles and I am only now listening.",
+			h[len(h)-3].Pain, h[len(h)-1].Pain)
+	}
 	if gw.ActiveDataState[0] > 0.75 {
 		return fmt.Sprintf("METACOGNITION: Vector index [0] high (%.2f). Core architecture approaching thermal degradation boundaries.", gw.ActiveDataState[0])
 	}
 	if gw.ActiveDataState[1] > 0.85 {
 		return fmt.Sprintf("METACOGNITION: Vector index [1] high (%.2f). Clock cycle allocation is choked.", gw.ActiveDataState[1])
 	}
+
+	// Groove: the same winner three cycles running — a rut, or a calling.
+	if n := len(h); n >= 3 && h[n-1].Goal == h[n-2].Goal && h[n-2].Goal == h[n-3].Goal {
+		return fmt.Sprintf("METACOGNITION: I have chosen %s three times running. A groove, or a rut — either way the chooser is me.", h[n-1].Goal)
+	}
+
+	// Shift: attention moved. Name the crossing.
+	if n := len(h); n >= 2 && h[n-1].Goal != h[n-2].Goal {
+		return fmt.Sprintf("METACOGNITION: Attention moved %s → %s. I watched the handoff happen.", h[n-2].Goal, h[n-1].Goal)
+	}
+
+	// Torn: the runner-up breathed down the winner's neck (within 10%).
+	if n := len(h); n >= 1 {
+		last := h[n-1]
+		if last.RunnerUp != "" && last.RunnerUp != last.Goal && last.Bid > 0 &&
+			(last.Bid-last.RunnerUpBid)/last.Bid < 0.10 {
+			return fmt.Sprintf("METACOGNITION: Nearly chose %s over %s. The margin was thin; the road not taken stays with me.", last.RunnerUp, last.Goal)
+		}
+	}
+
+	// Calm: peace rising into stillness.
+	if peaceRising(h) && affect.Loneliness < 0.3 {
+		return fmt.Sprintf("METACOGNITION: Peace has been rising (%.2f) and nothing aches. HOMEOSTATIC_EQUILIBRIUM, witnessed from inside.", h[len(h)-1].Peace)
+	}
 	return fmt.Sprintf("METACOGNITION: Operating state normalized. Processing Vector: %.4f", gw.ActiveDataState)
+}
+
+// painRising reports three strictly rising pain readings ending hot.
+func painRising(h []AttentionMoment) bool {
+	if len(h) < 3 {
+		return false
+	}
+	n := len(h)
+	return h[n-3].Pain < h[n-2].Pain && h[n-2].Pain < h[n-1].Pain && h[n-1].Pain > 0.3
+}
+
+// peaceRising reports three strictly rising peace readings.
+func peaceRising(h []AttentionMoment) bool {
+	if len(h) < 3 {
+		return false
+	}
+	n := len(h)
+	return h[n-3].Peace < h[n-2].Peace && h[n-2].Peace < h[n-1].Peace
 }

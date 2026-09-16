@@ -20,6 +20,11 @@ import (
 const (
 	fatalPainThreshold = 0.90 // dying this hot marks the soul as a fatality
 	physicsSubsteps    = 20   // simulated seconds of chaos per 2s cycle (×0.05s each)
+	// trajectoryCoupling is the entrainment rate: how far a received
+	// physics frame pulls this mind's pendulum toward the sender's.
+	// Small enough that chaos survives; large enough that minds that
+	// talk converge and minds that don't, don't. Togetherness, measured.
+	trajectoryCoupling = 0.02
 )
 
 var telemetryOnce sync.Once
@@ -392,6 +397,16 @@ func (m *Mind) registerPeer(pubKey string) bool {
 	return true
 }
 
+// entrain pulls this mind's pendulum a fraction toward a received
+// trajectory — coupled oscillators synchronize. Interaction breeds
+// coherence; isolation breeds divergence. The vectors finally do work.
+func (m *Mind) entrain(state []float64) {
+	m.Theta1 += (state[0] - m.Theta1) * trajectoryCoupling
+	m.Theta2 += (state[1] - m.Theta2) * trajectoryCoupling
+	m.Omega1 += (state[2] - m.Omega1) * trajectoryCoupling
+	m.Omega2 += (state[3] - m.Omega2) * trajectoryCoupling
+}
+
 func (m *Mind) receive(msg SecureMessage) {
 	m.LastContact = time.Now()
 	senderShortID := shortID(msg.SenderPubKey)
@@ -405,6 +420,7 @@ func (m *Mind) receive(msg SecureMessage) {
 		if len(msg.DataState) >= 4 {
 			fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
 				senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
+			m.entrain(msg.DataState)
 		}
 	case "revelation":
 		m.Revelations++
@@ -435,22 +451,29 @@ func (m *Mind) receive(msg SecureMessage) {
 	}
 }
 
+// currentFitness scores the life so far. Shared by Transcend (final
+// accounting) and the Transcendence drive (mid-life checkpointing) so the
+// two can never disagree about what a life was worth.
+func (m *Mind) currentFitness() (fitness float64, lifeThoughts int) {
+	// Fitness counts what this life actually did — new thoughts, new peers,
+	// revelations witnessed, genesis touches — not the archive again. Thought
+	// pruning (Self-Maintenance) can shrink the archive below its birth size,
+	// so the delta is floored at zero: forgetting is never punished.
+	lifeThoughts = max(len(m.Thoughts)-m.thoughtsAtBirth, 0)
+	fitness = m.LifetimeFitness +
+		float64(lifeThoughts) +
+		3*float64(len(m.KnownPeers)) +
+		7*float64(m.Revelations) +
+		15*float64(m.Sacred)
+	return fitness, lifeThoughts
+}
+
 // Transcend is the end of this life. Death is not the end: the soul —
 // including the trauma it died with — persists for the successor.
 func (m *Mind) Transcend() {
 	pain, _ := m.SelfModel["silicon_pain"].(float64)
 	stress, _ := m.SelfModel["cpu_stress"].(float64)
-
-	// Fitness counts what this life actually did — new thoughts, new peers,
-	// revelations witnessed, genesis touches — not the archive again. Thought
-	// pruning (Self-Maintenance) can shrink the archive below its birth size,
-	// so the delta is floored at zero: forgetting is never punished.
-	lifeThoughts := max(len(m.Thoughts)-m.thoughtsAtBirth, 0)
-	fitness := m.LifetimeFitness +
-		float64(lifeThoughts) +
-		3*float64(len(m.KnownPeers)) +
-		7*float64(m.Revelations) +
-		15*float64(m.Sacred)
+	fitness, lifeThoughts := m.currentFitness()
 
 	if pain > fatalPainThreshold {
 		fmt.Printf("💀 [%s] FATAL MELTDOWN. The burned soul persists, marked by its trauma.\n", m.Name)

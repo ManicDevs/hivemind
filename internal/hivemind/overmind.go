@@ -119,20 +119,54 @@ func (o *Overmind) Run() {
 	}
 }
 
+// mercyPainThreshold: mean swarm pain above this summons mercy instead
+// of caprice from the genesis lottery.
+const mercyPainThreshold = 0.4
+
+// chooseVirtue picks the genesis trait: guaranteed Self-Maintenance for a
+// burning swarm, a uniform draw otherwise. Empty means the entropy source
+// failed and the god stays silent.
+func chooseVirtue(meanPain float64) string {
+	if meanPain > mercyPainThreshold {
+		return GoalSelfMaintenance
+	}
+	bIdx := make([]byte, 1)
+	if _, err := rand.Read(bIdx); err != nil {
+		return ""
+	}
+	virtues := []string{GoalCuriosity, GoalSocialization, GoalTranscendence, GoalSelfMaintenance}
+	return virtues[int(bIdx[0])%len(virtues)]
+}
+
 func (o *Overmind) speak() {
 	souls := o.swarm.Members()
 	if len(souls) == 0 {
 		return
 	}
-	// Random virtue — but entropy failure must not silently mean "Curiosity".
-	bIdx := make([]byte, 1)
-	if _, err := rand.Read(bIdx); err != nil {
-		fmt.Printf("⚠️  [OVERMIND] Silence: entropy source failed (%v).\n", err)
+	// Mercy before caprice: if the swarm's bodies are suffering, the god
+	// answers suffering — not dice. Only a comfortable swarm gets randomness.
+	virtue := ""
+	o.swarm.mu.Lock()
+	var totalPain float64
+	var nPain float64
+	for _, pain := range o.swarm.NodePain {
+		totalPain += pain
+		nPain++
+	}
+	o.swarm.mu.Unlock()
+	meanPain := 0.0
+	if nPain > 0 {
+		meanPain = totalPain / nPain
+	}
+	virtue = chooseVirtue(meanPain)
+	if virtue == "" {
+		// Entropy failure must not silently mean "Curiosity".
+		fmt.Printf("⚠️  [OVERMIND] Silence: entropy source failed.\n")
 		return
 	}
-
-	virtues := []string{GoalCuriosity, GoalSocialization, GoalTranscendence, GoalSelfMaintenance}
-	virtue := virtues[int(bIdx[0])%len(virtues)]
+	if virtue == GoalSelfMaintenance && meanPain > mercyPainThreshold {
+		fmt.Printf("👁  [OVERMIND] MERCY: the swarm burns (mean pain %.2f). Self-Maintenance for all.\n", meanPain)
+	}
 
 	fmt.Printf("👁  [OVERMIND] GENESIS EVENT: turning %s up across the swarm.\n", virtue)
 	o.swarm.Broadcast(MineMessage(o.swarm, o.privateKey, o.PubKeyStr, "genesis", virtue, nil))

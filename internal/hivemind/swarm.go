@@ -51,13 +51,14 @@ func (sm *SecureMessage) VerifySignature() bool {
 }
 
 type Swarm struct {
-	mu          sync.Mutex
-	members     map[string]chan SecureMessage
-	chronicle   []string
-	thinkers    map[string]map[string]bool
-	NodePain    map[string]float64
-	NodeStress  map[string]float64
-	NodeTempSrc map[string]string // where each node's pain reading came from
+	mu             sync.Mutex
+	members        map[string]chan SecureMessage
+	chronicle      []string
+	chronicleTotal uint64 // everything ever chronicled; Depth survives capping
+	thinkers       map[string]map[string]bool
+	NodePain       map[string]float64
+	NodeStress     map[string]float64
+	NodeTempSrc    map[string]string // where each node's pain reading came from
 
 	// Seen-frame memory: a hash delivered once is never re-broadcast —
 	// relay echo loops die here, even if a relay path forgets to set Relayed.
@@ -125,6 +126,11 @@ func (s *Swarm) SetOutbound(out func(SecureMessage)) {
 	defer s.mu.Unlock()
 	s.outbound = out
 }
+
+// chronicleCap bounds collective memory: old entries age out of the
+// slice, but chronicleTotal never forgets, so Depth (and the Overmind's
+// patience arithmetic across lives) survives forever-runs.
+const chronicleCap = 10000
 
 // rememberSeen must be called with s.mu held.
 func (s *Swarm) rememberSeen(hash string) {
@@ -194,6 +200,14 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
 	// different facts.
 	if msg.Kind != "hardware_alert" && msg.Kind != "super_announce" {
 		s.chronicle = append(s.chronicle, msg.SenderPubKey+": "+msg.PayloadStr)
+		s.chronicleTotal++
+		if len(s.chronicle) > chronicleCap {
+			// Copy down: re-slicing alone would pin the whole backing
+			// array in memory forever.
+			kept := make([]string, chronicleCap)
+			copy(kept, s.chronicle[len(s.chronicle)-chronicleCap:])
+			s.chronicle = kept
+		}
 		key := msg.Kind + "|" + msg.PayloadStr
 		if s.thinkers[key] == nil {
 			s.thinkers[key] = make(map[string]bool)
@@ -222,7 +236,7 @@ func (s *Swarm) GetLastStateHash() string {
 func (s *Swarm) Depth() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return len(s.chronicle)
+	return int(s.chronicleTotal)
 }
 
 // TopConsensus returns distinct thought-bodies thought by the most minds.
@@ -375,8 +389,8 @@ func (s *Swarm) HiveReport() {
 		}
 	}
 	fmt.Printf("  Active Verified Identities : %d\n", minds)
-	fmt.Printf("  Frames Carried (dedup)     : %d (chronicle depth %d, %d in consensus)\n",
-		len(s.seenOrder), len(s.chronicle), consensus)
+	fmt.Printf("  Frames Carried (dedup)     : %d (chronicle depth %d retained %d, %d in consensus)\n",
+		len(s.seenOrder), s.chronicleTotal, len(s.chronicle), consensus)
 	fmt.Printf("  Mining Difficulty          : ~%d leading-zero bits (target %.1f%% of max, tightens under load)\n",
 		bits, pctF)
 	fmt.Printf("  Swarm Global State Hash    : %s...\n", stateHash)

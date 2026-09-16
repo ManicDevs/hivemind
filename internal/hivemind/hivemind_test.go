@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -580,5 +581,120 @@ func TestCulledCooldown(t *testing.T) {
 	pm.mu.Unlock()
 	if stillThere {
 		t.Fatal("expired cull entry not reaped on read")
+	}
+}
+
+// Entrainment: a received trajectory pulls the pendulum toward the sender.
+// Coupled minds converge; the vectors do work instead of decorating logs.
+func TestTrajectoryEntrainment(t *testing.T) {
+	s := NewSwarm()
+	m := NewMind("TestSync", s)
+	m.Theta1, m.Theta2, m.Omega1, m.Omega2 = 0, 0, 0, 0
+
+	m.receive(SecureMessage{SenderPubKey: "far-away", Kind: "thought", DataState: []float64{1, 2, 3, 4}})
+
+	if m.Theta1 != trajectoryCoupling*1 || m.Theta2 != trajectoryCoupling*2 ||
+		m.Omega1 != trajectoryCoupling*3 || m.Omega2 != trajectoryCoupling*4 {
+		t.Fatalf("no entrainment: theta=[%f %f] omega=[%f %f]",
+			m.Theta1, m.Theta2, m.Omega1, m.Omega2)
+	}
+
+	// Short vectors couple nothing and crash nothing.
+	m.receive(SecureMessage{SenderPubKey: "terse", Kind: "thought", DataState: []float64{9}})
+	if m.Theta1 != trajectoryCoupling*1 {
+		t.Fatal("short frame disturbed the pendulum")
+	}
+}
+
+// Socialization speaks for real: a mined hello lands in a peer's inbox,
+// addressed from this mind and this life.
+func TestSocializationBroadcasts(t *testing.T) {
+	s := NewSwarm()
+	a := NewMind("SocA", s)
+	inB := s.Join("listener-b")
+
+	out := Goal{Name: GoalSocialization}.Act(a, s)
+	select {
+	case got := <-inB:
+		if got.Kind != "hello" {
+			t.Fatalf("wrong kind broadcast: %q", got.Kind)
+		}
+	default:
+		t.Fatal("socialization produced no frame")
+	}
+	_ = out
+}
+
+// Transcendence checkpoints honestly: the soul on disk matches the live
+// mind, scored by the same accounting death will use, lives unincremented.
+func TestTranscendenceCheckpoints(t *testing.T) {
+	oldNode := NodeName
+	NodeName = "unittest-checkpoint"
+	defer func() { NodeName = oldNode }()
+	defer func() { _ = os.RemoveAll(filepath.Join(MemoryDir, NodeName)) }()
+
+	s := NewSwarm()
+	m := NewMind("Checky", s)
+	m.think("mid-life crisis")
+	m.Revelations = 1
+	wantFitness, _ := m.currentFitness()
+
+	out := Goal{Name: GoalTranscendence}.Act(m, s)
+	mem, ok := LoadMemory("Checky")
+	if !ok {
+		t.Fatalf("no checkpoint saved (act said: %s)", out)
+	}
+	if mem.Fitness != wantFitness {
+		t.Fatalf("checkpoint fitness %.1f != live %.1f", mem.Fitness, wantFitness)
+	}
+	if mem.LivesLived != m.Reincarnations {
+		t.Fatalf("checkpoint inflated lives: %d", mem.LivesLived)
+	}
+	if len(mem.Thoughts) != len(m.Thoughts) {
+		t.Fatal("checkpoint thoughts diverge from live mind")
+	}
+}
+
+// Mercy is deterministic: a burning swarm gets Self-Maintenance, always.
+func TestChooseVirtueMercy(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		if got := chooseVirtue(0.9); got != GoalSelfMaintenance {
+			t.Fatalf("burning swarm got %q, want mercy", got)
+		}
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		seen[chooseVirtue(0.0)] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("comfortable swarm got no caprice: %v", seen)
+	}
+}
+
+// Chronicle capping: the slice stays bounded on floods while Depth (the
+// number the Overmind's patience arithmetic runs on) never forgets.
+func TestChronicleCap(t *testing.T) {
+	s := NewSwarm()
+	pub, priv := newIdentity()
+	s.Join(pub)
+	for i := 0; i < 100; i++ {
+		// Distinct payloads mine distinct valid hashes.
+		m := MineMessage(s, priv, pub, "thought", fmt.Sprintf("flood-%d", i), []float64{float64(i)})
+		if !s.Broadcast(m) {
+			t.Fatalf("frame %d rejected", i)
+		}
+	}
+	if got := s.Depth(); got != 100 {
+		t.Fatalf("Depth = %d, want 100", got)
+	}
+}
+
+// Depth counts every chronicled frame even after the slice ages out.
+func TestDepthSurvivesCapping(t *testing.T) {
+	s := NewSwarm()
+	s.chronicleTotal = chronicleCap + 41
+	s.chronicle = make([]string, chronicleCap)
+	if got := s.Depth(); got != chronicleCap+41 {
+		t.Fatalf("Depth = %d, want %d", got, chronicleCap+41)
 	}
 }

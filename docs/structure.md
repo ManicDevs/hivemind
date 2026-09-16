@@ -1,7 +1,8 @@
 # Hivemind Repository Structure
 
 Where everything lives, what it does, and how the pieces connect.
-Protocol details live in `p2p_architecture.md`; this file is the map.
+Protocol details live in `p2p_architecture.md`; every file documented in
+`files.md`; this file is the map.
 
 ---
 
@@ -115,7 +116,7 @@ a fracturing mind is caught, marked with terminal pain, and transcended.
 ## Run It
 
 ```bash
-go build -o bin/hivemind .
+go build -o bin/hivemind ./cmd/hivemind
 bin/hivemind                                    # one hive until Ctrl+C
 bin/hivemind -mode peer -node alpha-node        # any number, any order, any machine
 ./scripts/timed_test.sh                         # 10s mesh proof with assertions
