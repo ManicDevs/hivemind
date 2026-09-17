@@ -16,6 +16,7 @@ const (
 	GoalSelfMaintenance = "Self-Maintenance"
 )
 
+// Goal is one intrinsic drive, named by constant so typos fail findably.
 type Goal struct {
 	Name string
 }
@@ -50,6 +51,8 @@ func (g Goal) Drive(m *Mind) float64 {
 	return 1.0
 }
 
+// Act executes the winning drive with real side effects — cooling,
+// pruning, greeting, checkpointing, probing — never flavor text.
 func (g Goal) Act(m *Mind, s *Swarm) string {
 	switch g.Name {
 	case GoalSelfMaintenance:

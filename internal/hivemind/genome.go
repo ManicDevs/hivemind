@@ -20,6 +20,8 @@ const (
 	diffEpsilon       = 0.01
 )
 
+// Genome is heritable personality: a weight per intrinsic drive plus
+// the generation count. Survives death, mutates on rebirth.
 type Genome struct {
 	Generation int
 	Weights    map[string]float64

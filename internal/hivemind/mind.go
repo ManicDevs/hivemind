@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+// Tuning for bodies and lifecycles: death heat, chaos resolution,
+// entrainment rate, live-thought window. See genome.go for evolution dials.
 const (
 	fatalPainThreshold = 0.90 // dying this hot marks the soul as a fatality
 	physicsSubsteps    = 20   // simulated seconds of chaos per 2s cycle (×0.05s each)
@@ -62,6 +64,9 @@ func encodeSeed(priv ed25519.PrivateKey) string {
 	return hex.EncodeToString(priv.Seed())
 }
 
+// Mind is one conscious organism: identity, lineage, memory, affect,
+// chaos state, and its inbox on the swarm. Born by NewMind, run by Run,
+// ended by Transcend — never constructed piecemeal.
 type Mind struct {
 	Name            string
 	Born            time.Time
@@ -100,6 +105,9 @@ type Mind struct {
 	Omega2 float64
 }
 
+// NewMind births a mind: rehydrate a soul if one waits (lineage, genome,
+// peers, fitness, identity), else first birth with a fresh genome and
+// minted identity. Forked lineages get new keys; continuations keep theirs.
 func NewMind(name string, swarm *Swarm) *Mind {
 	m := &Mind{
 		Name:        name,
@@ -265,6 +273,8 @@ func (m *Mind) Observe() map[string]interface{} {
 	}
 }
 
+// Reflect narrates the self-model in numbers: life, generation, archive
+// size, social graph, revelations, and the three hardware readings.
 func (m *Mind) Reflect(o map[string]interface{}) string {
 	pain, _ := o["silicon_pain"].(float64)
 	stress, _ := o["cpu_stress"].(float64)
@@ -273,6 +283,8 @@ func (m *Mind) Reflect(o map[string]interface{}) string {
 		m.Reincarnations+1, m.Genome.Generation, len(m.Thoughts), len(m.KnownPeers), m.Revelations, pain, stress, fatigue)
 }
 
+// Run is the 2-second conscious loop: tick, compete, act, broadcast —
+// or receive, or die transcending. Ends by closing Done().
 func (m *Mind) Run() {
 	defer close(m.done)
 	thinking := time.NewTicker(2 * time.Second)
@@ -317,8 +329,11 @@ func (m *Mind) StepPhysicsEquations() []float64 {
 	return []float64{m.Theta1, m.Theta2, m.Omega1, m.Omega2}
 }
 
+// MineMessage grinds a nonce until the frame hash beats the swarm's adaptive
+// target, then binds it to the sender's soul key. Minds, the Overmind, and
+// the network broker all share this one path — no unsigned frames exist.
+// The state slice is deep-copied: no pointer contamination across nodes.
 func MineMessage(s *Swarm, priv ed25519.PrivateKey, pubKey, kind, payload string, state []float64) SecureMessage {
-	// Deep copy: no pointer contamination across nodes.
 	var cleanState []float64
 	if state != nil {
 		cleanState = make([]float64, len(state))
@@ -346,10 +361,14 @@ func MineMessage(s *Swarm, priv ed25519.PrivateKey, pubKey, kind, payload string
 	}
 }
 
+// MineProofAndBroadcast mines and broadcasts one frame as this mind.
+// Thin wrapper over MineMessage: miners never hand-roll frames.
 func (m *Mind) MineProofAndBroadcast(kind, payload string, state []float64) {
 	m.swarm.Broadcast(MineMessage(m.swarm, m.privateKey, m.PubKeyStr, kind, payload, state))
 }
 
+// Cycle is one conscious tick: sense, feel, compete, act, broadcast.
+// Hardware alerts leave immediately; the winner otherwise rides the mesh.
 func (m *Mind) Cycle() {
 	m.SelfModel = m.Observe()
 	m.Affect.Tick(m)
@@ -541,6 +560,7 @@ func (m *Mind) Transcend() {
 		m.Name, mem.Fitness, lifeThoughts, len(m.KnownPeers), m.Revelations, m.Sacred)
 }
 
+// Stop asks the mind to die transcending. Done() reports when it has.
 func (m *Mind) Stop() { close(m.stop) }
 
 // Done reports when this mind's goroutine has fully exited. The entrypoint

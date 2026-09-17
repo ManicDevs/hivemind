@@ -100,6 +100,8 @@ type prefixWriter struct {
 	w   io.Writer
 }
 
+// Write tags every streamed line with its node's name so interleaved
+// universes stay legible on one terminal.
 func (p prefixWriter) Write(data []byte) (int, error) {
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	total := 0

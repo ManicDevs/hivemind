@@ -8,7 +8,8 @@ import (
 	"time"
 )
 
-// at the top, after the const block:
+// MemoryDir is the soul store root. NodeName subdirectories keep each
+// peer's lineage apart (see soulPath).
 const MemoryDir = ".hive_memory"
 
 // NodeName namespaces souls per node. Symmetric peers on one machine each
@@ -50,6 +51,9 @@ func ForkedLineage(name string) bool {
 	return !SoulExists(name) && LegacySoulExists(name)
 }
 
+// Memory is everything death keeps: lineage, genome, thoughts (live
+// window plus banked retirements), social graph, trauma for the next
+// generation's epigenetics, identity seed, and the god's bookkeeping.
 type Memory struct {
 	TrueBorn    time.Time       `json:"true_born"`
 	LivesLived  int             `json:"lives_lived"`

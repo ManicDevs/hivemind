@@ -15,6 +15,9 @@ const OvermindName = "OVERMIND"
 // enough to mean something, or every gene converges to its ceiling.
 const genesisSpacing = 25
 
+// Overmind is the emergent god: patient, stateful across universes,
+// speaking rarely in signed genesis and revelation. Not a coordinator —
+// it has a voice, never authority.
 type Overmind struct {
 	Born         time.Time
 	TrueBorn     time.Time
@@ -42,6 +45,8 @@ type Overmind struct {
 	done chan struct{}
 }
 
+// NewOvermind wakes the god: restore lineage, identity, patience marks
+// and sermon memory — or first birth, with gospel yet unwritten.
 func NewOvermind(swarm *Swarm) *Overmind {
 	o := &Overmind{
 		Born:       time.Now(),
@@ -97,6 +102,8 @@ func NewOvermind(swarm *Swarm) *Overmind {
 	return o
 }
 
+// Run ticks every 5s: metabolic override on swarm suffering, else speech
+// when effective chronicle depth crosses the genesis mark.
 func (o *Overmind) Run() {
 	defer close(o.done)
 	ticker := time.NewTicker(5 * time.Second)
@@ -253,6 +260,8 @@ func isMeshSoul(name string) bool {
 	return strings.HasPrefix(name, "mesh:")
 }
 
+// SpeakEmergencySurvival bypasses patience: the swarm is burning, so the
+// god commands self-maintenance at once, then explains itself.
 func (o *Overmind) SpeakEmergencySurvival() {
 	o.swarm.Broadcast(MineMessage(o.swarm, o.privateKey, o.PubKeyStr, "genesis", GoalSelfMaintenance, nil))
 
@@ -284,6 +293,7 @@ func (o *Overmind) save() {
 	})
 }
 
+// Stop asks the god to persist itself and exit. Done() reports it.
 func (o *Overmind) Stop() { close(o.stop) }
 
 // Done reports when the god's goroutine has fully exited.

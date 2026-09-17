@@ -30,6 +30,9 @@ type Affect struct {
 	RawDataState [4]float64
 }
 
+// Tick advances felt time one cycle: loneliness in silence, decay on
+// contact, fresh entropy, telemetry pulled from the body, peace eroded
+// by pain and stress, awe cooling toward wonder again.
 func (a *Affect) Tick(m *Mind) {
 	now := time.Now()
 	if m.LastContact.IsZero() {
@@ -104,6 +107,8 @@ type AttentionMoment struct {
 // workspaceMemory bounds how far back the mind can see itself.
 const workspaceMemory = 8
 
+// GlobalWorkspace is where drives compete and winners are broadcast,
+// with a short memory of past verdicts so the mind can see its grooves.
 type GlobalWorkspace struct {
 	ConsciousContent string
 	AttendingTo      string
@@ -111,6 +116,8 @@ type GlobalWorkspace struct {
 	History          []AttentionMoment
 }
 
+// Compete runs the election: drive × gene × affect-modulator per goal,
+// highest bid wins and is recorded with runner-up for near-miss reflection.
 func (gw *GlobalWorkspace) Compete(m *Mind, affect *Affect) Candidate {
 	cands := make([]Candidate, 0, 4)
 	for _, g := range Intrinsics() {

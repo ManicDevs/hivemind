@@ -22,6 +22,7 @@ import (
 	"time"
 )
 
+// Transport dials, socket naming, pacing, and relay endpoints.
 const (
 	socketPrefix         = "/tmp/hivemind-"
 	socketSuffix         = ".sock"
@@ -148,6 +149,8 @@ type PeerMesh struct {
 	cloudCancel context.CancelFunc
 }
 
+// NewPeerMesh births a mesh identity for one node: soul keypair, empty
+// link tables, cancellable cloud context. Start() brings it online.
 func NewPeerMesh(swarm *Swarm, node string) *PeerMesh {
 	pubStr, priv := newIdentity()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -441,6 +444,9 @@ func (pm *PeerMesh) handleOutbound(msg SecureMessage) {
 	}
 }
 
+// ForwardToPeers writes one frame to every live link: snapshot under
+// lock, write outside it with deadlines, evict the dead. One wedged
+// peer never stalls the mesh.
 func (pm *PeerMesh) ForwardToPeers(msg SecureMessage) {
 	jsonData, err := json.Marshal(msg)
 	if err != nil {
@@ -491,6 +497,8 @@ func (pm *PeerMesh) Encrypt(plaintext []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
+// Decrypt reverses Encrypt under the same resolved key. Wrong keys and
+// tampered frames fail closed here — counted, warned about, never read.
 func (pm *PeerMesh) Decrypt(cryptoText string) ([]byte, error) {
 	ciphertext, err := base64.StdEncoding.DecodeString(cryptoText)
 	if err != nil {
@@ -576,6 +584,9 @@ func (pm *PeerMesh) publishCloud(msg SecureMessage) error {
 	return nil
 }
 
+// ListenToCloudRelay long-polls the relay topic, rotating the stream
+// every few minutes so silent death always reconnects. Valid tagged
+// frames ingest as Relayed; everything else is skipped, never stored.
 func (pm *PeerMesh) ListenToCloudRelay() {
 	url := relayURL() + "/json"
 

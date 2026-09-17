@@ -15,6 +15,9 @@ import (
 // Seen-frame memory cap: old hashes age out so the dedup set stays bounded.
 const seenCap = 1024
 
+// SecureMessage is the signed wire frame: identity, kind, payload,
+// trajectory or affect vector, ledger chaining, proof-of-work, signature.
+// Relayed marks wire-echoes and is never serialized.
 type SecureMessage struct {
 	SenderPubKey string    `json:"sender_pub_key"`
 	Kind         string    `json:"kind"`
@@ -30,6 +33,8 @@ type SecureMessage struct {
 	Relayed bool `json:"-"`
 }
 
+// ComputeHash digests the frame fields into its SHA-256 identity.
+// Signature verification recomputes exactly this.
 func (sm *SecureMessage) ComputeHash() string {
 	rawInput := fmt.Sprintf("%s|%s|%s|%s|%d|%d",
 		sm.SenderPubKey, sm.Kind, sm.PayloadStr, sm.ParentHash, sm.Timestamp, sm.Nonce)
@@ -37,6 +42,8 @@ func (sm *SecureMessage) ComputeHash() string {
 	return hex.EncodeToString(h[:])
 }
 
+// VerifySignature checks the Ed25519 binding over the frame hash.
+// Anything unsigned, forged, or mutated after signing fails here.
 func (sm *SecureMessage) VerifySignature() bool {
 	pubKeyBytes, err := hex.DecodeString(sm.SenderPubKey)
 	if err != nil || len(pubKeyBytes) != ed25519.PublicKeySize {
@@ -50,6 +57,9 @@ func (sm *SecureMessage) VerifySignature() bool {
 	return ed25519.Verify(pubKeyBytes, []byte(msgHash), sigBytes)
 }
 
+// Swarm is the shared hive: members, collective memory, telemetry,
+// hash-chain tip, adaptive difficulty, and the outbound wire bridge.
+// One mutex guards it all; accessors return copies.
 type Swarm struct {
 	mu             sync.Mutex
 	members        map[string]chan SecureMessage
@@ -78,6 +88,7 @@ type Swarm struct {
 	lastTheta2 float64
 }
 
+// NewSwarm births an empty hive at the genesis hash with the rest target.
 func NewSwarm() *Swarm {
 	genesisHash := sha256.Sum256([]byte("GENESIS"))
 
@@ -101,6 +112,8 @@ func NewSwarm() *Swarm {
 	}
 }
 
+// Join registers an identity and returns its inbox. Rejoining refreshes
+// telemetry baselines; inboxes are buffered so slow minds drop, never block.
 func (s *Swarm) Join(pubKeyStr string) chan SecureMessage {
 	ch := make(chan SecureMessage, 128)
 	s.mu.Lock()
@@ -113,6 +126,7 @@ func (s *Swarm) Join(pubKeyStr string) chan SecureMessage {
 	return ch
 }
 
+// GetCurrentTarget returns a copy of the live PoW target for miners.
 func (s *Swarm) GetCurrentTarget() *big.Int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,6 +160,10 @@ func (s *Swarm) rememberSeen(hash string) {
 	}
 }
 
+// Broadcast is the ingestion gate: signature → replay seen-check → PoW
+// target → deliver to all members except sender → chronicle (except
+// utility and routing frames) → advance tip → outbound bridge unless
+// Relayed. Returns acceptance; rejections are silent by design.
 func (s *Swarm) Broadcast(msg SecureMessage) bool {
 	if !msg.VerifySignature() {
 		return false
@@ -227,12 +245,14 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
 	return true
 }
 
+// GetLastStateHash returns the chronicle tip for chaining new frames.
 func (s *Swarm) GetLastStateHash() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.LastStateHash
 }
 
+// Depth counts everything ever chronicled (monotonic across capping).
 func (s *Swarm) Depth() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -267,6 +287,7 @@ func (s *Swarm) TopConsensus(n int) []string {
 	return out
 }
 
+// Members lists current swarm identities, mesh snooper included.
 func (s *Swarm) Members() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -286,6 +307,9 @@ func (s *Swarm) IsMember(pubKey string) bool {
 	return ok
 }
 
+// LogHardwareTrauma records one node's pain/stress (plus where the pain
+// reading came from) and rescales the live PoW target from mean stress.
+// The thermostat of the mesh: suffering tightens the work required.
 func (s *Swarm) LogHardwareTrauma(pubKey string, pain, stress float64, src string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -326,6 +350,9 @@ func (s *Swarm) LogHardwareTrauma(pubKey string, pain, stress float64, src strin
 	}
 }
 
+// HiveReport prints terminal diagnostics: identities, frames, difficulty
+// in human terms, state hash, per-mind telemetry with provenance, and the
+// live pendulum plot.
 func (s *Swarm) HiveReport() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
