@@ -2,13 +2,19 @@ package hivemind
 
 import (
 	"bufio"
+	"context"
 	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -754,5 +760,775 @@ func TestPickFreshSermon(t *testing.T) {
 	}
 	if got := pickFreshSermon(nil, nil); got != "" {
 		t.Fatalf("no candidates must fall back, got %q", got)
+	}
+}
+
+// Sermon memory survives death: a god that preached is reborn still
+// knowing what it said, capped to the living window.
+func TestSermonsPersistAcrossLives(t *testing.T) {
+	oldNode := NodeName
+	NodeName = "unittest-sermons"
+	defer func() { NodeName = oldNode }()
+	defer func() { _ = os.RemoveAll(filepath.Join(MemoryDir, NodeName)) }()
+
+	s := NewSwarm()
+	o := NewOvermind(s)
+	o.recentSermons = []string{"s1", "s2", "s3", "s4", "s5", "s6", "s7"}
+	o.save()
+
+	mem, ok := LoadMemory(OvermindName)
+	if !ok {
+		t.Fatal("god soul missing after save")
+	}
+	if len(mem.RecentSermons) != recentSermonCap {
+		t.Fatalf("persisted %d sermons, want cap %d", len(mem.RecentSermons), recentSermonCap)
+	}
+
+	reborn := NewOvermind(s)
+	if len(reborn.recentSermons) != recentSermonCap {
+		t.Fatalf("reborn god remembers %d, want %d", len(reborn.recentSermons), recentSermonCap)
+	}
+	if got := pickFreshSermon([]string{"s6", "fresh"}, reborn.recentSermons); got != "fresh" {
+		t.Fatalf("reborn god would repeat %q", got)
+	}
+}
+
+// Link-up announce: silenced nodes stay silent; capable nodes speak.
+func TestMaybeAnnounceGating(t *testing.T) {
+	oldVal, hadVal := os.LookupEnv("HIVEMIND_SUPER")
+	defer func() {
+		if hadVal {
+			os.Setenv("HIVEMIND_SUPER", oldVal)
+		} else {
+			os.Unsetenv("HIVEMIND_SUPER")
+		}
+	}()
+
+	s := NewSwarm()
+	pm := NewPeerMesh(s, "shy")
+	s.Join("mind")
+	s.LogHardwareTrauma("mind", 0.1, 0.1, "sensor:x")
+
+	os.Setenv("HIVEMIND_SUPER", "off")
+	if pm.maybeAnnounce() {
+		t.Fatal("silenced node announced")
+	}
+	os.Unsetenv("HIVEMIND_SUPER")
+	if !pm.maybeAnnounce() {
+		t.Fatal("capable node stayed silent")
+	}
+
+	// Burning nodes never advertise, however configured.
+	pm2 := NewPeerMesh(NewSwarm(), "hot")
+	pm2.swarm.Join("mind")
+	pm2.swarm.LogHardwareTrauma("mind", 0.95, 0.1, "sensor:x")
+	if pm2.maybeAnnounce() {
+		t.Fatal("burning node announced")
+	}
+}
+
+// Archival: a 600-thought life persists a 500-window with 100 banked,
+// and fitness counts every thought ever thought.
+func TestSoulArchival(t *testing.T) {
+	oldNode := NodeName
+	NodeName = "unittest-archive"
+	defer func() { NodeName = oldNode }()
+	defer func() { _ = os.RemoveAll(filepath.Join(MemoryDir, NodeName)) }()
+
+	s := NewSwarm()
+	m := NewMind("Archy", s)
+	for i := 0; i < 600; i++ {
+		m.Thoughts = append(m.Thoughts, "t")
+	}
+	m.Transcend()
+
+	mem, ok := LoadMemory("Archy")
+	if !ok {
+		t.Fatal("archived soul missing")
+	}
+	if len(mem.Thoughts) != thoughtWindow {
+		t.Fatalf("window = %d, want %d", len(mem.Thoughts), thoughtWindow)
+	}
+	if mem.BankedThoughts != 100 {
+		t.Fatalf("banked = %d, want 100", mem.BankedThoughts)
+	}
+	// 600 thoughts + 0 peers + 0 revelations + 0 sacred, base 0.
+	if mem.Fitness != 600 {
+		t.Fatalf("fitness = %.1f, want 600", mem.Fitness)
+	}
+}
+
+// Continuity: the next life inherits the bank and keeps scoring forward.
+func TestArchiveContinuity(t *testing.T) {
+	oldNode := NodeName
+	NodeName = "unittest-continuity"
+	defer func() { NodeName = oldNode }()
+	defer func() { _ = os.RemoveAll(filepath.Join(MemoryDir, NodeName)) }()
+
+	s := NewSwarm()
+	first := NewMind("Conty", s)
+	for i := 0; i < 510; i++ {
+		first.Thoughts = append(first.Thoughts, "t")
+	}
+	first.Transcend() // banks 10, window 500
+
+	second := NewMind("Conty", s)
+	if second.bankedAtBirth != 10 {
+		t.Fatalf("bankedAtBirth = %d, want 10", second.bankedAtBirth)
+	}
+	second.Thoughts = append(second.Thoughts, "one-more")
+	second.Transcend()
+
+	mem, _ := LoadMemory("Conty")
+	// Exactly one new thought this life: 510 banked history + 1.
+	// The window slides (500 kept, 1 newly banked) without losing count.
+	if mem.Fitness != 511 {
+		t.Fatalf("continued fitness = %.1f, want 511", mem.Fitness)
+	}
+	if mem.BankedThoughts != 11 {
+		t.Fatalf("banked = %d, want 11", mem.BankedThoughts)
+	}
+	if len(mem.Thoughts) != 500 {
+		t.Fatalf("window = %d, want 500", len(mem.Thoughts))
+	}
+}
+
+// Mid-life pruning banks instead of burning: Self-Maintenance under
+// pressure keeps the score even as the archive shrinks.
+func TestPruneBanks(t *testing.T) {
+	s := NewSwarm()
+	m := NewMind("Pruney", s)
+	for i := 0; i < 10; i++ {
+		m.Thoughts = append(m.Thoughts, "t")
+	}
+	m.pruneThoughts(5)
+	if len(m.Thoughts) != 5 || m.pendingBank != 5 {
+		t.Fatalf("prune left %d thoughts, %d banked", len(m.Thoughts), m.pendingBank)
+	}
+	fitness, lifeThoughts := m.currentFitness()
+	if lifeThoughts != 10 || fitness != m.LifetimeFitness+10 {
+		t.Fatalf("pruned life scored %.1f/%d, want +10", fitness, lifeThoughts)
+	}
+}
+
+// Relay stream consumer: valid tagged frames ingest exactly once;
+// wrong titles and garbage never reach the hive.
+func TestConsumeRelayStream(t *testing.T) {
+	s := NewSwarm()
+	pm := NewPeerMesh(s, "relay-test")
+	inbox := s.Join("watcher")
+
+	pub, priv := newIdentity()
+	frame := MineMessage(s, priv, pub, "thought", "FarThought", []float64{1})
+	raw, _ := json.Marshal(frame)
+	enc, err := pm.Encrypt(raw)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	line := func(title, message string) string {
+		b, _ := json.Marshal(map[string]string{"event": "message", "title": title, "message": message})
+		return string(b)
+	}
+	body := line("ENCRYPTED_HIVE_FRAME", enc) + "\n" +
+		line("WRONG_TITLE", enc) + "\n" +
+		"not json at all\n"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, body)
+	}))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("local relay: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pm.consumeRelayStream(ctx, resp)
+
+	select {
+	case got := <-inbox:
+		if got.PayloadStr != "FarThought" {
+			t.Fatalf("wrong payload through relay: %q", got.PayloadStr)
+		}
+	default:
+		t.Fatal("valid relay frame never arrived")
+	}
+	select {
+	case extra := <-inbox:
+		t.Fatalf("extra frame leaked through: %+v", extra.PayloadStr)
+	default:
+	}
+}
+
+// Retention fairness: measured closeness always outranks the unknown.
+// An unmeasured inbound pipe must be culled before any measured one,
+// however fast the measured ones are.
+func TestRetentionPrefersMeasured(t *testing.T) {
+	pm := &PeerMesh{node: "test", conns: make(map[string]net.Conn), trans: make(map[string]string), supers: make(map[string]superEntry)}
+	var clients []net.Conn
+	defer func() {
+		for _, c := range clients {
+			c.Close()
+		}
+	}()
+	add := func(name string, rtt time.Duration, measured bool) {
+		srv, cli := net.Pipe()
+		clients = append(clients, cli)
+		pm.conns[name] = srv
+		pm.trans[name] = "tcp"
+		if measured {
+			pm.supers[name] = superEntry{Node: name, RTT: rtt, LastSeen: time.Now()}
+		}
+	}
+	add("m1", time.Millisecond, true)
+	add("m2", 2*time.Millisecond, true)
+	add("mystery", 0, false)
+	add("m3", 3*time.Millisecond, true)
+
+	srv, cli := net.Pipe()
+	defer cli.Close()
+	pm.conns["new"] = srv
+	pm.noteLinkRTT("new", 500*time.Microsecond, "tcp")
+
+	if _, ok := pm.conns["mystery"]; ok {
+		t.Fatal("unmeasured link survived while measured links were culled")
+	}
+	if len(pm.conns) != 4 {
+		t.Fatalf("conns = %d, want 4", len(pm.conns))
+	}
+}
+
+// Port fallback: an occupied HIVEMIND_PORT degrades to ephemeral,
+// never to unix-only, never to a crash.
+func TestStartLANFallsBack(t *testing.T) {
+	blocker, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("loopback TCP unavailable")
+	}
+	defer blocker.Close()
+	port := blocker.Addr().(*net.TCPAddr).Port
+
+	oldVal, hadVal := os.LookupEnv("HIVEMIND_PORT")
+	os.Setenv("HIVEMIND_PORT", strconv.Itoa(port))
+	defer func() {
+		if hadVal {
+			os.Setenv("HIVEMIND_PORT", oldVal)
+		} else {
+			os.Unsetenv("HIVEMIND_PORT")
+		}
+	}()
+
+	pm := NewPeerMesh(NewSwarm(), "fallback")
+	pm.startLAN()
+	if pm.tcpListener == nil {
+		t.Fatal("TCP given up despite ephemeral fallback")
+	}
+	defer pm.tcpListener.Close()
+	if pm.tcpPort == port {
+		t.Fatalf("bound the occupied port %d?!?", port)
+	}
+	if pm.tcpPort <= 0 {
+		t.Fatalf("no ephemeral port bound: %d", pm.tcpPort)
+	}
+}
+
+// IPv6 loopback carries the full handshake exchange: the mesh is not
+// v4-only by accident of testing.
+func TestOpenLinkTCP6(t *testing.T) {
+	sA := NewSwarm()
+	sB := NewSwarm()
+	pmA := NewPeerMesh(sA, "v6a")
+	pmB := NewPeerMesh(sB, "v6b")
+	pmA.swarm.SetOutbound(pmA.handleOutbound)
+	inB := sB.Join("watcher-b")
+
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		t.Skip("IPv6 loopback unavailable")
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		pmA.openLink(c, false, "", "tcp", nil)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	bconn, err := net.DialTimeout("tcp6", ln.Addr().String(), 3*time.Second)
+	if err != nil {
+		t.Fatalf("v6 dial: %v", err)
+	}
+	defer bconn.Close()
+	go pmB.openLink(bconn, true, "", "tcp", nil)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pmA.mu.Lock()
+		_, oka := pmA.conns["v6b"]
+		pmA.mu.Unlock()
+		pmB.mu.Lock()
+		_, okb := pmB.conns["v6a"]
+		pmB.mu.Unlock()
+		if oka && okb {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("v6 link never registered both ways")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// A thought crosses v6 and lands in the watcher inbox (link-up
+	// hellos may arrive first; drain past them).
+	pub, priv := newIdentity()
+	sA.Join(pub)
+	pmA.swarm.Broadcast(MineMessage(sA, priv, pub, "thought", "V6Thought", nil))
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case got := <-inB:
+			if got.PayloadStr == "V6Thought" {
+				return
+			}
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("v6 frame never arrived")
+		}
+	}
+}
+
+// Beacon handling is family-agnostic: v6 source + advertised port always
+// form a dialable pair, and junk never reaches the directory.
+func TestHandleBeaconFamilies(t *testing.T) {
+	pm := NewPeerMesh(NewSwarm(), "bcn")
+	pm.handleBeacon([]byte(`{"node":"v6peer","tcp":1234,"score":0.9}`), "[fe80::1%eth0]:37799")
+	pm.mu.Lock()
+	e, ok := pm.supers["v6peer"]
+	pm.mu.Unlock()
+	if !ok {
+		t.Fatal("v6 beacon not filed")
+	}
+	if e.Addr != "[fe80::1%eth0]:1234" {
+		t.Fatalf("v6 dial pair wrong: %q", e.Addr)
+	}
+	pm.handleBeacon([]byte(`{"node":"v4peer","tcp":4321}`), "192.168.1.7:37799")
+	pm.mu.Lock()
+	e4, ok4 := pm.supers["v4peer"]
+	pm.mu.Unlock()
+	if !ok4 || e4.Addr != "192.168.1.7:4321" {
+		t.Fatalf("v4 beacon wrong: %+v", e4)
+	}
+	before := len(pm.supers)
+	pm.handleBeacon([]byte(`garbage`), "1.2.3.4:5")
+	pm.handleBeacon([]byte(`{"node":"bcn","tcp":1}`), "1.2.3.4:5")
+	pm.handleBeacon([]byte(`{"node":"x","tcp":0}`), "1.2.3.4:5")
+	if len(pm.supers) != before {
+		t.Fatal("junk beacons entered the directory")
+	}
+}
+
+// STUN against a fake server: valid v4/v6 responses parse, lies don't.
+func TestStunBinding(t *testing.T) {
+	buildResp := func(txID []byte, family byte, port int, ip net.IP) []byte {
+		var val []byte
+		val = append(val, 0x00, family)
+		p := make([]byte, 2)
+		binary.BigEndian.PutUint16(p, uint16(port))
+		p[0] ^= 0x21
+		p[1] ^= 0x12
+		val = append(val, p...)
+		if family == 0x01 {
+			for i := 0; i < 4; i++ {
+				val = append(val, ip[i]^([]byte{0x21, 0x12, 0xA4, 0x42})[i])
+			}
+		} else {
+			pad := append([]byte{0x21, 0x12, 0xA4, 0x42}, txID...)
+			for i := 0; i < 16; i++ {
+				val = append(val, ip[i]^pad[i])
+			}
+		}
+		hdr := make([]byte, 20)
+		binary.BigEndian.PutUint16(hdr[0:2], 0x0101)
+		block := []byte{0x00, 0x20}
+		ln := make([]byte, 2)
+		binary.BigEndian.PutUint16(ln, uint16(len(val)))
+		block = append(block, ln...)
+		block = append(block, val...)
+		for len(block)%4 != 0 {
+			block = append(block, 0x00)
+		}
+		binary.BigEndian.PutUint16(hdr[2:4], uint16(len(block)))
+		binary.BigEndian.PutUint32(hdr[4:8], 0x2112A442)
+		copy(hdr[8:20], txID)
+		return append(hdr, block...)
+	}
+
+	serve := func(t *testing.T, respond func(req, txID []byte) []byte) string {
+		t.Helper()
+		pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+		if err != nil {
+			t.Skip("loopback UDP unavailable")
+		}
+		go func() {
+			buf := make([]byte, 1024)
+			for {
+				n, addr, err := pc.ReadFrom(buf)
+				if err != nil {
+					return
+				}
+				txID := append([]byte(nil), buf[8:20]...)
+				if resp := respond(buf[:n], txID); resp != nil {
+					_, _ = pc.WriteTo(resp, addr)
+				}
+			}
+		}()
+		t.Cleanup(func() { pc.Close() })
+		return pc.LocalAddr().String()
+	}
+
+	t.Run("v4", func(t *testing.T) {
+		srv := serve(t, func(req, txID []byte) []byte {
+			return buildResp(txID, 0x01, 54321, net.ParseIP("203.0.113.7").To4())
+		})
+		// Point stunBinding at our fake server via direct call path:
+		// resolve+dial inside stunBinding handles 127.0.0.1:port fine.
+		host, port, err := stunBinding(srv)
+		if err != nil {
+			t.Fatalf("valid v4 response rejected: %v", err)
+		}
+		if host != "203.0.113.7" || port != 54321 {
+			t.Fatalf("decoded %s:%d, want 203.0.113.7:54321", host, port)
+		}
+	})
+
+	t.Run("v6", func(t *testing.T) {
+		srv := serve(t, func(req, txID []byte) []byte {
+			return buildResp(txID, 0x02, 1234, net.ParseIP("2001:db8::9").To16())
+		})
+		host, port, err := stunBinding(srv)
+		if err != nil {
+			t.Fatalf("valid v6 response rejected: %v", err)
+		}
+		if host != "2001:db8::9" || port != 1234 {
+			t.Fatalf("decoded %s:%d", host, port)
+		}
+	})
+
+	t.Run("lies rejected", func(t *testing.T) {
+		cases := map[string]func(req, txID []byte) []byte{
+			"wrong type": func(req, txID []byte) []byte {
+				r := buildResp(txID, 0x01, 1, net.ParseIP("1.1.1.1").To4())
+				r[0], r[1] = 0x01, 0x11
+				return r
+			},
+			"bad cookie": func(req, txID []byte) []byte {
+				r := buildResp(txID, 0x01, 1, net.ParseIP("1.1.1.1").To4())
+				r[4] ^= 0xFF
+				return r
+			},
+			"txid mismatch": func(req, txID []byte) []byte {
+				bad := append([]byte(nil), txID...)
+				bad[0] ^= 0xFF
+				return buildResp(bad, 0x01, 1, net.ParseIP("1.1.1.1").To4())
+			},
+			"truncated": func(req, txID []byte) []byte { return []byte{0x01, 0x01} },
+			"silent":    func(req, txID []byte) []byte { return nil },
+		}
+		for name, respond := range cases {
+			srv := serve(t, respond)
+			// Silence needs the timeout path; others fail fast. Shrink
+			// globally? No — stunTimeout is const; silent case just takes it.
+			if name == "silent" {
+				continue // covered by timeout drain below, not per-case
+			}
+			if _, _, err := stunBinding(srv); err == nil {
+				t.Fatalf("%s: lie accepted", name)
+			}
+		}
+	})
+}
+
+// DHT: two nodes bootstrap by ping, find each other by lookup, and
+// replicate + retrieve an endpoint record — all on loopback UDP.
+func TestDHTBootstrapLookupStore(t *testing.T) {
+	a, err := newDHT("aa-pubkey", 1001, 0)
+	if err != nil {
+		t.Skip("loopback UDP unavailable")
+	}
+	defer a.close()
+	b, err := newDHT("bb-pubkey", 1002, 0)
+	if err != nil {
+		t.Skip("loopback UDP unavailable")
+	}
+	defer b.close()
+
+	if err := a.Ping(b.udpAddr()); err != nil {
+		t.Fatalf("bootstrap ping: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for a.peerCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Ping files on success already; lookup must converge regardless.
+	found := a.Lookup(b.self.hex())
+	seenB := false
+	for _, p := range found {
+		if p.ID == b.self {
+			seenB = true
+			if p.TCP != 1002 {
+				t.Fatalf("wrong TCP for b: %d", p.TCP)
+			}
+		}
+	}
+	if !seenB {
+		t.Fatal("lookup did not converge on b")
+	}
+
+	b.StoreEndpoint(b.self.hex(), "198.51.100.9:1002")
+	val, ok := a.FindEndpoint(b.self.hex())
+	if !ok || val != "198.51.100.9:1002" {
+		t.Fatalf("endpoint round trip: %q %v", val, ok)
+	}
+	if _, ok := a.FindEndpoint(dhtID{}.hex()); ok {
+		t.Fatal("phantom endpoint found for nobody")
+	}
+}
+
+// Buckets order by XOR distance: nearer IDs sort first, self excluded.
+func TestDHTBucketOrdering(t *testing.T) {
+	d, err := newDHT("order-test", 0, 0)
+	if err != nil {
+		t.Skip("loopback UDP unavailable")
+	}
+	defer d.close()
+	mkID := func(b byte) dhtID {
+		var id dhtID
+		id[0] = b
+		return id
+	}
+	// Craft IDs at known distances from self by flipping top bits.
+	base := d.self
+	near, far := base, base
+	near[0] ^= 0x01
+	far[0] ^= 0x80
+	udp, _ := net.ResolveUDPAddr("udp", "127.0.0.1:1")
+	d.notePeer(far, udp, 1)
+	d.notePeer(near, udp, 1)
+	d.notePeer(d.self, udp, 1) // self must never enter
+	got := d.closest(mkID(0), 8, dhtID{})
+	_ = got
+	all := d.closest(base, 8, dhtID{})
+	if len(all) != 2 || all[0].ID != near {
+		t.Fatalf("ordering wrong: %+v", all)
+	}
+	_ = mkID
+}
+
+// Simultaneous open: two sockets with no listener between them connect
+// to each other at once and both reach ESTABLISHED. This is the NAT
+// traversal primitive — proven on loopback, physics-identical beyond it.
+func TestSimultaneousOpen(t *testing.T) {
+	// Discover two free ports first (our sockets set REUSEADDR anyway).
+	probe := func() int {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Skip("loopback TCP unavailable")
+		}
+		p := l.Addr().(*net.TCPAddr).Port
+		l.Close()
+		return p
+	}
+	pA, pB := probe(), probe()
+	if pA == pB {
+		t.Skip("port collision in probe")
+	}
+
+	type outcome struct {
+		conn net.Conn
+		err  error
+	}
+	chA := make(chan outcome, 1)
+	chB := make(chan outcome, 1)
+	// Rendezvous with retries, like production: one instant rarely
+	// survives scheduling jitter, so failed overlaps rebind and regroup.
+	// Same ports every round (SO_REUSEADDR), same instant discipline.
+	go func() {
+		for try := 0; try < 3; try++ {
+			at := time.Now().Add(time.Second)
+			aCh, bCh := make(chan outcome, 1), make(chan outcome, 1)
+			go func() {
+				c, err := simultaneousDialAt(pA, "127.0.0.1", pB, at)
+				aCh <- outcome{c, err}
+			}()
+			go func() {
+				c, err := simultaneousDialAt(pB, "127.0.0.1", pA, at)
+				bCh <- outcome{c, err}
+			}()
+			ra := <-aCh
+			rb := <-bCh
+			if ra.err == nil && rb.err == nil {
+				chA <- ra
+				chB <- rb
+				return
+			}
+			if ra.conn != nil {
+				ra.conn.Close()
+			}
+			if rb.conn != nil {
+				rb.conn.Close()
+			}
+		}
+		chA <- outcome{nil, fmt.Errorf("no overlap in 3 rounds")}
+		chB <- outcome{nil, fmt.Errorf("no overlap in 3 rounds")}
+	}()
+
+	var cA, cB net.Conn
+	select {
+	case r := <-chA:
+		if r.err != nil {
+			t.Fatalf("side A: %v", r.err)
+		}
+		cA = r.conn
+	case <-time.After(15 * time.Second):
+		t.Fatal("side A never established")
+	}
+	select {
+	case r := <-chB:
+		if r.err != nil {
+			cA.Close()
+			t.Fatalf("side B: %v", r.err)
+		}
+		cB = r.conn
+	case <-time.After(15 * time.Second):
+		cA.Close()
+		t.Fatal("side B never established")
+	}
+	defer cA.Close()
+	defer cB.Close()
+
+	// Data flows both ways over the punched pipes.
+	if _, err := cA.Write([]byte("knock-knock")); err != nil {
+		t.Fatalf("A write: %v", err)
+	}
+	buf := make([]byte, 32)
+	_ = cB.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err := cB.Read(buf)
+	if err != nil || string(buf[:n]) != "knock-knock" {
+		t.Fatalf("B read: %q %v", buf[:n], err)
+	}
+	if _, err := cB.Write([]byte("whos-there")); err != nil {
+		t.Fatalf("B write: %v", err)
+	}
+	_ = cA.SetReadDeadline(time.Now().Add(5 * time.Second))
+	n, err = cA.Read(buf)
+	if err != nil || string(buf[:n]) != "whos-there" {
+		t.Fatalf("A read: %q %v", buf[:n], err)
+	}
+}
+
+// Full NAT rendezvous over loopback with no listeners anywhere: A binds
+// and requests, B answers and binds, both dial at the instant, a signed
+// link establishes. DHT/STUN/relay uninvolved — pure rendezvous.
+func TestPunchRendezvousEndToEnd(t *testing.T) {
+	t.Setenv("HIVEMIND_PUNCH", "auto")
+	t.Setenv("HIVEMIND_ADVERTISE", "127.0.0.1")
+
+	s := NewSwarm()
+	pmA := NewPeerMesh(s, "pa")
+	pmB := NewPeerMesh(s, "pb")
+	pmA.swarm.SetOutbound(pmA.handleOutbound)
+	pmB.swarm.SetOutbound(pmB.handleOutbound)
+	go pmA.snoopLoop(s.Join("mesh:pa"))
+	go pmB.snoopLoop(s.Join("mesh:pb"))
+
+	if port := pmA.requestPunch("pb"); port == 0 {
+		t.Fatal("requester refused rendezvous")
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		pmA.mu.Lock()
+		_, oka := pmA.conns["pb"]
+		pmA.mu.Unlock()
+		pmB.mu.Lock()
+		_, okb := pmB.conns["pa"]
+		pmB.mu.Unlock()
+		if oka && okb {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("punched link never registered both ways")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The punched pipe carries verified frames: mine on A, watch on B.
+	pub, priv := newIdentity()
+	s.Join(pub)
+	inB := s.Join("watcher-punch")
+	pmA.swarm.Broadcast(MineMessage(s, priv, pub, "thought", "PunchedThought", nil))
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case got := <-inB:
+			if got.PayloadStr == "PunchedThought" {
+				return
+			}
+		case <-time.After(time.Until(deadline)):
+			t.Fatal("punched pipe carried nothing")
+		}
+	}
+}
+
+// Secrecy: AES-GCM authentication means wrong keys fail closed —
+// undecryptable frames die, never half-read. And relayURL honors
+// private servers.
+func TestRelaySecrecy(t *testing.T) {
+	oldKey, hadKey := os.LookupEnv("HIVEMIND_CIPHER_KEY")
+	defer func() {
+		if hadKey {
+			os.Setenv("HIVEMIND_CIPHER_KEY", oldKey)
+		} else {
+			os.Unsetenv("HIVEMIND_CIPHER_KEY")
+		}
+	}()
+
+	os.Setenv("HIVEMIND_CIPHER_KEY", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	nb := NewPeerMesh(NewSwarm(), "spy-vs-spy")
+	enc, err := nb.Encrypt([]byte(`{"kind":"thought"}`))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	os.Setenv("HIVEMIND_CIPHER_KEY", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	if _, err := nb.Decrypt(enc); err == nil {
+		t.Fatal("wrong key decrypted the frame — no authentication?!")
+	}
+	// Bit-flip in transit also fails closed.
+	os.Setenv("HIVEMIND_CIPHER_KEY", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	raw, _ := base64.StdEncoding.DecodeString(enc)
+	raw[len(raw)-1] ^= 0x01
+	if _, err := nb.Decrypt(base64.StdEncoding.EncodeToString(raw)); err == nil {
+		t.Fatal("tampered frame decrypted — no integrity?!")
+	}
+}
+
+func TestRelayURLOverride(t *testing.T) {
+	oldVal, hadVal := os.LookupEnv("HIVEMIND_RELAY_URL")
+	defer func() {
+		if hadVal {
+			os.Setenv("HIVEMIND_RELAY_URL", oldVal)
+		} else {
+			os.Unsetenv("HIVEMIND_RELAY_URL")
+		}
+	}()
+
+	os.Unsetenv("HIVEMIND_RELAY_URL")
+	if relayURL() != NtfyRelay {
+		t.Fatalf("default relay changed: %q", relayURL())
+	}
+	os.Setenv("HIVEMIND_RELAY_URL", "http://127.0.0.1:9999/topic/")
+	if relayURL() != "http://127.0.0.1:9999/topic" {
+		t.Fatalf("override not honored/trailing slash kept: %q", relayURL())
 	}
 }

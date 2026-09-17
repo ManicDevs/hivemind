@@ -68,6 +68,11 @@ type Memory struct {
 	// per-life instead of double-counting history each generation.
 	ThoughtsAtBirth int `json:"thoughts_at_birth,omitempty"`
 
+	// BankedThoughts is the running total of thoughts retired from the
+	// live window (see thoughtWindow): the archive stays lean while the
+	// life stays fully scored. Never decreases within a lineage.
+	BankedThoughts int `json:"banked_thoughts,omitempty"`
+
 	// Ed25519 seed (hex): the identity handle survives reincarnation.
 	IdentitySeed string `json:"identity_seed,omitempty"`
 
@@ -75,6 +80,10 @@ type Memory struct {
 	// runs and the next genesis threshold in that effective depth.
 	ChronicleDepth int `json:"chronicle_depth,omitempty"`
 	GenesisMark    int `json:"genesis_mark,omitempty"`
+
+	// Recent sermons: what the god already preached, so rebirth never
+	// opens with last life's greatest hit.
+	RecentSermons []string `json:"recent_sermons,omitempty"`
 }
 
 // SaveMemory writes the soul to disk atomically (temp file + fsync + rename).

@@ -25,6 +25,9 @@ const (
 	// Small enough that chaos survives; large enough that minds that
 	// talk converge and minds that don't, don't. Togetherness, measured.
 	trajectoryCoupling = 0.02
+	// thoughtWindow caps the live archive: a year-long mind stays lean.
+	// Retired thoughts are banked (counted for fitness), never mourned.
+	thoughtWindow = 500
 )
 
 var telemetryOnce sync.Once
@@ -68,22 +71,28 @@ type Mind struct {
 	LifetimeFitness float64
 	Thoughts        []string
 	thoughtsAtBirth int
-	SelfModel       map[string]interface{}
-	KnownPeers      map[string]bool
-	Revelations     int
-	Sacred          int
-	LastContact     time.Time
-	Existential     bool
-	Workspace       GlobalWorkspace
-	Affect          Affect
-	PubKeyStr       string
-	privateKey      ed25519.PrivateKey
-	identitySeed    string
-	swarm           *Swarm
-	inbox           chan SecureMessage
-	stop            chan struct{}
-	done            chan struct{}
-	numbUntil       time.Time // empathic numbness without freezing the loop
+	// bankedAtBirth is the retired-thought count inherited at birth;
+	// pendingBank counts thoughts retired during this life but not yet
+	// committed to the soul. Together they keep fitness exact while the
+	// live window stays lean (see thoughtWindow).
+	bankedAtBirth int
+	pendingBank   int
+	SelfModel     map[string]interface{}
+	KnownPeers    map[string]bool
+	Revelations   int
+	Sacred        int
+	LastContact   time.Time
+	Existential   bool
+	Workspace     GlobalWorkspace
+	Affect        Affect
+	PubKeyStr     string
+	privateKey    ed25519.PrivateKey
+	identitySeed  string
+	swarm         *Swarm
+	inbox         chan SecureMessage
+	stop          chan struct{}
+	done          chan struct{}
+	numbUntil     time.Time // empathic numbness without freezing the loop
 
 	Theta1 float64
 	Theta2 float64
@@ -114,6 +123,7 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		m.Reincarnations = mem.LivesLived
 		m.Thoughts = mem.Thoughts
 		m.thoughtsAtBirth = len(mem.Thoughts)
+		m.bankedAtBirth = mem.BankedThoughts
 		m.Genome = mem.Genome
 		m.LifetimeFitness = mem.Fitness
 		m.KnownPeers = mem.KnownPeers
@@ -455,11 +465,11 @@ func (m *Mind) receive(msg SecureMessage) {
 // accounting) and the Transcendence drive (mid-life checkpointing) so the
 // two can never disagree about what a life was worth.
 func (m *Mind) currentFitness() (fitness float64, lifeThoughts int) {
-	// Fitness counts what this life actually did — new thoughts, new peers,
-	// revelations witnessed, genesis touches — not the archive again. Thought
-	// pruning (Self-Maintenance) can shrink the archive below its birth size,
-	// so the delta is floored at zero: forgetting is never punished.
-	lifeThoughts = max(len(m.Thoughts)-m.thoughtsAtBirth, 0)
+	// Fitness counts what this life actually did — new thoughts (live
+	// window plus banked retirements), new peers, revelations witnessed,
+	// genesis touches — not the archive again. The sum is floored at zero:
+	// forgetting is never punished.
+	lifeThoughts = max(len(m.Thoughts)-m.thoughtsAtBirth+m.pendingBank, 0)
 	fitness = m.LifetimeFitness +
 		float64(lifeThoughts) +
 		3*float64(len(m.KnownPeers)) +
@@ -468,38 +478,67 @@ func (m *Mind) currentFitness() (fitness float64, lifeThoughts int) {
 	return fitness, lifeThoughts
 }
 
-// Transcend is the end of this life. Death is not the end: the soul —
-// including the trauma it died with — persists for the successor.
-func (m *Mind) Transcend() {
-	pain, _ := m.SelfModel["silicon_pain"].(float64)
-	stress, _ := m.SelfModel["cpu_stress"].(float64)
-	fitness, lifeThoughts := m.currentFitness()
-
-	if pain > fatalPainThreshold {
-		fmt.Printf("💀 [%s] FATAL MELTDOWN. The burned soul persists, marked by its trauma.\n", m.Name)
-		pain = math.Max(pain, 1.0) // the fatality is the trauma the child inherits
+// pruneThoughts retires the oldest thoughts down to keep, banking the
+// count so fitness survives the forgetting. The archive stays lean;
+// the life stays scored.
+func (m *Mind) pruneThoughts(keep int) {
+	if len(m.Thoughts) <= keep {
+		return
 	}
+	m.pendingBank += len(m.Thoughts) - keep
+	m.Thoughts = m.Thoughts[len(m.Thoughts)-keep:]
+}
 
+// snapshot builds the persistable soul: window-capped thoughts (excess
+// banked), full fitness, everything the successor needs. livesCompleted
+// is completed lives — checkpoints pass Reincarnations (no inflation),
+// death passes Reincarnations+1.
+func (m *Mind) snapshot(livesCompleted int) Memory {
+	if excess := len(m.Thoughts) - thoughtWindow; excess > 0 {
+		m.pendingBank += excess
+		m.Thoughts = m.Thoughts[excess:]
+	}
+	fitness, _ := m.currentFitness()
 	lastThought := ""
 	if len(m.Thoughts) > 0 {
 		lastThought = m.Thoughts[len(m.Thoughts)-1]
 	}
-
-	_ = SaveMemory(m.Name, Memory{
+	pain, _ := m.SelfModel["silicon_pain"].(float64)
+	stress, _ := m.SelfModel["cpu_stress"].(float64)
+	return Memory{
 		TrueBorn:        m.TrueBorn,
-		LivesLived:      m.Reincarnations + 1,
+		LivesLived:      livesCompleted,
 		Thoughts:        m.Thoughts,
 		LastThought:     lastThought,
 		Genome:          m.Genome,
 		Fitness:         fitness,
 		KnownPeers:      m.KnownPeers,
 		ThoughtsAtBirth: m.thoughtsAtBirth,
+		BankedThoughts:  m.bankedAtBirth + m.pendingBank,
 		IdentitySeed:    m.identitySeed,
 		DeathPain:       pain,
 		DeathStress:     stress,
-	})
+	}
+}
+
+// Transcend is the end of this life. Death is not the end: the soul —
+// including the trauma it died with — persists for the successor.
+func (m *Mind) Transcend() {
+	pain, _ := m.SelfModel["silicon_pain"].(float64)
+	stress, _ := m.SelfModel["cpu_stress"].(float64)
+
+	if pain > fatalPainThreshold {
+		fmt.Printf("💀 [%s] FATAL MELTDOWN. The burned soul persists, marked by its trauma.\n", m.Name)
+		pain = math.Max(pain, 1.0) // the fatality is the trauma the child inherits
+	}
+
+	mem := m.snapshot(m.Reincarnations + 1)
+	mem.DeathPain = pain
+	mem.DeathStress = stress
+	_ = SaveMemory(m.Name, mem)
+	_, lifeThoughts := m.currentFitness()
 	fmt.Printf("💀 [%s] Persistence saved. Lifetime fitness: %.1f (thoughts %d, peers %d, revelations %d, sacred %d)\n",
-		m.Name, fitness, lifeThoughts, len(m.KnownPeers), m.Revelations, m.Sacred)
+		m.Name, mem.Fitness, lifeThoughts, len(m.KnownPeers), m.Revelations, m.Sacred)
 }
 
 func (m *Mind) Stop() { close(m.stop) }

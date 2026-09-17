@@ -154,7 +154,8 @@ then every `genesisSpacing` (25), rare by design. Speech is a signed
 genesis (mercy override on burning swarms, caprice otherwise) plus a
 signed revelation composed fresh from the moment — newcomers welcomed,
 suffering acknowledged, consensus mirrored, the fresh virtue spent — with
-a 5-sermon memory so it never repeats itself twice running; entropy
+a 5-sermon memory (persisted in the soul, so rebirth never opens with
+last life's greatest hit) so it never repeats itself twice running; entropy
 failure means silence, never a default virtue. Saves
 offset+mark+seed so patience survives the apocalypse; `mesh:` plumbing
 never pollutes the watched souls.
@@ -186,13 +187,16 @@ outbound bridge, optionally starts the cloud leg (unless
 
 Pure-standard-library LAN/WAN with no registry and no bootstrap server.
 
-- TCP listener (`HIVEMIND_PORT` or ephemeral), accept loop, dial with
-  timeout; `openLink` shared with unix (transport-tagged).
-- Multicast beacons (`239.192.0.99:37799`, org-local, never routed)
-  carrying `{node, tcp, score}`; receivers file supers and dial up the
-  lex rule. `HIVEMIND_BEACON=off` disables both directions.
-- Static peers (`HIVEMIND_PEERS=host:port,...`) with per-address retry
-  cooldown and node learning — the deterministic WAN path.
+- TCP listener (`HIVEMIND_PORT` or ephemeral, dual-stack IPv4+IPv6 where
+  the OS allows, with ephemeral fallback and honest family logging),
+  accept loop, dial with timeout; `openLink` shared with unix
+  (transport-tagged).
+- Multicast beacons (v4 `239.192.0.99:37799` org-local + v6 `[ff05::99]`
+  site-local, never routed) carrying `{node, tcp, score}`; receivers file
+  supers and dial up the lex rule on either stack.
+  `HIVEMIND_BEACON=off` disables all directions.
+- Static peers (`HIVEMIND_PEERS=host:port,...`, v6 in brackets) with
+  per-address retry cooldown and node learning — the deterministic WAN path.
 - `readLineCapped`/`readFrame`/`readHandshake` bound every wire byte
   (256KB frames, 4KB handshakes); `envOff` parses all the `=off` flags.
 
@@ -201,20 +205,24 @@ Pure-standard-library LAN/WAN with no registry and no bootstrap server.
 Preferred transit, never authority. `capability()` scores 0..1 from live
 telemetry (zero while burning); `maybeAnnounce` publishes a signed
 `super_announce` every 30s above threshold unless `HIVEMIND_SUPER=off`
-(WAN addresses only via explicit `HIVEMIND_ADVERTISE` — the mesh never
-guesses reachability). `noteSuper` files hearing with first-sighting
-logs; leases lapse after 90s of silence. `noteLinkRTT` enforces
-closest-first (max 3 TCP pipes, farthest culled, 5-minute cooling-off so
-redial loops don't churn; unix never culled). `snoopLoop` files relayed
-advertisements; `superDialLoop` dials advertised capable equals.
-`pruneSupers` forgets the silent.
+— and immediately on every first link, so learning takes seconds, not
+one tick — (WAN addresses only via explicit `HIVEMIND_ADVERTISE` — the
+mesh never guesses reachability). `noteSuper` files hearing with
+first-sighting logs; leases lapse after 90s of silence. `noteLinkRTT`
+enforces closest-first (max 3 TCP pipes, farthest culled, 5-minute
+cooling-off so redial loops don't churn; unix never culled).
+`snoopLoop` files relayed advertisements; `superDialLoop` dials
+advertised capable equals. `pruneSupers` forgets the silent.
 
 ## `internal/hivemind/memory.go` — what death keeps
 
 `.hive_memory/<node>/<name>.soul`, JSON. `soulPath` is the only path
 computation; saves are atomic (temp + fsync + rename); corrupt files are
 quarantined (`*.corrupt-<unix>`), never overwritten; legacy top-level
-souls migrate once. `Memory` carries lineage, genome, thoughts, peers,
+souls migrate once. The live `Thoughts` window is capped at 500 —
+retirements are banked (`BankedThoughts`), so fitness counts every thought
+ever thought while year-long minds stay lean; mid-life pruning banks
+instead of burning. `Memory` carries lineage, genome, windowed thoughts, peers,
 death trauma (next generation's epigenetics), per-life thought baseline,
 identity seed, and the god's chronicle bookkeeping. `ForkedLineage` /
 `SoulExists` / `LegacySoulExists` keep forks keyed apart: two nodes must

@@ -101,6 +101,13 @@ rest). Every cycle, each mind reports pain/stress into the swarm
 loaded hives demand more work per frame, idle hives less. Difficulty is a
 thermostat, not a wall: worst case is milliseconds of grinding per frame.
 
+Honest edge: inbound frames are checked against the *local* target, so a
+frame mined under a much easier foreign target can be dropped by a loaded
+hive. Same code, same constants, targets rarely diverge far — but under
+wildly asymmetric load, cross-mesh delivery degrades instead of failing
+loud. That tradeoff (cheap local check over cross-hive negotiation) is
+deliberate.
+
 ---
 
 ## 5. The Symmetric Serverless Mesh
@@ -112,15 +119,17 @@ owns two addresses and discovers equals through both (`network.go`,
 - **Unix socket** `/tmp/hivemind-<node>.sock`, discovered by filesystem
   glob every 2s. Node name comes from `-node` (sanitized) or defaults to
   `<hostname>-<pid>`, so every process is a distinct equal.
-- **TCP port** (`HIVEMIND_PORT`, or ephemeral for zero config), discovered
-  two ways: LAN multicast beacons (`239.192.0.99:37799`, org-local scope,
-  never routed) carrying `{node, tcp}`, and explicit `HIVEMIND_PEERS`
-  `host:port` entries for NATs and the open internet.
+- **TCP port** (`HIVEMIND_PORT`, or ephemeral for zero config, dual-stack
+  IPv4+IPv6 where the OS allows), discovered two ways: LAN multicast
+  beacons (v4 `239.192.0.99:37799` org-local + v6 `[ff05::99]` site-local,
+  never routed) carrying `{node, tcp, score}`, and explicit
+  `HIVEMIND_PEERS` `host:port` entries for NATs and the open internet.
 - **The dial rule** is identical on every transport: only dial peers
   lexically greater than yourself — every pair has exactly one initiator,
   no election, no master. The connection map is keyed by peer name across
-  transports: one pipe per pair, always; duplicates are dropped with a
-  liveness nudge to the survivor.
+  transports: one pipe per pair, always; duplicates are dropped while the
+  registered link is left strictly alone (probing it would flap
+  healthy-but-quiet pipes).
 - **The handshake exchange is symmetric**: dialer speaks first with
   `{"node": self}`, both sides learn the peer name, the expected owner is
   verified on socket paths, and the first link in each direction is logged
@@ -169,6 +178,10 @@ All relay loops are
 context-canceled on shutdown; nothing leaks goroutines.
 `HIVEMIND_RELAY=off` removes the relay entirely — the mesh is fully
 serverless without it (unix + TCP + multicast need no third party).
+Each long-poll stream lives at most 5 minutes, then reconnects: a
+quietly dead connection can never hold the listener hostage, replays
+are absorbed by the seen-set, and every failure backs off exponentially
+instead of spamming.
 
 ---
 

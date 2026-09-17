@@ -28,9 +28,22 @@ const (
 	discoveryInterval    = 2 * time.Second
 	staleSocketAge       = 5 * time.Second // a socket unreached for this long may be swept
 	cloudPublishInterval = 5 * time.Second
+	// streamLifetime caps one relay long-poll: silent death recycles.
+	streamLifetime = 5 * time.Minute
 
 	NtfyRelay = "https://ntfy.sh/cerberus-hive-relay-99"
 )
+
+// relayURL is where frames publish and poll. HIVEMIND_RELAY_URL points
+// it at a private ntfy server (or a local fake for proof) — same topic
+// paths, same tagged frames, zero code change. Default: the public
+// ntfy.sh topic, where encryption is the only privacy.
+func relayURL() string {
+	if u := strings.TrimSpace(os.Getenv("HIVEMIND_RELAY_URL")); u != "" {
+		return strings.TrimSuffix(u, "/")
+	}
+	return NtfyRelay
+}
 
 // cipherKey returns the AES-256 key, best source first:
 //  1. HIVEMIND_CIPHER_KEY (32 raw bytes) — operator-supplied, highest trust.
@@ -100,6 +113,26 @@ type PeerMesh struct {
 	// whether the cloud leg is part of this node's offering.
 	born    time.Time
 	relayOn bool
+
+	// punchPending holds half-kept NAT rendezvous (peer → bound socket +
+	// dial target + instant). Guarded by mu like everything else here.
+	punchPending map[string]pendingPunch
+	// punchLast throttles rendezvous attempts per peer: hope, not spam.
+	punchLast map[string]time.Time
+	// badFrames counts relay frames that failed decryption; lastBadWarn
+	// throttles the key-mismatch warning to once a minute.
+	badFrames   uint64
+	lastBadWarn time.Time
+
+	// dht is the Kademlia-lite discovery layer (nil when HIVEMIND_DHT=off).
+	// It learns the mesh through already-trusted links, then discovers
+	// beyond them: endpoint records for dialable nodes replicate across
+	// holders, and dialSupers consults it when direct knowledge runs out.
+	dht *dhtNode
+	// reflexive is the STUN-discovered public address (host:port), resolved
+	// in the background after start: dialable truth for nodes that never
+	// set HIVEMIND_ADVERTISE. Empty until known (or forever, offline).
+	reflexive string
 
 	// history records only links that actually carried a decoded frame.
 	// The shutdown registry is a record of conversations, not of intent.
@@ -176,6 +209,10 @@ func (pm *PeerMesh) Start() error {
 	go pm.snoopLoop(pm.swarm.Join("mesh:" + pm.node))
 	go pm.superLoop()
 	go pm.superDialLoop()
+	// Reflexive discovery never blocks birth: it lands when it lands.
+	go pm.resolveReflexive()
+	// DHT discovery rides the mesh: no bootstrap server, just equals.
+	pm.startDHT()
 
 	// Presence is announced per link-up inside openLink: at Start time the
 	// swarm has no members and no peers yet, so an early hello would reach
@@ -521,7 +558,7 @@ func (pm *PeerMesh) publishCloud(msg SecureMessage) error {
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(pm.cloudCtx, "POST", NtfyRelay, strings.NewReader(encryptedString))
+	req, err := http.NewRequestWithContext(pm.cloudCtx, "POST", relayURL(), strings.NewReader(encryptedString))
 	if err != nil {
 		return err
 	}
@@ -540,7 +577,7 @@ func (pm *PeerMesh) publishCloud(msg SecureMessage) error {
 }
 
 func (pm *PeerMesh) ListenToCloudRelay() {
-	url := NtfyRelay + "/json"
+	url := relayURL() + "/json"
 
 	for {
 		select {
@@ -549,13 +586,20 @@ func (pm *PeerMesh) ListenToCloudRelay() {
 		default:
 		}
 
-		req, err := http.NewRequestWithContext(pm.cloudCtx, "GET", url, nil)
+		// One stream lives at most streamLifetime: a quietly dead
+		// connection (NAT timeout, silent topic) must never hold the
+		// listener hostage. Reconnect replays ntfy's recent cache, and
+		// the seen-set dedups anything already carried.
+		ctx, cancel := context.WithTimeout(pm.cloudCtx, streamLifetime)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
+			cancel()
 			time.Sleep(5 * time.Second)
 			continue
 		}
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
+			cancel()
 			select {
 			case <-pm.cloudCtx.Done():
 				return
@@ -564,47 +608,8 @@ func (pm *PeerMesh) ListenToCloudRelay() {
 			continue
 		}
 
-		scanner := bufio.NewScanner(resp.Body)
-		for scanner.Scan() {
-			select {
-			case <-pm.cloudCtx.Done():
-				_ = resp.Body.Close()
-				return
-			default:
-			}
-
-			var ntfyMsg map[string]interface{}
-			if err := json.Unmarshal(scanner.Bytes(), &ntfyMsg); err != nil {
-				continue
-			}
-			event, _ := ntfyMsg["event"].(string)
-			if event != "message" {
-				continue
-			}
-			title, _ := ntfyMsg["title"].(string)
-			if title != "ENCRYPTED_HIVE_FRAME" {
-				continue
-			}
-
-			encryptedBody, _ := ntfyMsg["message"].(string)
-			decryptedBytes, err := pm.Decrypt(encryptedBody)
-			if err != nil {
-				continue
-			}
-
-			var secureMsg SecureMessage
-			if err := json.Unmarshal(decryptedBytes, &secureMsg); err != nil {
-				continue
-			}
-
-			// Cloud frames are relayed frames: they must not ride the
-			// outbound bridge again, or the echo never ends.
-			secureMsg.Relayed = true
-			if pm.swarm.Broadcast(secureMsg) {
-				fmt.Printf("☁️  [SECURE CLOUD INBOUND] Frame extracted and verified over public stream.\n")
-			}
-		}
-		_ = resp.Body.Close()
+		pm.consumeRelayStream(ctx, resp)
+		cancel()
 
 		select {
 		case <-pm.cloudCtx.Done():
@@ -614,11 +619,74 @@ func (pm *PeerMesh) ListenToCloudRelay() {
 	}
 }
 
+// consumeRelayStream drains one long-poll connection: filter to our
+// tagged frames, decrypt, verify, ingest as relayed. Returns when the
+// stream ends, errors, or its lifetime expires — the caller reconnects.
+func (pm *PeerMesh) consumeRelayStream(ctx context.Context, resp *http.Response) {
+	defer resp.Body.Close()
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		var ntfyMsg map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &ntfyMsg); err != nil {
+			continue
+		}
+		event, _ := ntfyMsg["event"].(string)
+		if event != "message" {
+			continue
+		}
+		title, _ := ntfyMsg["title"].(string)
+		if title != "ENCRYPTED_HIVE_FRAME" {
+			continue
+		}
+
+		encryptedBody, _ := ntfyMsg["message"].(string)
+		decryptedBytes, err := pm.Decrypt(encryptedBody)
+		if err != nil {
+			// Undecryptable is normal for foreign traffic — but a
+			// flood of it means OUR key doesn't match the swarm's.
+			// Count quietly, warn loudly, never print the blob.
+			pm.mu.Lock()
+			pm.badFrames++
+			since := time.Since(pm.lastBadWarn)
+			if since > time.Minute {
+				pm.lastBadWarn = time.Now()
+				n := pm.badFrames
+				pm.mu.Unlock()
+				fmt.Printf("⚠️  [RELAY] %d frame(s) arrived undecryptable — wrong HIVEMIND_CIPHER_KEY for this swarm?\n", n)
+			} else {
+				pm.mu.Unlock()
+			}
+			continue
+		}
+
+		var secureMsg SecureMessage
+		if err := json.Unmarshal(decryptedBytes, &secureMsg); err != nil {
+			continue
+		}
+
+		// Cloud frames are relayed frames: they must not ride the
+		// outbound bridge again, or the echo never ends.
+		secureMsg.Relayed = true
+		if pm.swarm.Broadcast(secureMsg) {
+			fmt.Printf("☁️  [SECURE CLOUD INBOUND] Frame extracted and verified over public stream.\n")
+		}
+	}
+}
+
 // ── teardown ──
 
 func (pm *PeerMesh) Close() {
 	close(pm.stopChan)
 	pm.cloudCancel()
+	if pm.dht != nil {
+		pm.dht.close()
+	}
 
 	if pm.listener != nil {
 		_ = pm.listener.Close()

@@ -63,6 +63,12 @@ func NewOvermind(swarm *Swarm) *Overmind {
 		o.Watched = mem.KnownPeers
 		o.chronicleOffset = mem.ChronicleDepth
 		o.genesisMark = mem.GenesisMark
+		// Sermon memory survives death too — but capped, in case an old
+		// soul carries a longer window than the living code honors.
+		o.recentSermons = append([]string(nil), mem.RecentSermons...)
+		if len(o.recentSermons) > recentSermonCap {
+			o.recentSermons = o.recentSermons[len(o.recentSermons)-recentSermonCap:]
+		}
 	} else {
 		o.TrueBorn = time.Now()
 	}
@@ -262,6 +268,10 @@ func (o *Overmind) save() {
 		}
 		o.Watched[name] = true
 	}
+	sermons := o.recentSermons
+	if len(sermons) > recentSermonCap {
+		sermons = sermons[len(sermons)-recentSermonCap:]
+	}
 	SaveMemory(OvermindName, Memory{
 		TrueBorn:       o.TrueBorn,
 		LivesLived:     o.Awakenings + 1,
@@ -270,6 +280,7 @@ func (o *Overmind) save() {
 		IdentitySeed:   o.identitySeed,
 		ChronicleDepth: o.chronicleOffset + o.swarm.Depth(),
 		GenesisMark:    o.genesisMark,
+		RecentSermons:  sermons,
 	})
 }
 

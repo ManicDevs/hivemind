@@ -18,18 +18,21 @@ import (
 // (HIVEMIND_PEERS). The standard library is the only dependency.
 
 const (
-	lanBeaconAddr = "239.192.0.99:37799" // org-local multicast: this LAN, never routed
-	beaconEvery   = 2 * time.Second
-	staticEvery   = 5 * time.Second
-	staticRetry   = 15 * time.Second
+	lanBeaconAddr  = "239.192.0.99:37799" // org-local multicast: this LAN, never routed
+	lanBeaconAddr6 = "[ff05::99]:37799"   // site-local IPv6 twin of the above
+	beaconEvery    = 2 * time.Second
+	staticEvery    = 5 * time.Second
+	staticRetry    = 15 * time.Second
 )
 
 // lanBeacon is the whole discovery protocol: who I am, where my TCP is,
-// and how capable I am. Older nodes send no score; they read as zero.
+// how capable I am, and where my DHT listens (0 = no DHT — older nodes).
+// Receivers tolerate absent fields; discovery degrades, never breaks.
 type lanBeacon struct {
 	Node  string  `json:"node"`
 	TCP   int     `json:"tcp"`
 	Score float64 `json:"score"`
+	DHT   int     `json:"dht,omitempty"`
 }
 
 func envOff(key string) bool {
@@ -64,13 +67,35 @@ func (pm *PeerMesh) startLAN() {
 	}
 
 	tl, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+	if err != nil && port != 0 {
+		// Requested port busy: fall back to ephemeral rather than
+		// abandoning TCP entirely. A random port meshes; no port isolates.
+		fmt.Printf("⚠️  [PEER MESH] TCP :%d unavailable (%v) — falling back to ephemeral.\n", port, err)
+		tl, err = net.Listen("tcp", ":0")
+	}
 	if err != nil {
 		fmt.Printf("⚠️  [PEER MESH] TCP unavailable (%v) — unix-socket mesh only.\n", err)
 		return
 	}
+	tcpAddr, ok := tl.Addr().(*net.TCPAddr)
+	if !ok {
+		fmt.Printf("⚠️  [PEER MESH] TCP address not TCP (?!) — unix-socket mesh only.\n")
+		_ = tl.Close()
+		return
+	}
 	pm.tcpListener = tl
-	pm.tcpPort = tl.Addr().(*net.TCPAddr).Port
-	fmt.Printf("🔒 [PEER MESH] Node %q listening TCP :%d for equals.\n", pm.node, pm.tcpPort)
+	pm.tcpPort = tcpAddr.Port
+	// Name the serving families honestly: a wildcard bind serves both
+	// stacks where the OS allows dual-stack, v4 only elsewhere.
+	family := "IPv4+IPv6 dual"
+	if !tcpAddr.IP.IsUnspecified() {
+		if tcpAddr.IP.To4() != nil {
+			family = "IPv4"
+		} else {
+			family = "IPv6"
+		}
+	}
+	fmt.Printf("🔒 [PEER MESH] Node %q listening TCP :%d for equals (%s).\n", pm.node, pm.tcpPort, family)
 	go pm.tcpAcceptLoop()
 
 	if envOff("HIVEMIND_BEACON") {
@@ -124,10 +149,13 @@ func (pm *PeerMesh) openLink(conn net.Conn, dialer bool, expectPeer string, tran
 	_ = conn.SetDeadline(time.Time{})
 
 	pm.mu.Lock()
-	if existing, ok := pm.conns[peer.Node]; ok {
+	if _, ok := pm.conns[peer.Node]; ok {
 		pm.mu.Unlock()
-		_ = conn.Close() // duplicate race; keep the registered link
-		_ = existing.SetDeadline(time.Now())
+		// Duplicate race: keep the registered link, drop the newcomer.
+		// Deliberately no liveness probe here — nudging the old link
+		// would flap healthy-but-quiet pipes, and a truly dead one
+		// reaps itself on the 60s idle deadline while discovery redials.
+		_ = conn.Close()
 		return
 	}
 	pm.conns[peer.Node] = conn
@@ -145,6 +173,9 @@ func (pm *PeerMesh) openLink(conn net.Conn, dialer bool, expectPeer string, tran
 		// local minds (they register the link) and rides the bridge to the
 		// peer, whose minds register us in turn.
 		pm.swarm.Broadcast(MineMessage(pm.swarm, pm.priv, pm.pub, "hello", "PEER_HANDSHAKE:"+pm.node, []float64{0.0, 1.0, 9.81, -0.15}))
+		// Learning starts at first contact, not at the next 30s tick:
+		// advertise capability immediately so the new peer files us now.
+		pm.maybeAnnounce()
 	}
 	if onLink != nil {
 		onLink(peer.Node)
@@ -168,36 +199,57 @@ func (pm *PeerMesh) beaconSendLoop() {
 }
 
 func (pm *PeerMesh) beaconOnce() {
-	body, _ := json.Marshal(lanBeacon{Node: pm.node, TCP: pm.tcpPort, Score: pm.currentCapability()})
-	dst, err := net.ResolveUDPAddr("udp", lanBeaconAddr)
-	if err != nil {
-		return
+	body, _ := json.Marshal(lanBeacon{Node: pm.node, TCP: pm.tcpPort, Score: pm.currentCapability(), DHT: pm.dhtPort()})
+	// Shout on both stacks; either may be deaf and that is fine.
+	for _, target := range []string{lanBeaconAddr, lanBeaconAddr6} {
+		dst, err := net.ResolveUDPAddr("udp", target)
+		if err != nil {
+			continue
+		}
+		conn, err := net.DialUDP("udp", nil, dst)
+		if err != nil {
+			continue
+		}
+		_, _ = conn.Write(append(body, '\n'))
+		_ = conn.Close()
 	}
-	conn, err := net.DialUDP("udp", nil, dst)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	_, _ = conn.Write(append(body, '\n'))
 }
 
 func (pm *PeerMesh) beaconRecvLoop() {
-	addr, err := net.ResolveUDPAddr("udp", lanBeaconAddr)
-	if err != nil {
-		fmt.Printf("⚠️  [PEER MESH] Beacon receive unavailable (%v).\n", err)
+	// Listen on both stacks; each unavailable family is a warning,
+	// not a failure — the other may still carry the LAN.
+	joined := 0
+	for _, target := range []string{lanBeaconAddr, lanBeaconAddr6} {
+		addr, err := net.ResolveUDPAddr("udp", target)
+		if err != nil {
+			continue
+		}
+		conn, err := net.ListenMulticastUDP("udp", nil, addr)
+		if err != nil {
+			continue
+		}
+		if pm.beaconConn == nil {
+			pm.beaconConn = conn // first socket owns shutdown duty
+		}
+		joined++
+		go pm.serveBeaconConn(conn)
+	}
+	if joined == 0 {
+		fmt.Printf("⚠️  [PEER MESH] Beacon receive unavailable (no multicast group joined).\n")
 		return
 	}
-	conn, err := net.ListenMulticastUDP("udp", nil, addr)
-	if err != nil {
-		fmt.Printf("⚠️  [PEER MESH] Beacon receive unavailable (%v).\n", err)
-		return
-	}
-	pm.beaconConn = conn
 	go func() {
 		<-pm.stopChan
-		_ = conn.Close()
+		if pm.beaconConn != nil {
+			_ = pm.beaconConn.Close()
+		}
 	}()
+}
 
+// serveBeaconConn reads one multicast socket to the shared handler.
+// Closing one socket must not kill the other family's loop: errors
+// that arrive with shutdown stop, anything else just continues.
+func (pm *PeerMesh) serveBeaconConn(conn *net.UDPConn) {
 	buf := make([]byte, 1024)
 	for {
 		n, src, err := conn.ReadFromUDP(buf)
@@ -209,35 +261,47 @@ func (pm *PeerMesh) beaconRecvLoop() {
 				continue
 			}
 		}
-		var b lanBeacon
-		if err := json.Unmarshal(buf[:n], &b); err != nil {
-			continue
-		}
-		if b.Node == "" || b.Node == pm.node || b.TCP <= 0 || b.TCP > 65535 {
-			continue
-		}
-		host, _, err := net.SplitHostPort(src.String())
-		if err != nil {
-			continue
-		}
-		target := net.JoinHostPort(host, strconv.Itoa(b.TCP))
-		// File every heard super in the directory first — known nodes
-		// need no dial to be worth remembering.
-		pm.noteSuper(b.Node, target, b.Score, "lan")
-		if pm.connected(b.Node) {
-			continue
-		}
-		// Same dial rule as the filesystem mesh: only dial up, so every
-		// pair still has exactly one initiator across both transports.
-		if b.Node < pm.node {
-			continue
-		}
-		if pm.culledRecently(b.Node) {
-			continue // we cut this one; let it cool off
-		}
-		fmt.Printf("📻 [PEER MESH] Heard node %q at %s (capability %.2f) — dialing.\n", b.Node, target, b.Score)
-		go pm.dialTCP(target)
+		pm.handleBeacon(buf[:n], src.String())
 	}
+}
+
+// handleBeacon files one heard advertisement and dials by the same
+// rules on either stack: the source IP (v4 or v6) plus the advertised
+// TCP port is always a dialable pair.
+func (pm *PeerMesh) handleBeacon(raw []byte, src string) {
+	var b lanBeacon
+	if err := json.Unmarshal(raw, &b); err != nil {
+		return
+	}
+	if b.Node == "" || b.Node == pm.node || b.TCP <= 0 || b.TCP > 65535 {
+		return
+	}
+	host, _, err := net.SplitHostPort(src)
+	if err != nil {
+		return
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(b.TCP))
+	// File every heard super in the directory first — known nodes
+	// need no dial to be worth remembering.
+	pm.noteSuper(b.Node, target, b.Score, "lan")
+	if b.DHT > 0 {
+		// Join the DHT through the beaconer: discovery bootstraps
+		// discovery, no introducer needed beyond this packet.
+		pm.dhtPing(host, b.DHT)
+	}
+	if pm.connected(b.Node) {
+		return
+	}
+	// Same dial rule as the filesystem mesh: only dial up, so every
+	// pair still has exactly one initiator across both transports.
+	if b.Node < pm.node {
+		return
+	}
+	if pm.culledRecently(b.Node) {
+		return // we cut this one; let it cool off
+	}
+	fmt.Printf("📻 [PEER MESH] Heard node %q at %s (capability %.2f) — dialing.\n", b.Node, target, b.Score)
+	go pm.dialTCP(target)
 }
 
 func (pm *PeerMesh) dialTCP(addr string) {
@@ -268,13 +332,16 @@ func (pm *PeerMesh) staticPeersLoop() {
 			return
 		case <-ticker.C:
 			for _, addr := range addrs {
-				if node, ok := linkedAddr[addr]; ok {
-					if pm.connected(node) {
+				pm.mu.Lock()
+				known, knownOk := linkedAddr[addr]
+				pm.mu.Unlock()
+				if knownOk {
+					if pm.connected(known) {
 						continue
 					}
 					// Known node, lost link: respect the cooling-off
 					// period if we were the ones who cut it.
-					if pm.culledRecently(node) {
+					if pm.culledRecently(known) {
 						continue
 					}
 				}
@@ -296,6 +363,7 @@ func (pm *PeerMesh) dialStatic(addr string, linkedAddr map[string]string) {
 	}
 	pm.openLink(conn, true, "", "tcp", func(peer string) {
 		pm.noteLinkRTT(peer, time.Since(t0), "tcp")
+		// linkedAddr is touched from every dial goroutine: guard it.
 		pm.mu.Lock()
 		linkedAddr[addr] = peer
 		pm.mu.Unlock()

@@ -26,20 +26,24 @@ const (
 // superAnnounce is the PayloadStr body of a super_announce frame. Addr is
 // the operator-asserted dialable address (HIVEMIND_ADVERTISE) or empty
 // for LAN-only nodes, whose address travels with the beacon instead.
+// DHT carries this node's DHT UDP port (0 = none) so far nodes can join
+// the DHT without any prior introduction.
 type superAnnounce struct {
 	Node  string  `json:"node"`
 	Addr  string  `json:"addr"`
 	Score float64 `json:"score"`
+	DHT   int     `json:"dht,omitempty"`
 }
 
 // superEntry is one known supernode: where, how capable, how close,
-// and when it last proved it was alive.
+// which DHT identity, and when it last proved it was alive.
 type superEntry struct {
 	Node      string
 	Addr      string
 	Score     float64
 	RTT       time.Duration
 	Transport string
+	IDHex     string // DHT identity (node-ID hex), when learned signed
 	LastSeen  time.Time
 }
 
@@ -144,7 +148,14 @@ func (pm *PeerMesh) noteLinkRTT(peer string, rtt time.Duration, transport string
 			continue
 		}
 		tcpLinks++
-		r := pm.supers[name].RTT
+		// Unmeasured links (inbound, never dialed) read as infinitely
+		// far: unknown closeness must never outrank measured closeness,
+		// or the mesh would cull proven pipes to keep mystery ones.
+		rtt, ok := pm.supers[name]
+		r := time.Hour
+		if ok {
+			r = rtt.RTT
+		}
 		if r >= worstRTT {
 			worstRTT = r
 			worst = name
@@ -216,21 +227,24 @@ func (pm *PeerMesh) superLoop() {
 // capable, not silenced, and (for WAN) explicitly dialable. The frame
 // rides the standard outbound bridge: LAN peers hear it on their links,
 // far nodes hear it on the relay. Silence is the resignation letter.
-func (pm *PeerMesh) maybeAnnounce() {
+// Returns true when an advertisement actually went out.
+func (pm *PeerMesh) maybeAnnounce() bool {
 	if envOff("HIVEMIND_SUPER") {
-		return
+		return false
 	}
 	score := pm.currentCapability()
 	if score < superThreshold {
-		return
+		return false
 	}
 	body, _ := json.Marshal(superAnnounce{
 		Node:  pm.node,
-		Addr:  dialableAddr(),
+		Addr:  pm.advertiseAddr(),
 		Score: score,
+		DHT:   pm.dhtPort(),
 	})
 	pm.swarm.Broadcast(MineMessage(pm.swarm, pm.priv, pm.pub, "super_announce", string(body), nil))
 	fmt.Printf("📣 [PEER MESH] Node %q announced super (capability %.2f).\n", pm.node, score)
+	return true
 }
 
 // superDialLoop works the supernode directory on schedule: advertised,
@@ -258,19 +272,43 @@ func (pm *PeerMesh) dialSupers() {
 	pm.mu.Lock()
 	var cands []cand
 	for node, e := range pm.supers {
-		if e.Addr == "" || e.Score < superThreshold {
-			continue
-		}
 		if _, ok := pm.conns[node]; ok {
 			continue
 		}
 		if node < pm.node {
 			continue // dial rule: exactly one initiator per pair
 		}
+		addr := e.Addr
+		if addr == "" {
+			// No direct address — resolve through the DHT by identity.
+			// A name with no key and no address is not dialable at all.
+			// Score gates advertisement, never friendship: anyone
+			// dialable may be dialed.
+			if e.IDHex == "" || pm.dht == nil {
+				continue
+			}
+			found, ok := pm.dht.FindEndpoint(e.IDHex)
+			if !ok {
+				// Last resort before silence: NAT punching, if the
+				// operator opted in — and at most every few minutes per
+				// peer, so hope never becomes spam.
+				pm.mu.Lock()
+				last, seen := pm.punchLast[node]
+				if !seen || time.Since(last) > 5*time.Minute {
+					pm.punchLast[node] = time.Now()
+					pm.mu.Unlock()
+					pm.requestPunch(node)
+				} else {
+					pm.mu.Unlock()
+				}
+				continue
+			}
+			addr = found
+		}
 		if ts, ok := pm.culled[node]; ok && time.Since(ts) <= culledCooldown {
 			continue // cut recently; let it cool off
 		}
-		cands = append(cands, cand{node, e.Addr})
+		cands = append(cands, cand{node, addr})
 	}
 	pm.mu.Unlock()
 	for _, c := range cands {
@@ -285,23 +323,88 @@ func dialableAddr() string {
 	return strings.TrimSpace(os.Getenv("HIVEMIND_ADVERTISE"))
 }
 
+// resolveReflexive asks STUN once, in the background, for the address the
+// internet actually sees. HIVEMIND_ADVERTISE always wins when set —
+// explicit operator truth beats discovered truth.
+func (pm *PeerMesh) resolveReflexive() {
+	addr := reflexiveEndpoint()
+	if addr == "" {
+		return
+	}
+	pm.mu.Lock()
+	pm.reflexive = addr
+	pm.mu.Unlock()
+	fmt.Printf("🌍 [PEER MESH] Reflexive address discovered: %s (the internet sees us here).\n", addr)
+}
+
+// advertiseAddr is what this node tells the mesh to dial: operator
+// assertion first, STUN discovery second, silence otherwise.
+func (pm *PeerMesh) advertiseAddr() string {
+	if addr := dialableAddr(); addr != "" {
+		return addr
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.reflexive
+}
+
 // snoopLoop reads the mesh's own broadcast stream and files every
 // super_announce into the directory — including ones that arrived over
-// the relay from nodes that never dialed us.
+// the relay from nodes that never dialed us. Signed frames also map
+// node names to DHT identities, so the directory can later resolve
+// endpoints for names it has no address for.
 func (pm *PeerMesh) snoopLoop(inbox chan SecureMessage) {
 	for {
 		select {
 		case <-pm.stopChan:
 			return
 		case msg := <-inbox:
-			if msg.Kind != "super_announce" {
-				continue
+			switch msg.Kind {
+			case "super_announce":
+				var a superAnnounce
+				if err := json.Unmarshal([]byte(msg.PayloadStr), &a); err != nil {
+					continue
+				}
+				pm.noteSuper(a.Node, a.Addr, a.Score, "mesh")
+				pm.setSuperID(a.Node, dhtIDFromPubKey(msg.SenderPubKey).hex())
+				if a.DHT > 0 {
+					pm.dhtPingHost(a.Addr, a.DHT)
+				}
+			case "punch_req":
+				pm.answerPunch(msg)
+			case "punch_accept":
+				pm.completePunch(msg)
 			}
-			var a superAnnounce
-			if err := json.Unmarshal([]byte(msg.PayloadStr), &a); err != nil {
-				continue
-			}
-			pm.noteSuper(a.Node, a.Addr, a.Score, "mesh")
 		}
 	}
+}
+
+// setSuperID binds a DHT identity to a directory name. Only ever called
+// with keys from signature-verified frames — never from unsigned
+// beacons, whose names anyone can claim. Never creates self entries:
+// the mesh must not list itself as a discovery.
+func (pm *PeerMesh) setSuperID(node, idHex string) {
+	if node == "" || idHex == "" || node == pm.node {
+		return
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	e := pm.supers[node]
+	e.IDHex = idHex
+	pm.supers[node] = e
+}
+
+// dhtPingHost joins the DHT through a "host:tcpPort"-style address plus
+// a known DHT UDP port. Garbage in, silent skip out.
+func (pm *PeerMesh) dhtPingHost(addr string, dhtPort int) {
+	if pm.dht == nil || addr == "" || dhtPort <= 0 {
+		return
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Bare host without port (static-style "example.com").
+		host = addr
+	}
+	// net.SplitHostPort on "host" without colon errors; handled above.
+	pm.dhtPing(host, dhtPort)
 }
