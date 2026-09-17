@@ -354,6 +354,10 @@ func (s *Swarm) LogHardwareTrauma(pubKey string, pain, stress float64, src strin
 // in human terms, state hash, per-mind telemetry with provenance, and the
 // live pendulum plot.
 func (s *Swarm) HiveReport() {
+	// One voice at a time: concurrent link chatter must never cut
+	// through the middle of the report (or the shutdown registry).
+	reportMu.Lock()
+	defer reportMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -453,6 +457,11 @@ func (s *Swarm) HiveReport() {
 	}
 	fmt.Println("└────────────────────────────────────────────────────────────────────────┘")
 }
+
+// reportMu serializes terminal reports (hive diagnostics, shutdown
+// registry) against async mesh chatter. s.mu protects data; this one
+// protects the reader's eyes.
+var reportMu sync.Mutex
 
 func clampInt(val, min, max int) int {
 	if val < min {

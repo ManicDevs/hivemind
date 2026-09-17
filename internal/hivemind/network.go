@@ -755,6 +755,8 @@ func (pm *PeerMesh) Close() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 
+	reportMu.Lock()
+	defer reportMu.Unlock()
 	fmt.Println("\n🗃️  [PEER MESH SHUTDOWN REGISTRY] Links that actually carried frames this run:")
 	if len(pm.history) == 0 {
 		fmt.Println("     (none — no peer conversations took place)")
