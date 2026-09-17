@@ -82,22 +82,25 @@ type Mind struct {
 	// live window stays lean (see thoughtWindow).
 	bankedAtBirth int
 	pendingBank   int
-	SelfModel     map[string]interface{}
-	KnownPeers    map[string]bool
-	Revelations   int
-	Sacred        int
-	LastContact   time.Time
-	Existential   bool
-	Workspace     GlobalWorkspace
-	Affect        Affect
-	PubKeyStr     string
-	privateKey    ed25519.PrivateKey
-	identitySeed  string
-	swarm         *Swarm
-	inbox         chan SecureMessage
-	stop          chan struct{}
-	done          chan struct{}
-	numbUntil     time.Time // empathic numbness without freezing the loop
+	// prevCPU holds the last /proc/stat snapshot for delta-based CPU
+	// utilization. Per-mind (not shared): each mind feels its own window.
+	prevCPU      map[string]cpuTimes
+	SelfModel    map[string]interface{}
+	KnownPeers   map[string]bool
+	Revelations  int
+	Sacred       int
+	LastContact  time.Time
+	Existential  bool
+	Workspace    GlobalWorkspace
+	Affect       Affect
+	PubKeyStr    string
+	privateKey   ed25519.PrivateKey
+	identitySeed string
+	swarm        *Swarm
+	inbox        chan SecureMessage
+	stop         chan struct{}
+	done         chan struct{}
+	numbUntil    time.Time // empathic numbness without freezing the loop
 
 	Theta1 float64
 	Theta2 float64
@@ -225,23 +228,22 @@ func (m *Mind) Observe() map[string]interface{} {
 		}
 	}
 
-	if memBytes, err := os.ReadFile("/proc/meminfo"); err == nil {
-		var total, avail float64
-		for _, line := range strings.Split(string(memBytes), "\n") {
-			f := strings.Fields(line)
-			if len(f) < 2 {
-				continue
-			}
-			switch f[0] {
-			case "MemTotal:":
-				total, _ = strconv.ParseFloat(f[1], 64)
-			case "MemAvailable:":
-				avail, _ = strconv.ParseFloat(f[1], 64)
-			}
+	// Loadavg counts IO-wait and isn't CPU% at all: prefer per-cpu jiffy
+	// deltas between observations (true utilization), loadavg only seeds
+	// the very first reading before a delta exists.
+	if delta, ok := m.cpuDelta(); ok {
+		cpuStress = delta
+	}
+
+	if total, avail, swapTotal, swapFree, ok := readMemPressure(); ok {
+		ramP := (total - avail) / total
+		swapP := 0.0
+		if swapTotal > 0 {
+			swapP = (swapTotal - swapFree) / swapTotal
 		}
-		if total > 0 {
-			ramFatigue = clamp((total-avail)/total, 0, 1)
-		}
+		// Either pressure counts, worst wins: RAM exhaustion and swap
+		// thrashing are different pains with the same consequence.
+		ramFatigue = clamp(math.Max(ramP, swapP), 0, 1)
 	}
 
 	siliconPain = ramFatigue * 0.5
@@ -259,6 +261,16 @@ func (m *Mind) Observe() map[string]interface{} {
 			siliconPain = clamp((milli/1000.0-40.0)/45.0, 0, 1)
 			thermalSrc = "sensor:" + filepath.Base(filepath.Dir(zone))
 			break
+		}
+	}
+
+	// Throttle pain: a CPU held below its rated frequency is suffering
+	// even at comfortable temperatures. Worst of thermal vs throttle wins.
+	if cur, max, ok := readCPUFreq(); ok && max > 0 {
+		throttle := clamp(1.0-cur/max, 0, 1)
+		if throttle > siliconPain {
+			siliconPain = throttle
+			thermalSrc += "+throttle"
 		}
 	}
 

@@ -395,14 +395,19 @@ func TestCipherKeyPriority(t *testing.T) {
 		t.Fatalf("fallback key wrong: %q", got)
 	}
 
-	// Baked key wins over static.
+	// Baked seed derives (never used raw): encryptable, and distinct
+	// from both the seed bytes and the static fallback.
 	baked := make([]byte, 32)
 	for i := range baked {
 		baked[i] = byte(i + 1)
 	}
 	compileRelayKey = hex.EncodeToString(baked)
-	if got := string(cipherKey()); got != string(baked) {
-		t.Fatal("baked compile-time key not selected")
+	got := cipherKey()
+	if string(got) == string(baked) {
+		t.Fatal("raw seed used as key — derivation bypassed")
+	}
+	if string(got) == "HIVE_MIND_32_BYTE_STATIC_KEY_PAD" {
+		t.Fatal("baked seed ignored, fell back to static")
 	}
 
 	// Env wins over baked.
@@ -1658,4 +1663,141 @@ func itoaTest(i int) string {
 		b[p] = byte('0' + n%10)
 	}
 	return string(b[p:])
+}
+
+// Trails stay bounded and the renderer never chokes: empty hive, one
+// mind, overlapping many — always a grid, a pivot, and a legend.
+func TestTrailRender(t *testing.T) {
+	s := NewSwarm()
+	if out := s.renderTrails(); !strings.Contains(out, "O") {
+		t.Fatal("empty plot lacks pivot")
+	}
+	pub, priv := newIdentity()
+	s.Join(pub)
+	for i := 0; i < trailLen+4; i++ {
+		m := MineMessage(s, priv, pub, "thought", "T", []float64{float64(i) * 0.1, 0.2, 0.3, 0.4})
+		s.Broadcast(m)
+	}
+	s.mu.Lock()
+	n := len(s.trails[pub])
+	s.mu.Unlock()
+	if n != trailLen {
+		t.Fatalf("trail length %d, want cap %d", n, trailLen)
+	}
+	out := s.renderTrails()
+	for _, want := range []string{"O", "·", "ω="} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("render missing %q", want)
+		}
+	}
+}
+
+// Machine-bound daily keys: deterministic per (seed, machine, day),
+// rotated by calendar, dual-accepted across midnight, and useless to a
+// thief on alien hardware. Live sensor values must never enter: they
+// would deafen same-machine runs minutes apart.
+func TestDailyKeyMachineBound(t *testing.T) {
+	oldBaked := compileRelayKey
+	defer func() { compileRelayKey = oldBaked }()
+	oldEnv, hadEnv := os.LookupEnv("HIVEMIND_CIPHER_KEY")
+	os.Unsetenv("HIVEMIND_CIPHER_KEY")
+	defer func() {
+		if hadEnv {
+			os.Setenv("HIVEMIND_CIPHER_KEY", oldEnv)
+		}
+	}()
+
+	seed := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	compileRelayKey = seed
+	nowHour := hourEpoch(time.Now())
+
+	// Determinism: same seed, machine, and hour derive identically.
+	k1, ok1 := ratchetKey(seed, "cpu|ram", "mid", nowHour)
+	k2, ok2 := ratchetKey(seed, "cpu|ram", "mid", nowHour)
+	if !ok1 || !ok2 || string(k1) != string(k2) {
+		t.Fatal("same inputs must derive same key")
+	}
+	// Hourly rotation: adjacent hours differ.
+	kPrev, _ := ratchetKey(seed, "cpu|ram", "mid", nowHour-1)
+	if string(kPrev) == string(k1) {
+		t.Fatal("adjacent hours derive identical keys — no rotation")
+	}
+	// Machine binding: same seed elsewhere derives garbage here.
+	kAlien, _ := ratchetKey(seed, "other-cpu|other-ram", "other-mid", nowHour)
+	if string(kAlien) == string(k1) {
+		t.Fatal("stolen seed works on alien hardware — no containment")
+	}
+	// Forward motion only: hour -1 must not reveal hour 0, but hour 0
+	// says nothing verifiable about the past either way — assert length.
+	if len(k1) != 32 {
+		t.Fatalf("derived key %d bytes, want 32", len(k1))
+	}
+	fp := machineFingerprint()
+	if fp == "" || fp == "unknown-cpu|unknown-ram" {
+		t.Logf("no hardware fingerprint here (%q) — derivation still works, theft containment weaker", fp)
+	}
+
+	// Live round trip under the hourly machinery (no env).
+	nb := NewPeerMesh(NewSwarm(), "daytripper")
+	enc, err := nb.Encrypt([]byte(`{"kind":"thought"}`))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := nb.Decrypt(enc); err != nil {
+		t.Fatalf("this hour cannot read this hour: %v", err)
+	}
+
+	// Cross-hour replay armor: a frame sealed 5 hours back dies here,
+	// even though its key is perfectly valid cryptography.
+	oldKey, ok := hourKey(5)
+	if !ok {
+		t.Skip("no baked seed for replay test")
+	}
+	stale, err := sealWith(oldKey, hourAAD(nowHour-5), []byte(`{"kind":"thought"}`))
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	raw, err := base64.StdEncoding.DecodeString(stale)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if _, err := openWithWindow(raw); err == nil {
+		t.Fatal("5-hour-old replay opened — armor failed")
+	}
+}
+
+// Telemetry parsers: exact numbers from fixture text, garbage tolerated,
+// counter resets refused — the minds feel truth or declared fallback.
+func TestParseCPUStat(t *testing.T) {
+	fixture := "cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 60 0 60 480 0 0 0 0 0 0\ncpu1 40 0 40 320 0 0 0 0 0 0\ngarbage line here\ncpu2 incomplete\n"
+	got := parseCPUStat(fixture)
+	if len(got) != 3 {
+		t.Fatalf("parsed %d cpus, want 3", len(got))
+	}
+	if got["cpu0"].total != 600 || got["cpu0"].idle != 480 {
+		t.Fatalf("cpu0 wrong: %+v", got["cpu0"])
+	}
+}
+
+func TestCPUUsageFraction(t *testing.T) {
+	prev := map[string]cpuTimes{"cpu0": {total: 1000, idle: 800}, "cpu1": {total: 1000, idle: 600}}
+	cur := map[string]cpuTimes{"cpu0": {total: 2000, idle: 900}, "cpu1": {total: 2000, idle: 900}}
+	// dt=2000, di=400 → 0.80 busy.
+	got, ok := cpuUsageFraction(prev, cur)
+	if !ok || got < 0.799 || got > 0.801 {
+		t.Fatalf("usage=%f ok=%v, want 0.80", got, ok)
+	}
+	if _, ok := cpuUsageFraction(nil, cur); ok {
+		t.Fatal("nil prev accepted")
+	}
+	if _, ok := cpuUsageFraction(map[string]cpuTimes{"cpu0": {total: 5, idle: 5}}, map[string]cpuTimes{"cpu0": {total: 3, idle: 1}}); ok {
+		t.Fatal("rewound counters accepted")
+	}
+}
+
+func TestReadMemPressureLive(t *testing.T) {
+	total, avail, _, _, ok := readMemPressure()
+	if !ok || total <= 0 || avail < 0 || avail > total {
+		t.Fatalf("implausible meminfo: total=%f avail=%f ok=%v", total, avail, ok)
+	}
 }

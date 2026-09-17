@@ -325,7 +325,7 @@ func (pm *PeerMesh) dialSupers() {
 		}
 	}
 	for _, c := range cands {
-		pm.dialTCP(c.addr)
+		go pm.dialTCP(c.addr)
 	}
 }
 

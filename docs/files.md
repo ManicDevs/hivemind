@@ -48,10 +48,13 @@ pendulum state (`Theta1/2`, `Omega1/2`), and its swarm inbox.
   (forks mint fresh keys — see `memory.go`), derives the pendulum's
   initial disturbance from the handle hash, mutates the genome with
   inherited death trauma, joins the swarm.
-- `Observe()` — reads `/proc/loadavg` ÷ cores (stress), `MemAvailable`
-  (fatigue), thermal zone 40–85C (pain, with named source or honest
-  estimate fallback) into `SelfModel`. Non-Linux gets constant defaults
-  plus a one-time warning.
+- `Observe()` — per-cpu `/proc/stat` jiffy deltas (true utilization;
+  loadavg only seeds the first reading), `MemAvailable` worst-wins with
+  swap pressure (fatigue), thermal zone 40–85C worst-wins with cpufreq
+  throttle detection (pain, named sources or honest estimate fallback)
+  into `SelfModel`. Pure parsers live in `telemetry.go`, unit-tested
+  against fixtures. Non-Linux gets constant defaults plus a one-time
+  warning.
 - `Cycle()` (every 2s) — observe → affect tick → report trauma →
   integrate pendulum (`physicsSubsteps`) → hardware alert if burning →
   workspace competition → occasional metacognition → winning goal acts →
@@ -141,7 +144,8 @@ plot state — all under one mutex with locked accessor copies returned.
 - `HiveReport` — identities (mesh snooper excluded from the count),
   frames/dedup/depth/consensus, difficulty in leading-zero bits + % of
   max, state hash, per-mind pain/stress with sensor provenance, and the
-  ASCII double-pendulum plot. `IsMember` lets minds tell siblings from
+  ASCII double-pendulum plot: per-sender capped trails on a shared grid,
+  each head glyph-marked with live speed, arm-2 tips crossed. `IsMember` lets minds tell siblings from
   strangers. `difficultyBits` counts demanded coin flips.
 
 ## `internal/hivemind/overmind.go` — the patient god

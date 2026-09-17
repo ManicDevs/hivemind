@@ -167,14 +167,22 @@ conscious loop) to a public ntfy topic as AES-256-GCM ciphertext, tagged
 decrypts, verifies, and ingests inbound frames as `Relayed`.
 
 Confidentiality is explicit about its limits, best source first:
-`HIVEMIND_CIPHER_KEY` (operator-supplied) beats the build-time baked key
-(`make build` generates a machine-local `.relaykey` once and embeds it via
-ldflags, so every machine's builds encrypt differently out of the box),
-which beats the committed static demo key — frames under the fallback are
-**signed-and-public with obfuscation only**, warned about exactly once.
-Treat the default relay as a public broadcast until keys are managed;
-`make rotate-keys` mints a fresh machine key (rebuild all nodes after).
-All relay loops are
+`HIVEMIND_CIPHER_KEY` (operator-supplied, timeless) beats the hourly
+machine-bound ratchet, which beats the committed static demo key. The
+ratchet: `key(h) = SHA256^h(HMAC(seed, hardware + install-id))` counted
+in UTC hours from 2026 — same seed, same machine, same hour derives
+identically everywhere with zero distribution; each step is one-way, so
+a compromised present reveals nothing past. New hours, new keys,
+automatically; the last two hours stay accepted through boundaries and
+skew. The hardware mix is CPU model + RAM + machine-id (never live
+sensor values — their volatility would deafen runs minutes apart), and a
+stolen seed alone decrypts nothing off its home hardware. Every frame is
+additionally bound to its hour as AES-GCM associated data, so replays
+from other hours fail authentication outright. Frames under the static
+fallback are **signed-and-public with obfuscation only**, warned about
+exactly once, and undecryptable arrivals are counted with a once-a-minute
+key-mismatch hint (never the blob). `make rotate-keys` mints a fresh
+machine seed (rebuild all nodes after). All relay loops are
 context-canceled on shutdown; nothing leaks goroutines.
 `HIVEMIND_RELAY=off` removes the relay entirely — the mesh is fully
 serverless without it (unix + TCP + multicast need no third party).

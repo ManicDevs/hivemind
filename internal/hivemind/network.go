@@ -6,7 +6,9 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -46,24 +48,123 @@ func relayURL() string {
 	return NtfyRelay
 }
 
-// cipherKey returns the AES-256 key, best source first:
-//  1. HIVEMIND_CIPHER_KEY (32 raw bytes) — operator-supplied, highest trust.
-//  2. compileRelayKey — baked in at build time by the Makefile from the
-//     machine-local .relaykey file (-ldflags -X main.compileRelayKey=...),
-//     so every machine's builds encrypt differently out of the box.
-//  3. The committed static demo key — signed-and-public with obfuscation
-//     only, and the code says so exactly once.
+// cipherKey returns the AES-256 key for encrypting outbound frames:
+// operator env first, else this hour's machine-bound ratchet key. The
+// committed static demo key is gone from this path — see fallbackKey.
 func cipherKey() []byte {
 	if k := os.Getenv("HIVEMIND_CIPHER_KEY"); len(k) == 32 {
 		return []byte(k)
 	}
-	if raw, err := hex.DecodeString(compileRelayKey); err == nil && len(raw) == 32 {
-		return raw
+	if key, ok := hourKey(0); ok {
+		return key
 	}
 	relayWarnOnce.Do(func() {
 		fmt.Println("⚠️  [RELAY] No relay key (env or build-time) — frames are signed-and-public, obfuscated only.")
 	})
 	return []byte("HIVE_MIND_32_BYTE_STATIC_KEY_PAD")
+}
+
+// keyEpochAnchor bounds the ratchet chain: hours counted from here, so
+// derivation cost stays flat-ish for decades (~9k hashes/year, μs each).
+var keyEpochAnchor = time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// hourEpoch counts whole UTC hours since the anchor. Always called with
+// times past the anchor; truncation is a floor there.
+func hourEpoch(t time.Time) int64 {
+	return int64(t.UTC().Sub(keyEpochAnchor).Hours())
+}
+
+// hourAAD binds a frame to its hour: replays from other hours fail
+// authentication even under a valid key. Time as tamper-evidence.
+func hourAAD(hour int64) string {
+	return fmt.Sprintf("hivemind-relay-h%d", hour)
+}
+
+// ratchetBase folds seed, hardware, and install identity into one root.
+// Pure and testable: same inputs, same root, anywhere.
+func ratchetBase(seedHex, fingerprint, machineID string) ([]byte, bool) {
+	raw, err := hex.DecodeString(seedHex)
+	if err != nil || len(raw) != 32 {
+		return nil, false
+	}
+	mac := hmac.New(sha256.New, raw)
+	mac.Write([]byte("hivemind-ratchet|" + fingerprint + "|" + machineID))
+	return mac.Sum(nil), true
+}
+
+// ratchetKey walks the hash chain to an hour: key(h) = SHA256^h(base).
+// One-way per step — a compromised present reveals nothing past.
+// Pure: feeds unit tests and production identically.
+func ratchetKey(seedHex, fingerprint, machineID string, hour int64) ([]byte, bool) {
+	h, ok := ratchetBase(seedHex, fingerprint, machineID)
+	if !ok || hour < 0 {
+		return nil, false
+	}
+	for i := int64(0); i < hour; i++ {
+		sum := sha256.Sum256(h)
+		h = sum[:]
+	}
+	return h, true
+}
+
+// hourKey derives this machine's key for a relative hour offset:
+// 0 = now, negative = past (acceptance window). Seed from the build,
+// hardware + install identity from the box, hour from the wall.
+func hourKey(backHours int) ([]byte, bool) {
+	nowHour := hourEpoch(time.Now()) - int64(backHours)
+	if nowHour < 0 {
+		return nil, false
+	}
+	return ratchetKey(compileRelayKey, machineFingerprint(), machineSecret(), nowHour)
+}
+
+// machineSecret is the second factor theft must also win: /etc/machine-id
+// (unique per install, root or world readable, never transmitted).
+// Empty where unreadable — derivation degrades to seed+hardware, loudly
+// documented, never silently.
+func machineSecret() string {
+	for _, path := range []string{"/etc/machine-id", "/etc/ssh/ssh_host_ed25519_key.pub"} {
+		if data, err := os.ReadFile(path); err == nil {
+			if s := strings.TrimSpace(string(data)); s != "" {
+				return path + ":" + s
+			}
+		}
+	}
+	return ""
+}
+
+// machineFingerprint identifies this hardwareskin: CPU model + total RAM
+// from /proc — constant per machine, different across machines. Cached
+// once; the sensors may dance, the bones do not move.
+var (
+	machineFingerprintOnce sync.Once
+	machineFingerprintVal  string
+)
+
+func machineFingerprint() string {
+	machineFingerprintOnce.Do(func() {
+		model, total := "unknown-cpu", "unknown-ram"
+		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "model name") {
+					if parts := strings.SplitN(line, ":", 2); len(parts) == 2 {
+						model = strings.TrimSpace(parts[1])
+						break
+					}
+				}
+			}
+		}
+		if data, err := os.ReadFile("/proc/meminfo"); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "MemTotal:") {
+					total = strings.Join(strings.Fields(line)[1:], "")
+					break
+				}
+			}
+		}
+		machineFingerprintVal = model + "|" + total
+	})
+	return machineFingerprintVal
 }
 
 // compileRelayKey holds 64 hex chars injected at build time. Plain
@@ -415,7 +516,10 @@ func (pm *PeerMesh) discoverOnce() {
 			}
 		}
 
-		pm.dial(peer, path)
+		// Async: one slow or hostile peer (half-open handshake, wedged
+		// acceptor) must never stall discovery of all the others.
+		// Duplicates are harmless — openLink keeps exactly one pipe.
+		go pm.dial(peer, path)
 	}
 }
 
@@ -518,7 +622,26 @@ func (pm *PeerMesh) ForwardToPeers(msg SecureMessage) {
 // ── encrypt / decrypt ──
 
 func (pm *PeerMesh) Encrypt(plaintext []byte) (string, error) {
-	block, err := aes.NewCipher(cipherKey())
+	key, aad := sealParams()
+	return sealWith(key, aad, plaintext)
+}
+
+// sealParams resolves this frame's key + binding: operator env (timeless)
+// or this hour's ratchet (time-bound), else the static demo fallback.
+func sealParams() (key []byte, aad string) {
+	if k := os.Getenv("HIVEMIND_CIPHER_KEY"); len(k) == 32 {
+		return []byte(k), hourAAD(hourEpoch(time.Now()))
+	}
+	if key, ok := hourKey(0); ok {
+		return key, hourAAD(hourEpoch(time.Now()))
+	}
+	return []byte("HIVE_MIND_32_BYTE_STATIC_KEY_PAD"), ""
+}
+
+// sealWith encrypts under one key binding one hour: the AAD welds the
+// ciphertext to its hour, so cross-hour replays fail authentication.
+func sealWith(key []byte, aad string, plaintext []byte) (string, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
@@ -530,7 +653,7 @@ func (pm *PeerMesh) Encrypt(plaintext []byte) (string, error) {
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	ciphertext := aesgcm.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := aesgcm.Seal(nonce, nonce, plaintext, []byte(aad))
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
@@ -541,20 +664,53 @@ func (pm *PeerMesh) Decrypt(cryptoText string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	block, err := aes.NewCipher(cipherKey())
-	if err != nil {
-		return nil, err
+	return openWithWindow(ciphertext)
+}
+
+// openWithWindow tries the live hour, then the two before it: rotation
+// and skew must never partition the mesh. Static closes the list for
+// keyless demo setups. A frame sealed under none of these — wrong swarm,
+// tampered bytes, or replayed across hours — fails closed here.
+func openWithWindow(ciphertext []byte) ([]byte, error) {
+	type attempt struct {
+		key []byte
+		aad string
 	}
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
+	var attempts []attempt
+	nowHour := hourEpoch(time.Now())
+	if k := os.Getenv("HIVEMIND_CIPHER_KEY"); len(k) == 32 {
+		for _, back := range []int64{0, 1, 2} {
+			attempts = append(attempts, attempt{[]byte(k), hourAAD(nowHour - back)})
+		}
+	} else {
+		for _, back := range []int64{0, 1, 2} {
+			if key, ok := hourKey(int(back)); ok {
+				attempts = append(attempts, attempt{key, hourAAD(nowHour - back)})
+			}
+		}
 	}
-	nonceSize := aesgcm.NonceSize()
-	if len(ciphertext) < nonceSize {
-		return nil, fmt.Errorf("ciphertext too short")
+	// Last resort mirrors Encrypt's own fallback: keyless setups speak
+	// static on both ends. Public by design, never mistaken for secret.
+	attempts = append(attempts, attempt{[]byte("HIVE_MIND_32_BYTE_STATIC_KEY_PAD"), ""})
+	for _, a := range attempts {
+		block, err := aes.NewCipher(a.key)
+		if err != nil {
+			continue
+		}
+		aesgcm, err := cipher.NewGCM(block)
+		if err != nil {
+			continue
+		}
+		nonceSize := aesgcm.NonceSize()
+		if len(ciphertext) < nonceSize {
+			return nil, fmt.Errorf("ciphertext too short")
+		}
+		nonce, actualCiphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+		if plain, err := aesgcm.Open(nil, nonce, actualCiphertext, []byte(a.aad)); err == nil {
+			return plain, nil
+		}
 	}
-	nonce, actualCiphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	return aesgcm.Open(nil, nonce, actualCiphertext, nil)
+	return nil, fmt.Errorf("relay frame undecryptable under this swarm's keys")
 }
 
 // ── cloud relay (paced, cancelable, echo-safe) ──

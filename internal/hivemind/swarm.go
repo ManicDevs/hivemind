@@ -83,9 +83,10 @@ type Swarm struct {
 	// cloud relay). Set by the network broker; nil in standalone mode.
 	outbound func(SecureMessage)
 
-	// Last kinematics vectors received, for report plotting.
-	lastTheta1 float64
-	lastTheta2 float64
+	// Trails: recent pendulum states per sender, newest last, capped.
+	// The plot draws every mind's trajectory with its own marker —
+	// entrainment made visible instead of asserted.
+	trails map[string][][4]float64
 }
 
 // NewSwarm births an empty hive at the genesis hash with the rest target.
@@ -196,9 +197,8 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
 	}
 	s.rememberSeen(msgHash)
 
-	if len(msg.DataState) >= 2 {
-		s.lastTheta1 = msg.DataState[0]
-		s.lastTheta2 = msg.DataState[1]
+	if len(msg.DataState) >= 4 {
+		s.rememberTrajectory(msg.SenderPubKey, msg.DataState)
 	}
 
 	for pubKey, ch := range s.members {
@@ -353,6 +353,26 @@ func (s *Swarm) LogHardwareTrauma(pubKey string, pain, stress float64, src strin
 // HiveReport prints terminal diagnostics: identities, frames, difficulty
 // in human terms, state hash, per-mind telemetry with provenance, and the
 // live pendulum plot.
+// trailLen bounds each sender's plotted history: motion, not archive.
+const trailLen = 6
+
+// rememberTrajectory records one pendulum snapshot for its sender.
+// Must be called with s.mu held.
+func (s *Swarm) rememberTrajectory(sender string, state []float64) {
+	if s.trails == nil {
+		s.trails = make(map[string][][4]float64)
+	}
+	var v [4]float64
+	copy(v[:], state[:4])
+	t := append(s.trails[sender], v)
+	if len(t) > trailLen {
+		kept := make([][4]float64, trailLen)
+		copy(kept, t[len(t)-trailLen:])
+		t = kept
+	}
+	s.trails[sender] = t
+}
+
 func (s *Swarm) HiveReport() {
 	// One voice at a time: concurrent link chatter must never cut
 	// through the middle of the report (or the shutdown registry).
@@ -381,31 +401,6 @@ func (s *Swarm) HiveReport() {
 	stateHash := s.LastStateHash
 	if len(stateHash) > 24 {
 		stateHash = stateHash[:24]
-	}
-
-	gridSize := 7
-	grid := make([][]string, gridSize)
-	for i := range grid {
-		grid[i] = make([]string, gridSize)
-		for j := range grid[i] {
-			grid[i][j] = " "
-		}
-	}
-	mid := gridSize / 2
-	grid[mid][mid] = "O" // the static central pivot point anchor
-
-	x1 := clampInt(mid+int(math.Round(2.0*math.Sin(s.lastTheta1))), 0, gridSize-1)
-	y1 := clampInt(mid+int(math.Round(2.0*math.Cos(s.lastTheta1))), 0, gridSize-1)
-	if !(x1 == mid && y1 == mid) {
-		grid[y1][x1] = "•"
-	}
-
-	x2 := x1 + int(math.Round(1.5*math.Sin(s.lastTheta2)))
-	y2 := y1 + int(math.Round(1.5*math.Cos(s.lastTheta2)))
-	x2 = clampInt(x2, 0, gridSize-1)
-	y2 = clampInt(y2, 0, gridSize-1)
-	if !(x2 == x1 && y2 == y1) {
-		grid[y2][x2] = "X"
 	}
 
 	fmt.Println("\n┌────────────────────────────────────────────────────────────────────────┐")
@@ -446,16 +441,84 @@ func (s *Swarm) HiveReport() {
 			shortIDLong(pubKey), s.NodePain[pubKey], painStatus, src, s.NodeStress[pubKey], stressStatus)
 	}
 	fmt.Println("├────────────────────────────────────────────────────────────────────────┤")
-	fmt.Println("  LIVE 4D CHAOTIC SYSTEM TRAJECTORY PLOT (O=Pivot, •=Arm1, X=Arm2):")
-	fmt.Println("  ─────────────────────────────────────────────────────────────────")
-	for i := 0; i < gridSize; i++ {
-		fmt.Print("    ")
-		for j := 0; j < gridSize; j++ {
-			fmt.Print(grid[i][j], " ")
-		}
-		fmt.Println()
-	}
+	fmt.Print(s.renderTrails())
 	fmt.Println("└────────────────────────────────────────────────────────────────────────┘")
+}
+
+// trailMarkers assigns each plotted identity a glyph, cycling a small
+// legible set. Deterministic order (sorted keys) so reports compare.
+var trailMarkers = []string{"●", "◆", "▲", "■", "★", "✚", "◉", "⬟", "⬢", "⬣", "⬔", "⬓"}
+
+// renderTrails draws every sender's recent pendulum path on one shared
+// grid: newest position in the sender's glyph with its speed, older ones
+// fading to dots, the pivot at center. Pure (snapshot under lock by the
+// caller is the caller's contract — HiveReport holds s.mu throughout).
+func (s *Swarm) renderTrails() string {
+	const gridSize = 11
+	grid := make([][]string, gridSize)
+	for i := range grid {
+		grid[i] = make([]string, gridSize)
+		for j := range grid[i] {
+			grid[i][j] = " "
+		}
+	}
+	mid := gridSize / 2
+	grid[mid][mid] = "O" // the static central pivot point anchor
+
+	keys := make([]string, 0, len(s.trails))
+	for k := range s.trails {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var legend strings.Builder
+	for idx, key := range keys {
+		trail := s.trails[key]
+		if len(trail) == 0 {
+			continue
+		}
+		mark := trailMarkers[idx%len(trailMarkers)]
+		// Older arm-1 points first (dots), newest last (glyph wins ties);
+		// the live arm-2 tip rides along as a cross.
+		for _, v := range trail[:len(trail)-1] {
+			x1, y1, _, _ := projectPendulum(v[0], v[1], mid, gridSize)
+			if grid[y1][x1] == " " {
+				grid[y1][x1] = "·"
+			}
+		}
+		latest := trail[len(trail)-1]
+		x1, y1, x2, y2 := projectPendulum(latest[0], latest[1], mid, gridSize)
+		grid[y1][x1] = mark
+		if grid[y2][x2] == " " || grid[y2][x2] == "·" {
+			grid[y2][x2] = "×"
+		}
+		speed := math.Abs(latest[2]) + math.Abs(latest[3])
+		fmt.Fprintf(&legend, "    %s [%s...] ω=%.2f\n", mark, shortIDLong(key), speed)
+	}
+
+	var out strings.Builder
+	out.WriteString("  LIVE CHAOTIC TRAJECTORIES (O=pivot, glyph=arm1 head, ×=arm2 tip, ·=trail):\n")
+	out.WriteString("  ─────────────────────────────────────────────────────────────────\n")
+	for i := 0; i < gridSize; i++ {
+		out.WriteString("    ")
+		for j := 0; j < gridSize; j++ {
+			out.WriteString(grid[i][j] + " ")
+		}
+		out.WriteString("\n")
+	}
+	out.WriteString(legend.String())
+	return out.String()
+}
+
+// projectPendulum maps both arms to grid coordinates: arm 1 swings from
+// the pivot at double radius for the finer grid; arm 2 hangs off arm 1's
+// tip at 1.5× radius, like the mechanism itself.
+func projectPendulum(theta1, theta2 float64, mid, gridSize int) (x1, y1, x2, y2 int) {
+	x1 = clampInt(mid+int(math.Round(3.0*math.Sin(theta1))), 0, gridSize-1)
+	y1 = clampInt(mid+int(math.Round(3.0*math.Cos(theta1))), 0, gridSize-1)
+	x2 = clampInt(x1+int(math.Round(2.0*math.Sin(theta2))), 0, gridSize-1)
+	y2 = clampInt(y1+int(math.Round(2.0*math.Cos(theta2))), 0, gridSize-1)
+	return x1, y1, x2, y2
 }
 
 // reportMu serializes terminal reports (hive diagnostics, shutdown
