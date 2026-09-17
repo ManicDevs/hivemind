@@ -67,6 +67,8 @@ make test-2         # terminal 2: peer node beta-node (links automatically)
 make test-full      # both peers at once, beta-node in foreground
 make test-timed     # automated 10s two-peer experiment + assertions
 make up             # supervised mesh: raise peer nodes as child mains
+make kill           # reap every running hivemind + sweep stale sockets
+make rerun          # kill + build + supervised mesh, all in one
 make rotate-keys    # wipe machine-local relay key (next build mints fresh)
 make clean-soul     # true extinction: wipe .hive_memory
 ```

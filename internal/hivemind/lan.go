@@ -228,9 +228,9 @@ func (pm *PeerMesh) beaconRecvLoop() {
 		if err != nil {
 			continue
 		}
-		if pm.beaconConn == nil {
-			pm.beaconConn = conn // first socket owns shutdown duty
-		}
+		pm.mu.Lock()
+		pm.beaconConns = append(pm.beaconConns, conn)
+		pm.mu.Unlock()
 		joined++
 		go pm.serveBeaconConn(conn)
 	}
@@ -240,8 +240,12 @@ func (pm *PeerMesh) beaconRecvLoop() {
 	}
 	go func() {
 		<-pm.stopChan
-		if pm.beaconConn != nil {
-			_ = pm.beaconConn.Close()
+		pm.mu.Lock()
+		conns := pm.beaconConns
+		pm.beaconConns = nil
+		pm.mu.Unlock()
+		for _, c := range conns {
+			_ = c.Close() // unblocks serveBeaconConn, which then sees stopChan
 		}
 	}()
 }

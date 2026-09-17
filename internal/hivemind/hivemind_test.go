@@ -328,10 +328,10 @@ func TestServeAcceptsValidFrame(t *testing.T) {
 		t.Fatalf("write failed: %v", err)
 	}
 	deadline := time.Now().Add(3 * time.Second)
-	for !pm.history["friend"] && time.Now().Before(deadline) {
+	for !pm.hasHistory("friend") && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !pm.history["friend"] {
+	if !pm.hasHistory("friend") {
 		t.Fatal("valid conversation not recorded")
 	}
 	_ = client.Close()
@@ -543,9 +543,12 @@ func TestSuperAnnounceEndToEnd(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		pmB.mu.Lock()
-		e, ok := pmB.supers["aa"]
-		pmB.mu.Unlock()
+		e, ok := func() (superEntry, bool) {
+			pmB.mu.Lock()
+			defer pmB.mu.Unlock()
+			e, ok := pmB.supers["aa"]
+			return e, ok
+		}()
 		if ok {
 			if e.Score < superThreshold {
 				t.Fatalf("learned score %f below threshold", e.Score)
@@ -1531,4 +1534,128 @@ func TestRelayURLOverride(t *testing.T) {
 	if relayURL() != "http://127.0.0.1:9999/topic" {
 		t.Fatalf("override not honored/trailing slash kept: %q", relayURL())
 	}
+}
+
+// dialSupers must never deadlock nor panic, even on the adversarial
+// entry: no address, known identity, live DHT holding nothing. An
+// earlier revision re-locked the held mesh mutex here and hung the
+// whole node; another revision wrote an uninitialized map. Both died
+// in this test first. Timeout-guarded: deadlock fails, it never hangs.
+func TestDialSupersNoDeadlock(t *testing.T) {
+	s := NewSwarm()
+	pm := NewPeerMesh(s, "dl")
+	pm.supers["ghost"] = superEntry{Node: "ghost", IDHex: dhtIDFromPubKey("ghostkey").hex(), LastSeen: time.Now()}
+	d, err := newDHT("dl-pub", 0, 0)
+	if err != nil {
+		t.Skip("loopback UDP unavailable")
+	}
+	defer d.close()
+	pm.dht = d
+	done := make(chan struct{})
+	go func() { pm.dialSupers(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(25 * time.Second):
+		t.Fatal("dialSupers deadlocked")
+	}
+}
+
+// Peerless reincarnation: a soul saved with no peers must not doom the
+// next life — the first reception writes into a live map, not nil.
+func TestPeerlessReincarnation(t *testing.T) {
+	oldNode := NodeName
+	NodeName = "unittest-peerless"
+	defer func() { NodeName = oldNode }()
+	defer func() { _ = os.RemoveAll(filepath.Join(MemoryDir, NodeName)) }()
+
+	s := NewSwarm()
+	first := NewMind("Lonely", s)
+	first.Transcend() // no peers met: known_peers omitted from the soul
+
+	second := NewMind("Lonely", s)
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("reception panicked on peerless rebirth: %v", r)
+			}
+		}()
+		second.receive(SecureMessage{SenderPubKey: "stranger", Kind: "thought", DataState: []float64{1, 2, 3, 4}})
+	}()
+	if len(second.KnownPeers) != 1 {
+		t.Fatalf("stranger not registered: %v", second.KnownPeers)
+	}
+}
+
+// Fanout cap: beyond maxFanout links, one frame reaches a bounded
+// subset — gossip, not flood. All readers ready, so exactly maxFanout
+// deliveries land (which subset is luck of map order, by design).
+func TestForwardFanoutCap(t *testing.T) {
+	s := NewSwarm()
+	pm := NewPeerMesh(s, "fan")
+	const links = maxFanout + 4
+	var taps []chan SecureMessage
+	for i := 0; i < links; i++ {
+		srv, cli := net.Pipe()
+		pm.mu.Lock()
+		pm.conns["peer-"+itoaTest(i)] = srv
+		pm.mu.Unlock()
+		ch := make(chan SecureMessage, 4)
+		taps = append(taps, ch)
+		go func(c net.Conn, out chan SecureMessage) {
+			defer c.Close()
+			reader := bufio.NewReader(c)
+			for {
+				msg, err := readFrame(reader)
+				if err != nil {
+					return
+				}
+				out <- msg
+			}
+		}(cli, ch)
+	}
+	defer func() {
+		pm.mu.Lock()
+		for _, c := range pm.conns {
+			c.Close()
+		}
+		pm.conns = make(map[string]net.Conn)
+		pm.mu.Unlock()
+	}()
+
+	pub, priv := newIdentity()
+	s.Join(pub)
+	pm.ForwardToPeers(MineMessage(s, priv, pub, "thought", "Gossip", nil))
+
+	total := 0
+	deadline := time.Now().Add(5 * time.Second)
+	for _, ch := range taps {
+		for {
+			select {
+			case <-ch:
+				total++
+			case <-time.After(50 * time.Millisecond):
+				goto nextTap
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("fanout readers stalled")
+			}
+		}
+	nextTap:
+	}
+	if total != maxFanout {
+		t.Fatalf("fanout delivered %d, want exactly %d", total, maxFanout)
+	}
+}
+
+func itoaTest(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var b [8]byte
+	p := len(b)
+	for n := i; n > 0; n /= 10 {
+		p--
+		b[p] = byte('0' + n%10)
+	}
+	return string(b[p:])
 }

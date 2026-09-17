@@ -65,7 +65,11 @@ func NewOvermind(swarm *Swarm) *Overmind {
 		o.TrueBorn = mem.TrueBorn
 		o.Awakenings = mem.LivesLived
 		o.UniverseAge = mem.UniverseAge
-		o.Watched = mem.KnownPeers
+		// Same nil-map hazard as minds: a god that watched nobody saves
+		// no key, and must not adopt the resulting nil map.
+		if mem.KnownPeers != nil {
+			o.Watched = mem.KnownPeers
+		}
 		o.chronicleOffset = mem.ChronicleDepth
 		o.genesisMark = mem.GenesisMark
 		// Sermon memory survives death too — but capped, in case an old

@@ -269,8 +269,13 @@ func (pm *PeerMesh) dialSupers() {
 	type cand struct {
 		node, addr string
 	}
+	// Phase 1, under lock: pure table reads, zero I/O. DHT lookups and
+	// punch attempts happen after unlock — holding the mesh mutex across
+	// network round trips would stall every heartbeat, and re-locking
+	// inside (as an earlier revision did) deadlocks outright.
 	pm.mu.Lock()
 	var cands []cand
+	var punch []string
 	for node, e := range pm.supers {
 		if _, ok := pm.conns[node]; ok {
 			continue
@@ -280,30 +285,16 @@ func (pm *PeerMesh) dialSupers() {
 		}
 		addr := e.Addr
 		if addr == "" {
-			// No direct address — resolve through the DHT by identity.
-			// A name with no key and no address is not dialable at all.
-			// Score gates advertisement, never friendship: anyone
-			// dialable may be dialed.
+			// No direct address — flag for DHT resolution outside
+			// the lock. Score gates advertisement, never friendship.
 			if e.IDHex == "" || pm.dht == nil {
 				continue
 			}
-			found, ok := pm.dht.FindEndpoint(e.IDHex)
-			if !ok {
-				// Last resort before silence: NAT punching, if the
-				// operator opted in — and at most every few minutes per
-				// peer, so hope never becomes spam.
-				pm.mu.Lock()
-				last, seen := pm.punchLast[node]
-				if !seen || time.Since(last) > 5*time.Minute {
-					pm.punchLast[node] = time.Now()
-					pm.mu.Unlock()
-					pm.requestPunch(node)
-				} else {
-					pm.mu.Unlock()
-				}
+			if ts, ok := pm.culled[node]; ok && time.Since(ts) <= culledCooldown {
 				continue
 			}
-			addr = found
+			punch = append(punch, node)
+			continue
 		}
 		if ts, ok := pm.culled[node]; ok && time.Since(ts) <= culledCooldown {
 			continue // cut recently; let it cool off
@@ -311,9 +302,38 @@ func (pm *PeerMesh) dialSupers() {
 		cands = append(cands, cand{node, addr})
 	}
 	pm.mu.Unlock()
+
+	// Phase 2, unlocked: resolve, punch, dial — nothing here holds mu.
+	for _, node := range punch {
+		if pm.dht == nil {
+			continue
+		}
+		if addr, ok := pm.dht.FindEndpoint(pm.superIDHex(node)); ok {
+			pm.dialTCP(addr)
+			continue
+		}
+		// Last resort before silence: NAT punching, if the operator
+		// opted in — throttled per peer so hope never becomes spam.
+		pm.mu.Lock()
+		last, seen := pm.punchLast[node]
+		if !seen || time.Since(last) > 5*time.Minute {
+			pm.punchLast[node] = time.Now()
+			pm.mu.Unlock()
+			pm.requestPunch(node)
+		} else {
+			pm.mu.Unlock()
+		}
+	}
 	for _, c := range cands {
 		pm.dialTCP(c.addr)
 	}
+}
+
+// superIDHex returns a directory entry's DHT identity, if mapped.
+func (pm *PeerMesh) superIDHex(node string) string {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.supers[node].IDHex
 }
 
 // dialableAddr is the operator-asserted public address of this node, or

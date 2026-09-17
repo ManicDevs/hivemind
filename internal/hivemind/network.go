@@ -97,7 +97,9 @@ type PeerMesh struct {
 	listener    net.Listener
 	tcpListener net.Listener
 	tcpPort     int
-	beaconConn  *net.UDPConn
+	// beaconConns holds every joined multicast socket so Close can shut
+	// all families down (a second family's loop must never leak).
+	beaconConns []*net.UDPConn
 
 	// conns are live links to peer nodes, keyed by peer node name,
 	// regardless of transport: one pipe per pair, always.
@@ -155,20 +157,22 @@ func NewPeerMesh(swarm *Swarm, node string) *PeerMesh {
 	pubStr, priv := newIdentity()
 	ctx, cancel := context.WithCancel(context.Background())
 	return &PeerMesh{
-		swarm:       swarm,
-		node:        node,
-		conns:       make(map[string]net.Conn),
-		trans:       make(map[string]string),
-		supers:      make(map[string]superEntry),
-		culled:      make(map[string]time.Time),
-		history:     make(map[string]bool),
-		pub:         pubStr,
-		priv:        priv,
-		born:        time.Now(),
-		stopChan:    make(chan struct{}),
-		cloudQueue:  make(chan SecureMessage, 16),
-		cloudCtx:    ctx,
-		cloudCancel: cancel,
+		swarm:        swarm,
+		node:         node,
+		conns:        make(map[string]net.Conn),
+		trans:        make(map[string]string),
+		supers:       make(map[string]superEntry),
+		culled:       make(map[string]time.Time),
+		punchPending: make(map[string]pendingPunch),
+		punchLast:    make(map[string]time.Time),
+		history:      make(map[string]bool),
+		pub:          pubStr,
+		priv:         priv,
+		born:         time.Now(),
+		stopChan:     make(chan struct{}),
+		cloudQueue:   make(chan SecureMessage, 16),
+		cloudCtx:     ctx,
+		cloudCancel:  cancel,
 	}
 }
 
@@ -307,6 +311,15 @@ func (pm *PeerMesh) serve(conn net.Conn, reader *bufio.Reader, peer string) {
 const maxFrameBytes = 256 * 1024
 const maxHandshakeBytes = 4 * 1024
 
+// maxFanout caps per-frame forwarding fanout: past this many links the
+// mesh gossips to a random subset per frame instead of flooding all of
+// them. Small meshes never notice (they have fewer links than the cap);
+// large ones stay O(K) chatter instead of O(N²). No TTL field exists on
+// purpose: anything mutating the frame in flight would void its
+// signature, so flood control lives in fanout, and loop control in the
+// seen-set — neither touches the signed envelope.
+const maxFanout = 8
+
 // idleLinkTimeout is a var (not const) so tests can shrink it.
 var idleLinkTimeout = 60 * time.Second
 
@@ -433,6 +446,22 @@ func (pm *PeerMesh) LinkedPeers() int {
 	return len(pm.conns)
 }
 
+// hasHistory reports whether a peer ever carried a decoded frame.
+// hasSuper reports whether a node sits in the supernode directory.
+// Locked readers for paths (tests, reporters) outside the serve loops.
+func (pm *PeerMesh) hasHistory(peer string) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.history[peer]
+}
+
+func (pm *PeerMesh) hasSuper(node string) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	_, ok := pm.supers[node]
+	return ok
+}
+
 // ── frame routing ──
 
 func (pm *PeerMesh) handleOutbound(msg SecureMessage) {
@@ -456,6 +485,9 @@ func (pm *PeerMesh) ForwardToPeers(msg SecureMessage) {
 
 	// Snapshot under the lock, write outside it: one wedged peer must
 	// never stall the whole mesh. Dead writes evict the link.
+	// Beyond maxFanout links the mesh gossips instead of flooding: Go
+	// map iteration order is already random, so ranging IS the shuffle,
+	// and the seen-set dedups whatever overlaps.
 	pm.mu.Lock()
 	conns := make(map[string]net.Conn, len(pm.conns))
 	for name, conn := range pm.conns {
@@ -463,7 +495,12 @@ func (pm *PeerMesh) ForwardToPeers(msg SecureMessage) {
 	}
 	pm.mu.Unlock()
 
+	n := 0
 	for name, conn := range conns {
+		if n >= maxFanout {
+			break
+		}
+		n++
 		_ = conn.SetWriteDeadline(time.Now().Add(writeLinkTimeout))
 		if _, err := conn.Write(jsonData); err != nil {
 			pm.mu.Lock()
@@ -705,9 +742,12 @@ func (pm *PeerMesh) Close() {
 	if pm.tcpListener != nil {
 		_ = pm.tcpListener.Close()
 	}
-	if pm.beaconConn != nil {
-		_ = pm.beaconConn.Close()
+	pm.mu.Lock()
+	for _, c := range pm.beaconConns {
+		_ = c.Close()
 	}
+	pm.beaconConns = nil
+	pm.mu.Unlock()
 	if err := os.Remove(pm.socketPath()); err == nil {
 		fmt.Printf("🧹 [PEER MESH] Own socket %s removed.\n", pm.socketPath())
 	}

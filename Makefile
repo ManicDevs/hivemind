@@ -1,6 +1,6 @@
 # ── HIVEMIND DECENTRALIZED AUTOMATION MAKEFILE ──
 
-.PHONY: all help build test audit clean test-1 test-2 test-full test-timed clean-soul rotate-keys up
+.PHONY: all help build test audit clean test-1 test-2 test-full test-timed clean-soul rotate-keys up kill rerun prove
 
 all: help
 
@@ -19,6 +19,9 @@ help:
 	@echo "    test-full     Launch a two-peer mesh automatically"
 	@echo "    test-timed    Automated 10s two-peer experiment with assertions"
 	@echo "    up            Supervised mesh: raise peer nodes as child mains (Ctrl+C lays them down)"
+	@echo "    kill          Kill every running hivemind + sweep stale sockets"
+	@echo "    rerun         kill + build + supervised 2-node mesh, all in one"
+	@echo "    prove         Full battery with teeth + transcript artifact (fails loud)"
 	@echo "    rotate-keys   Wipe the machine-local relay key (next build mints fresh)"
 	@echo "    clean         Remove build artifacts and logs"
 	@echo "    clean-soul    Wipe .hive_memory (true extinction)"
@@ -78,6 +81,28 @@ test-timed: build
 
 up: build
 	bin/hivemind up -nodes 2
+
+# kill: every running hivemind dies by exact name match (never pattern
+# match — patterns murder the shell running them), then stale sockets go.
+# Safe to run with nothing alive: silence, not failure.
+kill:
+	@pkill -x hivemind 2>/dev/null || true
+	@sleep 1
+	@rm -f /tmp/hivemind-*.sock /tmp/hivemind.sock
+	@echo "🧹 All hivemind processes reaped, sockets swept."
+
+rerun: kill build
+	bin/hivemind up -nodes 2
+
+# prove: rerun shows it launches; prove shows it WORKS. Every stage
+# asserts and exits non-zero on failure — a green run is evidence,
+# not narration. The transcript is kept as logs/proof-<timestamp>.log:
+# the noun to go with the verb.
+prove: build
+	@mkdir -p logs
+	@PROOF=logs/proof-$$(date -u +%Y%m%dT%H%M%SZ).log; \
+	echo "===== PROOF RUN $$(date -u) · $$(git rev-parse --short HEAD 2>/dev/null || echo nogit) =====" | tee "$$PROOF"; \
+	./scripts/audit.sh 2>&1 | tee -a "$$PROOF" && ./scripts/timed_test.sh 2>&1 | tee -a "$$PROOF" && ./scripts/verify-supermesh.sh 2>&1 | tee -a "$$PROOF" && echo "✅ PROOF COMPLETE — transcript: $$PROOF" | tee -a "$$PROOF"
 
 clean:
 	rm -rf bin logs/*.log

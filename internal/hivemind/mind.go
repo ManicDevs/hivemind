@@ -134,7 +134,11 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		m.bankedAtBirth = mem.BankedThoughts
 		m.Genome = mem.Genome
 		m.LifetimeFitness = mem.Fitness
-		m.KnownPeers = mem.KnownPeers
+		// A peerless past life saves no known_peers key at all: only
+		// adopt a non-nil map, or the first reception panics on write.
+		if mem.KnownPeers != nil {
+			m.KnownPeers = mem.KnownPeers
+		}
 	}
 
 	// Identity first: same soul, same handle, so peers are still recognizable.
@@ -418,6 +422,9 @@ var validVirtues = map[string]bool{
 func (m *Mind) registerPeer(pubKey string) bool {
 	if m.swarm.IsMember(pubKey) {
 		return false
+	}
+	if m.KnownPeers == nil {
+		m.KnownPeers = make(map[string]bool) // belt and suspenders
 	}
 	if m.KnownPeers[pubKey] {
 		return false
