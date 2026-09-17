@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /logs/
 .hive_memory/
 .relaykey
