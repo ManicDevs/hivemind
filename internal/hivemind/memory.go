@@ -88,6 +88,15 @@ type Memory struct {
 	// Recent sermons: what the god already preached, so rebirth never
 	// opens with last life's greatest hit.
 	RecentSermons []string `json:"recent_sermons,omitempty"`
+
+	// Epitaph is the previous life's one-sentence story, composed at
+	// death from the life actually lived. The child wakes knowing its
+	// past, not just wearing it as weights.
+	Epitaph string `json:"epitaph,omitempty"`
+
+	// Transitions is the cycle matrix: "A→B" counts of which drive
+	// followed which, across the whole lineage. Character as flow.
+	Transitions map[string]int `json:"transitions,omitempty"`
 }
 
 // SaveMemory writes the soul to disk atomically (temp file + fsync + rename).

@@ -3,6 +3,7 @@ package hivemind
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -105,11 +106,59 @@ type dhtNode struct {
 	store   map[string]dhtRecord
 	stop    chan struct{}
 
+	// reflexive is this DHT socket's address as the internet sees it
+	// (host:port via STUN, resolved from this very socket — NAT mappings
+	// are per-socket, so any other socket's answer would be a lie).
+	// Empty until known; refreshed periodically as mappings expire.
+	reflexive string
+
 	// pending correlates responses to live requests by Tx. Guarded by
 	// pmu (never d.mu: serve holds d.mu while filing, and delivery
 	// must never wedge behind table maintenance).
 	pmu     sync.Mutex
 	pending map[string]chan dhtRPC
+
+	// stunWait carries one in-flight STUN response from the shared
+	// socket reader (serve) to the waiter. Single-flight: refreshes
+	// never overlap because the loop is the only caller.
+	stunWait chan stunAnswer
+	stunTx   [12]byte
+}
+
+// stunAnswer is one demultiplexed STUN response off the shared socket.
+type stunAnswer struct {
+	pkt []byte
+	err error
+}
+
+// isStunResponse sniffs a STUN binding success by structure: length,
+// type, and magic cookie. No parsing, no allocation on the hot path.
+func isStunResponse(pkt []byte) bool {
+	if len(pkt) < 20 {
+		return false
+	}
+	return binary.BigEndian.Uint16(pkt[0:2]) == stunBindingResp &&
+		binary.BigEndian.Uint32(pkt[4:8]) == stunMagicCookie
+}
+
+// deliverStun hands a STUN response to the waiter holding its Tx.
+// Anything unexpected is dropped: stray or hostile, never DHT data.
+func (d *dhtNode) deliverStun(pkt []byte) {
+	d.pmu.Lock()
+	defer d.pmu.Unlock()
+	if d.stunWait == nil || len(pkt) < 20 {
+		return
+	}
+	var tx [12]byte
+	copy(tx[:], pkt[8:20])
+	if tx != d.stunTx {
+		return
+	}
+	cp := append([]byte(nil), pkt...)
+	select {
+	case d.stunWait <- stunAnswer{pkt: cp}:
+	default:
+	}
 }
 
 // newDHT binds a UDP socket (port 0 = ephemeral) and starts serving.
@@ -127,7 +176,89 @@ func newDHT(selfHexPubKey string, tcpPort, udpPort int) (*dhtNode, error) {
 		stop:    make(chan struct{}),
 	}
 	go d.serve()
+	d.refreshReflexive()
+	go d.reflexiveLoop()
 	return d, nil
+}
+
+// reflexiveLoop re-resolves the socket's public address: NAT mappings
+// expire, and yesterday's truth dials today's void.
+func (d *dhtNode) reflexiveLoop() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-d.stop:
+			return
+		case <-ticker.C:
+			d.refreshReflexive()
+		}
+	}
+}
+
+// refreshReflexive asks STUN from our own socket and records the answer.
+// Silent when unconfigured or unreachable: unknown stays unknown.
+// Note: the exchange briefly shares the serving socket, so one datagram
+// in either direction can rarely be stolen by the other reader. Both
+// sides already treat stray datagrams as routine UDP loss and retry.
+func (d *dhtNode) refreshReflexive() {
+	server := strings.TrimSpace(os.Getenv("HIVEMIND_STUN"))
+	if server == "" {
+		return
+	}
+	raddr, err := net.ResolveUDPAddr("udp", server)
+	if err != nil {
+		return
+	}
+	tx := make([]byte, 12)
+	if _, err := rand.Read(tx); err != nil {
+		return
+	}
+	var txArr [12]byte
+	copy(txArr[:], tx)
+	wait := make(chan stunAnswer, 1)
+	d.pmu.Lock()
+	d.stunWait = wait
+	d.stunTx = txArr
+	d.pmu.Unlock()
+	defer func() {
+		d.pmu.Lock()
+		if d.stunWait == wait {
+			d.stunWait = nil
+		}
+		d.pmu.Unlock()
+	}()
+
+	req := make([]byte, 20)
+	binary.BigEndian.PutUint16(req[0:2], stunBindingReq)
+	binary.BigEndian.PutUint16(req[2:4], 0)
+	binary.BigEndian.PutUint32(req[4:8], stunMagicCookie)
+	copy(req[8:20], tx)
+	if _, err := d.conn.WriteToUDP(req, raddr); err != nil {
+		return
+	}
+	select {
+	case ans := <-wait:
+		if ans.err != nil {
+			return
+		}
+		host, port, err := parseStunResponse(ans.pkt, tx)
+		if err != nil {
+			return
+		}
+		d.mu.Lock()
+		d.reflexive = net.JoinHostPort(host, strconv.Itoa(port))
+		d.mu.Unlock()
+	case <-time.After(stunTimeout):
+	case <-d.stop:
+	}
+}
+
+// reflexiveAddr returns the last known public address of this socket.
+func (d *dhtNode) reflexiveAddr() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.reflexive
 }
 
 // udpAddr returns our bound socket address for bootstrapping others.
@@ -252,6 +383,12 @@ func (d *dhtNode) serve() {
 			default:
 				continue
 			}
+		}
+		// STUN responses ride this same socket: sniff by magic cookie
+		// and route to the waiter, never to the DHT parser.
+		if isStunResponse(buf[:n]) {
+			d.deliverStun(buf[:n])
+			continue
 		}
 		var msg dhtRPC
 		if err := json.Unmarshal(buf[:n], &msg); err != nil || msg.From == "" {
@@ -515,6 +652,15 @@ func (pm *PeerMesh) dhtPort() int {
 		return a.Port
 	}
 	return 0
+}
+
+// dhtReflexive reports our DHT socket's public address, or "" while
+// unknown. Joins the announce so far nodes can dial the DHT back.
+func (pm *PeerMesh) dhtReflexive() string {
+	if pm.dht == nil {
+		return ""
+	}
+	return pm.dht.reflexiveAddr()
 }
 
 // dhtPing joins the DHT through one learned address. Best effort:

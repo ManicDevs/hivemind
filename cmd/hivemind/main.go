@@ -20,6 +20,13 @@ func main() {
 		return
 	}
 
+	// Anti-debug gate first: a traced process decides its policy before
+	// any key material exists in memory to protect.
+	if !antiDebug() {
+		fmt.Fprintln(os.Stderr, "🛡️  [HARDEN] Refusing to run under a tracer. Set HIVEMIND_HARDEN=warn to proceed watched, or off to disable.")
+		os.Exit(3)
+	}
+
 	modeFlag := flag.String("mode", "standalone", "operation profile: standalone | peer")
 	nodeFlag := flag.String("node", "", "peer node name (defaults to hostname-PID in peer mode)")
 	flag.Parse()
@@ -114,12 +121,17 @@ func main() {
 	swarm.HiveReport()
 }
 
-// traceLoop serves in-run backtraces: each SIGQUIT/SIGUSR1 writes the full
+// traceLoop serves in-run backtraces: each trace signal writes the full
 // goroutine dump (all minds, swarm, mesh, cloud loops) to stderr with a
-// timestamp, and the universe keeps thinking.
+// timestamp, and the universe keeps thinking. No signals on platforms
+// without them (Windows parks here).
 func traceLoop(node, mode string) {
+	sigs := traceSignals()
+	if len(sigs) == 0 {
+		return
+	}
 	traceChan := make(chan os.Signal, 1)
-	signal.Notify(traceChan, syscall.SIGQUIT, syscall.SIGUSR1)
+	signal.Notify(traceChan, sigs...)
 	for sig := range traceChan {
 		dumpGoroutines(node, mode, sig)
 	}

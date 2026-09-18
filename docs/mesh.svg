@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" font-family="monospace">
+  <defs>
+    <marker id="c1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#4d6fa5"/>
+    </marker>
+    <linearGradient id="b3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 12; }
+      .q { fill: #2a1a33; stroke: #a54d9c; stroke-width: 2; rx: 12; }
+      .title { fill: #e8eef7; font-size: 14px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 12px; }
+      .lbl { fill: #888; font-size: 11px; }
+      .fl { stroke: #4d6fa5; stroke-width: 2; fill: none; marker-end: url(#c1); }
+    </style>
+  </defs>
+  <rect width="960" height="560" fill="url(#b3)"/>
+  <text x="30" y="36" fill="#e8eef7" font-size="18" font-weight="bold">How two strangers link — every path, one rule each</text>
+
+  <g>
+    <rect x="30" y="60" width="200" height="130" class="box"/>
+    <text x="45" y="88" class="title">unix socket</text>
+    <text x="45" y="112" class="body">glob /tmp every 2s ·</text>
+    <text x="45" y="130" class="body">grace for newborns ·</text>
+    <text x="45" y="148" class="body">sweep old corpses</text>
+    <text x="45" y="170" class="lbl">same machine</text>
+  </g>
+  <g>
+    <rect x="260" y="60" width="200" height="130" class="box"/>
+    <text x="275" y="88" class="title">multicast</text>
+    <text x="275" y="112" class="body">beacon {node,tcp,score}</text>
+    <text x="275" y="130" class="body">v4 + v6 groups ·</text>
+    <text x="275" y="148" class="body">dial source IP:port</text>
+    <text x="275" y="170" class="lbl">one LAN</text>
+  </g>
+  <g>
+    <rect x="490" y="60" width="200" height="130" class="box"/>
+    <text x="505" y="88" class="title">static + DHT</text>
+    <text x="505" y="112" class="body">HIVEMIND_PEERS list ·</text>
+    <text x="505" y="130" class="body">Kademlia find/store ·</text>
+    <text x="505" y="148" class="body">endpoint replication</text>
+    <text x="505" y="170" class="lbl">any open port on earth</text>
+  </g>
+  <g>
+    <rect x="720" y="60" width="210" height="130" class="q"/>
+    <text x="735" y="88" class="title">hole punch</text>
+    <text x="735" y="112" class="body">req/accept frames ·</text>
+    <text x="735" y="130" class="body">agreed instant ·</text>
+    <text x="735" y="148" class="body">3 rounds, then relay</text>
+    <text x="735" y="170" class="lbl">HIVEMIND_PUNCH=auto</text>
+  </g>
+
+  <line x1="130" y1="190" x2="130" y2="250" class="fl"/>
+  <line x1="360" y1="190" x2="360" y2="250" class="fl"/>
+  <line x1="590" y1="190" x2="590" y2="250" class="fl"/>
+  <line x1="825" y1="190" x2="825" y2="250" class="fl"/>
+
+  <g>
+    <rect x="30" y="250" width="900" height="130" class="box"/>
+    <text x="45" y="278" class="title">the handshake — symmetric, verified, exactly one pipe</text>
+    <text x="45" y="302" class="body">dialer speaks first {"node"} → both learn names → owner verified on socket paths → duplicate dropped, survivor untouched</text>
+    <text x="45" y="324" class="body">presence hello + capability announce on first link → minds register peer → snoop files super → RTT tracked</text>
+    <text x="45" y="346" class="lbl">10s exchange deadline · capped reads · idle/liveness timeouts after · openLink, lan.go</text>
+  </g>
+
+  <g>
+    <rect x="30" y="410" width="900" height="110" class="box"/>
+    <text x="45" y="438" class="title">after the link: closest-first for life</text>
+    <text x="45" y="462" class="body">keep ≤3 TCP pipes by measured RTT (unix never culled) · cut links cool off 5 min · directory leases lapse at 90s</text>
+    <text x="45" y="484" class="lbl">dial rule forever: only dial lexically-greater peers — one initiator per pair, no election, no master</text>
+  </g>
+</svg>

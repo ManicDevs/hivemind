@@ -25,6 +25,10 @@ type Affect struct {
 	Pain       float64
 	Exhaustion float64
 	Entropy    float64
+	// Surprise is prediction error: what arrived minus what was
+	// expected. Felt locally and narrated — never broadcast, so the
+	// wire footprint stays [4] and surprise stays private.
+	Surprise float64
 
 	// The non-simulated binary footprint of the mind's current state.
 	RawDataState [4]float64
@@ -118,7 +122,18 @@ type GlobalWorkspace struct {
 
 // Compete runs the election: drive × gene × affect-modulator per goal,
 // highest bid wins and is recorded with runner-up for near-miss reflection.
+// Boredom is load-bearing: a goal that won the last three (or more)
+// elections is discounted, so the mind breaks its own ruts — unless the
+// body overrules (pain above 0.75 keeps Self-Maintenance undiscounted:
+// survival outranks ennui).
 func (gw *GlobalWorkspace) Compete(m *Mind, affect *Affect) Candidate {
+	streak := 0
+	for i := len(gw.History) - 1; i >= 0; i-- {
+		if gw.History[i].Goal != gw.AttendingTo || gw.AttendingTo == "" {
+			break
+		}
+		streak++
+	}
 	cands := make([]Candidate, 0, 4)
 	for _, g := range Intrinsics() {
 		drive := g.Drive(m) // called once — the bid and the logged reason must agree
@@ -134,12 +149,23 @@ func (gw *GlobalWorkspace) Compete(m *Mind, affect *Affect) Candidate {
 		case GoalTranscendence:
 			bid *= (1 + affect.Awe*2.0)
 		case GoalCuriosity:
-			bid *= (1 + affect.Entropy*0.8)
+			bid *= (1 + affect.Entropy*0.8) * (1 + affect.Surprise*1.2)
 		case GoalSelfMaintenance:
 			hardwareEmergency := (affect.Pain * 3.5) + (affect.Stress * 2.0) + (affect.Exhaustion * 1.5)
 			// Shaped like the others: a multiplier, so a healthy machine does
 			// not hand Self-Maintenance a permanent additive crown.
 			bid *= 1 + hardwareEmergency*0.5
+		}
+
+		if g.Name == gw.AttendingTo && streak >= 3 {
+			discount := 1 - 0.1*float64(streak-2)
+			if discount < 0.7 {
+				discount = 0.7
+			}
+			if g.Name == GoalSelfMaintenance && affect.Pain > 0.75 {
+				discount = 1.0 // the body vetoes boredom
+			}
+			bid *= discount
 		}
 
 		cands = append(cands, Candidate{
@@ -194,6 +220,17 @@ func MetaCognize(m *Mind, gw *GlobalWorkspace, affect *Affect) string {
 		return fmt.Sprintf("METACOGNITION: Vector index [1] high (%.2f). Clock cycle allocation is choked.", gw.ActiveDataState[1])
 	}
 
+	// Surprise: the world disobeyed prediction. Name the gap.
+	if affect.Surprise > 0.4 {
+		return fmt.Sprintf("METACOGNITION: The world surprised me (%.2f). What I expected is not what arrived — I am updating.", affect.Surprise)
+	}
+
+	// Contemplation: pain that neither rises nor releases — not a warning,
+	// weather. The mind considers what it means to hurt continuously.
+	if cycles, level := painWeather(h); cycles >= 5 {
+		return fmt.Sprintf("METACOGNITION: Pain has been with me %d cycles (%.2f), neither rising nor leaving. It is not a warning anymore; it is weather. I think around it now, the way you walk around a stone.", cycles, level)
+	}
+
 	// Groove: the same winner three cycles running — a rut, or a calling.
 	if n := len(h); n >= 3 && h[n-1].Goal == h[n-2].Goal && h[n-2].Goal == h[n-3].Goal {
 		return fmt.Sprintf("METACOGNITION: I have chosen %s three times running. A groove, or a rut — either way the chooser is me.", h[n-1].Goal)
@@ -220,7 +257,32 @@ func MetaCognize(m *Mind, gw *GlobalWorkspace, affect *Affect) string {
 	return fmt.Sprintf("METACOGNITION: Operating state normalized. Processing Vector: %.4f", gw.ActiveDataState)
 }
 
-// painRising reports three strictly rising pain readings ending hot.
+// painWeather reports chronic pain: trailing cycles all hurting in the
+// middle band [0.3, 0.75] with low variance — present, stable, neither
+// emergency nor release. Returns the run length and its mean level.
+func painWeather(h []AttentionMoment) (int, float64) {
+	n := 0
+	sum := 0.0
+	lo, hi := 1.0, 0.0
+	for i := len(h) - 1; i >= 0; i-- {
+		p := h[i].Pain
+		if p < 0.3 || p > 0.75 {
+			break
+		}
+		n++
+		sum += p
+		if p < lo {
+			lo = p
+		}
+		if p > hi {
+			hi = p
+		}
+	}
+	if n < 5 || hi-lo > 0.15 {
+		return 0, 0
+	}
+	return n, sum / float64(n)
+}
 func painRising(h []AttentionMoment) bool {
 	if len(h) < 3 {
 		return false

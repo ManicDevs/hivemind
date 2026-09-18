@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="420" font-family="monospace">
+  <defs>
+    <marker id="a1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#4d6fa5"/>
+    </marker>
+    <marker id="a2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#a54d9c"/>
+    </marker>
+    <linearGradient id="b1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 12; }
+      .gate { fill: #2a1a33; stroke: #a54d9c; stroke-width: 2; rx: 12; }
+      .title { fill: #e8eef7; font-size: 13px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 11px; }
+      .lbl { fill: #888; font-size: 10px; }
+      .f1 { stroke: #4d6fa5; stroke-width: 2; fill: none; marker-end: url(#a1); }
+      .f2 { stroke: #a54d9c; stroke-width: 2; fill: none; marker-end: url(#a2); }
+    </style>
+  </defs>
+  <rect width="960" height="420" fill="url(#b1)"/>
+  <text x="30" y="34" fill="#e8eef7" font-size="18" font-weight="bold">One frame's journey — mine → sign → verify → deliver (or die at a gate)</text>
+
+  <g>
+    <rect x="30" y="60" width="150" height="100" class="box"/>
+    <text x="42" y="86" class="title">Mine</text>
+    <text x="42" y="108" class="body">nonce grind vs</text>
+    <text x="42" y="124" class="body">adaptive target</text>
+    <text x="42" y="144" class="lbl">MineMessage</text>
+  </g>
+  <g>
+    <rect x="210" y="60" width="150" height="100" class="box"/>
+    <text x="222" y="86" class="title">Sign</text>
+    <text x="222" y="108" class="body">Ed25519 over</text>
+    <text x="222" y="124" class="body">frame hash</text>
+    <text x="222" y="144" class="lbl">soul key</text>
+  </g>
+  <g>
+    <rect x="390" y="60" width="150" height="100" class="gate"/>
+    <text x="402" y="86" class="title">Verify ✗?</text>
+    <text x="402" y="108" class="body">signature → replay</text>
+    <text x="402" y="124" class="body">→ PoW target</text>
+    <text x="402" y="144" class="lbl">Broadcast gate</text>
+  </g>
+  <g>
+    <rect x="570" y="60" width="150" height="100" class="box"/>
+    <text x="582" y="86" class="title">Chronicle</text>
+    <text x="582" y="108" class="body">tip advances ·</text>
+    <text x="582" y="124" class="body">consensus indexed</text>
+    <text x="582" y="144" class="lbl">utils excluded</text>
+  </g>
+  <g>
+    <rect x="750" y="60" width="180" height="100" class="box"/>
+    <text x="762" y="86" class="title">Deliver</text>
+    <text x="762" y="108" class="body">inboxes (drop if full) ·</text>
+    <text x="762" y="124" class="body">outbound unless Relayed</text>
+    <text x="762" y="144" class="lbl">fanout ≤ 8</text>
+  </g>
+
+  <line x1="180" y1="110" x2="210" y2="110" class="f1"/>
+  <line x1="360" y1="110" x2="390" y2="110" class="f1"/>
+  <line x1="540" y1="110" x2="570" y2="110" class="f1"/>
+  <line x1="720" y1="110" x2="750" y2="110" class="f1"/>
+
+  <g>
+    <rect x="30" y="200" width="900" height="170" class="gate"/>
+    <text x="45" y="228" class="title">Where frames die — silently, by design (rejections never reply)</text>
+    <text x="45" y="252" class="body">✗ bad signature — forged, or mutated after signing (deep-copy at mining prevents the latter)</text>
+    <text x="45" y="274" class="body">✗ replay — seen-set remembers 1024 hashes; relay echoes die here even if Relayed flag is lost</text>
+    <text x="45" y="296" class="body">✗ under-mined — hash above the verifier's live target (asymmetric load drops here, documented)</text>
+    <text x="45" y="318" class="body">✗ oversize — 256KB frames / 4KB handshakes (hostile peers donate bandwidth to the void)</text>
+    <text x="45" y="340" class="body">✗ undecryptable (relay) — counted + minutely key warning, blob never printed</text>
+    <text x="45" y="362" class="lbl">survivors: minds ingest · overmind genesis/revelation applied · snoop files supers · chronicle grows</text>
+  </g>
+</svg>

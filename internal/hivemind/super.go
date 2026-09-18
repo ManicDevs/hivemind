@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,12 +28,15 @@ const (
 // the operator-asserted dialable address (HIVEMIND_ADVERTISE) or empty
 // for LAN-only nodes, whose address travels with the beacon instead.
 // DHT carries this node's DHT UDP port (0 = none) so far nodes can join
-// the DHT without any prior introduction.
+// the DHT without any prior introduction. DHTUDP carries the STUN-seen
+// address of that same socket ("" when unknown): the only address the
+// open internet can actually dial back for DHT traffic.
 type superAnnounce struct {
-	Node  string  `json:"node"`
-	Addr  string  `json:"addr"`
-	Score float64 `json:"score"`
-	DHT   int     `json:"dht,omitempty"`
+	Node   string  `json:"node"`
+	Addr   string  `json:"addr"`
+	Score  float64 `json:"score"`
+	DHT    int     `json:"dht,omitempty"`
+	DHTUDP string  `json:"dhtudp,omitempty"`
 }
 
 // superEntry is one known supernode: where, how capable, how close,
@@ -237,10 +241,11 @@ func (pm *PeerMesh) maybeAnnounce() bool {
 		return false
 	}
 	body, _ := json.Marshal(superAnnounce{
-		Node:  pm.node,
-		Addr:  pm.advertiseAddr(),
-		Score: score,
-		DHT:   pm.dhtPort(),
+		Node:   pm.node,
+		Addr:   pm.advertiseAddr(),
+		Score:  score,
+		DHT:    pm.dhtPort(),
+		DHTUDP: pm.dhtReflexive(),
 	})
 	pm.swarm.Broadcast(MineMessage(pm.swarm, pm.priv, pm.pub, "super_announce", string(body), nil))
 	fmt.Printf("📣 [PEER MESH] Node %q announced super (capability %.2f).\n", pm.node, score)
@@ -389,6 +394,15 @@ func (pm *PeerMesh) snoopLoop(inbox chan SecureMessage) {
 				pm.setSuperID(a.Node, dhtIDFromPubKey(msg.SenderPubKey).hex())
 				if a.DHT > 0 {
 					pm.dhtPingHost(a.Addr, a.DHT)
+				}
+				// A reflexive DHT address is directly dialable UDP with
+				// no guessing: join through it even with no other intro.
+				if a.DHTUDP != "" {
+					if host, port, err := net.SplitHostPort(a.DHTUDP); err == nil {
+						if p, err := strconv.Atoi(port); err == nil {
+							pm.dhtPing(host, p)
+						}
+					}
 				}
 			case "punch_req":
 				pm.answerPunch(msg)

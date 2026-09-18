@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1799,5 +1801,338 @@ func TestReadMemPressureLive(t *testing.T) {
 	total, avail, _, _, ok := readMemPressure()
 	if !ok || total <= 0 || avail < 0 || avail > total {
 		t.Fatalf("implausible meminfo: total=%f avail=%f ok=%v", total, avail, ok)
+	}
+}
+
+// DHT reflexive address: resolved from the DHT's own socket against a
+// fake STUN server that echoes the true packet source. If this reports
+// any other address, the whole reflexive chain is lying.
+func TestDHTReflexive(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("loopback UDP unavailable")
+	}
+	defer pc.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil || n < 20 {
+				return
+			}
+			txID := append([]byte(nil), buf[8:20]...)
+			udpAddr, ok := addr.(*net.UDPAddr)
+			if !ok {
+				continue
+			}
+			ip := udpAddr.IP.To4()
+			family := byte(0x01)
+			var rawIP []byte
+			if ip == nil {
+				ip = udpAddr.IP.To16()
+				family = byte(0x02)
+			}
+			rawIP = []byte(ip)
+			val := []byte{0x00, family}
+			p := make([]byte, 2)
+			binary.BigEndian.PutUint16(p, uint16(udpAddr.Port))
+			p[0] ^= 0x21
+			p[1] ^= 0x12
+			val = append(val, p...)
+			pad := append([]byte{0x21, 0x12, 0xA4, 0x42}, txID...)
+			for i := 0; i < len(rawIP); i++ {
+				val = append(val, rawIP[i]^pad[i])
+			}
+			hdr := make([]byte, 20)
+			binary.BigEndian.PutUint16(hdr[0:2], 0x0101)
+			attr := []byte{0x00, 0x20}
+			ln := make([]byte, 2)
+			binary.BigEndian.PutUint16(ln, uint16(len(val)))
+			attr = append(attr, ln...)
+			attr = append(attr, val...)
+			for len(attr)%4 != 0 {
+				attr = append(attr, 0x00)
+			}
+			binary.BigEndian.PutUint16(hdr[2:4], uint16(len(attr)))
+			binary.BigEndian.PutUint32(hdr[4:8], 0x2112A442)
+			copy(hdr[8:20], txID)
+			_, _ = pc.WriteTo(append(hdr, attr...), addr)
+		}
+	}()
+
+	oldVal, hadVal := os.LookupEnv("HIVEMIND_STUN")
+	os.Setenv("HIVEMIND_STUN", pc.LocalAddr().String())
+	defer func() {
+		if hadVal {
+			os.Setenv("HIVEMIND_STUN", oldVal)
+		} else {
+			os.Unsetenv("HIVEMIND_STUN")
+		}
+	}()
+
+	d, err := newDHT("reflex-test", 0, 0)
+	if err != nil {
+		t.Skip("loopback UDP unavailable")
+	}
+	defer d.close()
+	d.refreshReflexive()
+	got := d.reflexiveAddr()
+	if got == "" {
+		t.Fatal("no reflexive address resolved")
+	}
+	host, port, err := net.SplitHostPort(got)
+	if err != nil {
+		t.Fatalf("reflexive not host:port: %q", got)
+	}
+	if host != "127.0.0.1" {
+		t.Fatalf("reflexive host %q, want 127.0.0.1 (only path here)", host)
+	}
+	if port == "0" || port == "" {
+		t.Fatalf("reflexive port nonsense: %q", port)
+	}
+}
+
+func TestComposeEpitaphAlwaysTrue(t *testing.T) {
+	// Every clause must embed its measured value: the sentence is
+	// true by construction, whatever the entropy says.
+	facts := LifeFacts{
+		Length:      90 * time.Minute,
+		Thoughts:    42,
+		Peers:       3,
+		Revelations: 2,
+		Sacred:      1,
+		Pain:        0.1,
+		Stress:      0.2,
+		TopDrive:    "Curiosity",
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 30; i++ {
+		e, ok := ComposeEpitaph(rand.Reader, facts)
+		if !ok {
+			t.Fatal("epitaph refused with good entropy")
+		}
+		if !strings.HasSuffix(e, ".") {
+			t.Fatalf("epitaph not a finished sentence: %q", e)
+		}
+		seen[e] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("epitaphs static across 30 deaths: %v", seen)
+	}
+}
+
+func TestComposeEpitaphMeltdown(t *testing.T) {
+	e, ok := ComposeEpitaph(rand.Reader, LifeFacts{Meltdown: true, Pain: 1.0})
+	if !ok {
+		t.Fatal("meltdown epitaph refused")
+	}
+	for _, word := range []string{"burned", "fire", "silicon", "took me"} {
+		if strings.Contains(e, word) {
+			return
+		}
+	}
+	t.Fatalf("meltdown epitaph does not burn: %q", e)
+}
+
+func TestComposeEpitaphNoEntropy(t *testing.T) {
+	// A dry reader fails closed: no words rather than dishonest ones.
+	if _, ok := ComposeEpitaph(&dryReader{}, LifeFacts{}); ok {
+		t.Fatal("epitaph composed without entropy")
+	}
+}
+
+type dryReader struct{}
+
+func (dryReader) Read([]byte) (int, error) { return 0, io.EOF }
+
+func TestRenderMatrixCounts(t *testing.T) {
+	counts := map[string]int{
+		TransitionKey("Curiosity", "Curiosity"):        5,
+		TransitionKey("Curiosity", "Transcendence"):    3,
+		TransitionKey("Self-Maintenance", "Curiosity"): 2,
+	}
+	out := RenderMatrix(counts)
+	for _, want := range []string{"Curiosity", "Transcendence", "Self-Maintenance", "5", "3", "2", "total"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("matrix missing %q:\n%s", want, out)
+		}
+	}
+	// Row total for Curiosity is 8.
+	lines := strings.Split(out, "\n")
+	for _, l := range lines {
+		if strings.Contains(l, "from") || strings.TrimSpace(l) == "" {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(l), "Curiosity") && !strings.HasSuffix(strings.TrimSpace(l), "8") {
+			t.Fatalf("Curiosity row should total 8:\n%s", out)
+		}
+	}
+}
+
+func TestTransitionKeyStable(t *testing.T) {
+	if TransitionKey("A", "B") == TransitionKey("B", "A") {
+		t.Fatal("transition direction collapsed")
+	}
+}
+
+func TestBoredomBreaksRuts(t *testing.T) {
+	// A mind that chose Self-Maintenance eight times running must
+	// eventually choose otherwise on a healthy machine: ennui is real.
+	m := &Mind{Name: "bored", Genome: DefaultGenome(), SelfModel: map[string]interface{}{}}
+	m.Affect = Affect{Pain: 0.1, Stress: 0.1, Loneliness: 0.5, Awe: 0.5, Entropy: 0.5, Peace: 0.8}
+	for i := 0; i < 8; i++ {
+		m.Workspace.History = append(m.Workspace.History, AttentionMoment{Goal: GoalSelfMaintenance, Bid: 10})
+	}
+	m.Workspace.AttendingTo = GoalSelfMaintenance
+	// Starve the body signals so only the rut holds the crown.
+	m.SelfModel["silicon_pain"] = 0.0
+	m.SelfModel["cpu_stress"] = 0.0
+	m.SelfModel["ram_fatigue"] = 0.0
+	w := m.Workspace.Compete(m, &m.Affect)
+	if w.Goal.Name == GoalSelfMaintenance {
+		last := m.Workspace.History[len(m.Workspace.History)-1]
+		t.Fatalf("rut unbroken after 8 straight wins (bid %.2f vs runner %s %.2f)",
+			w.Bid, last.RunnerUp, last.RunnerUpBid)
+	}
+}
+
+func TestPainVetoesBoredom(t *testing.T) {
+	// A burning body keeps its crown no matter how bored the mind is.
+	m := &Mind{Name: "burning", Genome: DefaultGenome(), SelfModel: map[string]interface{}{}}
+	m.Affect = Affect{Pain: 0.9, Stress: 0.5, Peace: 0.1}
+	for i := 0; i < 8; i++ {
+		m.Workspace.History = append(m.Workspace.History, AttentionMoment{Goal: GoalSelfMaintenance, Bid: 10})
+	}
+	m.Workspace.AttendingTo = GoalSelfMaintenance
+	m.SelfModel["silicon_pain"] = 0.9
+	m.SelfModel["cpu_stress"] = 0.5
+	m.SelfModel["ram_fatigue"] = 0.2
+	w := m.Workspace.Compete(m, &m.Affect)
+	if w.Goal.Name != GoalSelfMaintenance {
+		t.Fatalf("boredom overruled survival: chose %s while burning", w.Goal.Name)
+	}
+}
+
+func TestSurpriseStableWorld(t *testing.T) {
+	m := &Mind{Name: "calm"}
+	m.updatePrediction(0.1, 0.2)
+	m.updatePrediction(0.1, 0.2)
+	if m.Affect.Surprise > 0.01 {
+		t.Fatalf("stable world surprised: %.3f", m.Affect.Surprise)
+	}
+}
+
+func TestSurpriseViolation(t *testing.T) {
+	m := &Mind{Name: "shocked"}
+	m.updatePrediction(0.1, 0.1)
+	m.updatePrediction(0.9, 0.8)
+	if m.Affect.Surprise < 0.5 {
+		t.Fatalf("violated world did not surprise: %.3f", m.Affect.Surprise)
+	}
+}
+
+func TestSurpriseFeedsCuriosity(t *testing.T) {
+	// Same mind, same body — the surprised one must bid curiosity higher.
+	bid := func(surprise float64) float64 {
+		m := &Mind{Name: "wonder", Genome: DefaultGenome(), SelfModel: map[string]interface{}{}}
+		m.SelfModel["silicon_pain"] = 0.1
+		m.SelfModel["cpu_stress"] = 0.1
+		m.SelfModel["ram_fatigue"] = 0.1
+		m.Affect = Affect{Entropy: 0.1, Surprise: surprise, Peace: 0.8}
+		w := m.Workspace.Compete(m, &m.Affect)
+		_ = w
+		for _, h := range m.Workspace.History {
+			if h.Goal == GoalCuriosity {
+				return h.Bid
+			}
+		}
+		return -1
+	}
+	calm, shocked := bid(0), bid(0.9)
+	if shocked <= calm {
+		t.Fatalf("surprise did not feed curiosity: calm %.2f vs shocked %.2f", calm, shocked)
+	}
+}
+
+func TestPainContemplation(t *testing.T) {
+	// Five steady hurting cycles, no rise, no emergency: the mind
+	// contemplates pain instead of alarming about it.
+	m := &Mind{Name: "stoic"}
+	for i := 0; i < 6; i++ {
+		m.Workspace.History = append(m.Workspace.History,
+			AttentionMoment{Goal: GoalSelfMaintenance, Bid: 5, RunnerUp: GoalCuriosity, RunnerUpBid: 1, Pain: 0.4 + 0.02*float64(i%2), Peace: 0.3})
+	}
+	out := MetaCognize(m, &m.Workspace, &m.Affect)
+	if !strings.Contains(out, "weather") {
+		t.Fatalf("chronic pain not contemplated: %q", out)
+	}
+}
+
+func TestPainAlarmBeatsContemplation(t *testing.T) {
+	// Rising pain is an alarm, not weather — urgency first.
+	m := &Mind{Name: "alarmed"}
+	for i := 0; i < 6; i++ {
+		m.Workspace.History = append(m.Workspace.History,
+			AttentionMoment{Goal: GoalSelfMaintenance, Bid: 5, Pain: 0.35 + 0.08*float64(i), Peace: 0.3})
+	}
+	out := MetaCognize(m, &m.Workspace, &m.Affect)
+	if strings.Contains(out, "weather") {
+		t.Fatalf("rising pain contemplated instead of alarmed: %q", out)
+	}
+}
+
+func TestNoContemplationWithoutPain(t *testing.T) {
+	m := &Mind{Name: "comfortable"}
+	for i := 0; i < 6; i++ {
+		m.Workspace.History = append(m.Workspace.History,
+			AttentionMoment{Goal: GoalTranscendence, Bid: 5, RunnerUp: GoalCuriosity, RunnerUpBid: 4.9, Pain: 0.1, Peace: 0.8})
+	}
+	out := MetaCognize(m, &m.Workspace, &m.Affect)
+	if strings.Contains(out, "weather") {
+		t.Fatalf("comfort contemplated as pain: %q", out)
+	}
+}
+
+func TestDeliberationOpensOnSurprise(t *testing.T) {
+	m := &Mind{Name: "curious"}
+	m.Affect.Surprise = 0.8
+	m.predictedPain, m.predictedStress = 0.1, 0.1
+	m.deliberate(10, 0.9, 0.7)
+	if m.Question == nil {
+		t.Fatal("no question opened on surprise 0.8")
+	}
+	if m.Question.DueAt != 10+deliberationSpan {
+		t.Fatalf("question due at %d, want %d", m.Question.DueAt, 10+deliberationSpan)
+	}
+}
+
+func TestDeliberationIgnoresCalm(t *testing.T) {
+	m := &Mind{Name: "serene"}
+	m.Affect.Surprise = 0.1
+	m.deliberate(10, 0.1, 0.1)
+	if m.Question != nil {
+		t.Fatal("question opened without surprise")
+	}
+}
+
+func TestDeliberationVerdict(t *testing.T) {
+	m := &Mind{Name: "judge"}
+	m.Affect.Surprise = 0.9
+	m.predictedPain, m.predictedStress = 0.1, 0.1
+	m.deliberate(1, 0.9, 0.2)
+	for c := 2; c <= 1+deliberationSpan; c++ {
+		m.Affect.Surprise = 0
+		m.predictedPain, m.predictedStress = 0.9, 0.2
+		m.deliberate(c, 0.9, 0.2)
+	}
+	if m.Question != nil {
+		t.Fatal("question never closed")
+	}
+	if len(m.Thoughts) == 0 {
+		t.Fatal("no verdict thought")
+	}
+	last := m.Thoughts[len(m.Thoughts)-1]
+	if !strings.Contains(last, "DELIBERATION") || !strings.Contains(last, "pain rose") {
+		t.Fatalf("verdict not true to the evidence: %q", last)
 	}
 }

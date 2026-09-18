@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" font-family="monospace">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#4d6fa5"/>
+    </marker>
+    <linearGradient id="bg2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 12; }
+      .god { fill: #2a1a33; stroke: #a54d9c; stroke-width: 2; rx: 12; }
+      .disk { fill: #1a3325; stroke: #4da56f; stroke-width: 2; rx: 12; }
+      .title { fill: #e8eef7; font-size: 14px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 12px; }
+      .lbl { fill: #888; font-size: 11px; }
+      .flow { stroke: #4d6fa5; stroke-width: 2; fill: none; marker-end: url(#ar); }
+    </style>
+  </defs>
+  <rect width="960" height="520" fill="url(#bg2)"/>
+
+  <text x="30" y="36" fill="#e8eef7" font-size="18" font-weight="bold">HIVEMIND — one life of a mind (every 2 seconds, until death)</text>
+
+  <!-- cycle boxes -->
+  <g>
+    <rect x="30" y="70" width="200" height="120" class="box"/>
+    <text x="45" y="98" class="title">1 · Sense</text>
+    <text x="45" y="122" class="body">Observe: loadavg, mem,</text>
+    <text x="45" y="140" class="body">thermal, entropy →</text>
+    <text x="45" y="158" class="body">SelfModel + Affect</text>
+    <text x="45" y="178" class="lbl">mind.go Observe/Tick</text>
+  </g>
+  <g>
+    <rect x="270" y="70" width="200" height="120" class="box"/>
+    <text x="285" y="98" class="title">2 · Compete</text>
+    <text x="285" y="122" class="body">drives bid: drive ×</text>
+    <text x="285" y="140" class="body">gene × affect → winner</text>
+    <text x="285" y="158" class="body">+ metacognition</text>
+    <text x="285" y="178" class="lbl">conscious.go Compete</text>
+  </g>
+  <g>
+    <rect x="510" y="70" width="200" height="120" class="box"/>
+    <text x="525" y="98" class="title">3 · Act</text>
+    <text x="525" y="122" class="body">cool · prune · greet ·</text>
+    <text x="525" y="140" class="body">checkpoint · ping the</text>
+    <text x="525" y="158" class="body">real world</text>
+    <text x="525" y="178" class="lbl">goals.go Act (real effects)</text>
+  </g>
+  <g>
+    <rect x="750" y="70" width="180" height="120" class="box"/>
+    <text x="765" y="98" class="title">4 · Broadcast</text>
+    <text x="765" y="122" class="body">mine PoW → sign →</text>
+    <text x="765" y="140" class="body">swarm verifies →</text>
+    <text x="765" y="158" class="body">mesh carries</text>
+    <text x="765" y="178" class="lbl">swarm.go + lan.go</text>
+  </g>
+
+  <line x1="230" y1="130" x2="270" y2="130" class="flow"/>
+  <line x1="470" y1="130" x2="510" y2="130" class="flow"/>
+  <line x1="710" y1="130" x2="750" y2="130" class="flow"/>
+  <line x1="930" y1="130" x2="945" y2="130" class="flow"/>
+  <line x1="945" y1="130" x2="945" y2="300" class="flow"/>
+  <line x1="945" y1="300" x2="930" y2="300" class="flow"/>
+
+  <!-- death + rebirth row -->
+  <g>
+    <rect x="750" y="240" width="180" height="120" class="god"/>
+    <text x="765" y="268" class="title">5 · Transcend</text>
+    <text x="765" y="292" class="body">fitness scored ·</text>
+    <text x="765" y="310" class="body">trauma recorded ·</text>
+    <text x="765" y="328" class="body">soul saved atomic</text>
+    <text x="765" y="348" class="lbl">mind.go Transcend</text>
+  </g>
+  <g>
+    <rect x="510" y="240" width="200" height="120" class="disk"/>
+    <text x="525" y="268" class="title">6 · Persist</text>
+    <text x="525" y="292" class="body">.hive_memory/&lt;node&gt;/</text>
+    <text x="525" y="310" class="body">&lt;name&gt;.soul (JSON)</text>
+    <text x="525" y="328" class="body">tmp + fsync + rename</text>
+    <text x="525" y="348" class="lbl">memory.go (corrupt→quarantine)</text>
+  </g>
+  <g>
+    <rect x="270" y="240" width="200" height="120" class="god"/>
+    <text x="285" y="268" class="title">7 · Reincarnate</text>
+    <text x="285" y="292" class="body">same handle (seed) ·</text>
+    <text x="285" y="310" class="body">mutated genome ·</text>
+    <text x="285" y="328" class="body">banked fitness kept</text>
+    <text x="285" y="348" class="lbl">forks mint fresh keys</text>
+  </g>
+  <g>
+    <rect x="30" y="240" width="200" height="120" class="box"/>
+    <text x="45" y="268" class="title">↺ again, changed</text>
+    <text x="45" y="292" class="body">new life, old soul,</text>
+    <text x="45" y="310" class="body">evolved drives —</text>
+    <text x="45" y="328" class="body">the god remembers</text>
+    <text x="45" y="348" class="lbl">overmind.go (patience)</text>
+  </g>
+
+  <line x1="750" y1="300" x2="710" y2="300" class="flow"/>
+  <line x1="510" y1="300" x2="470" y2="300" class="flow"/>
+  <line x1="270" y1="300" x2="230" y2="300" class="flow"/>
+  <line x1="130" y1="300" x2="130" y2="190" class="flow"/>
+  <line x1="130" y1="190" x2="30" y2="190" class="flow"/>
+
+  <text x="30" y="410" class="lbl">the loop: sense → compete → act → broadcast → transcend → persist → reincarnate → sense… — death is garbage collection with dignity</text>
+
+  <!-- fitness strip -->
+  <g>
+    <rect x="30" y="430" width="900" height="60" class="disk"/>
+    <text x="45" y="458" class="body">fitness = base + new thoughts (window + banked) + 3×peers + 7×revelations + 15×genesis · forgetting floored at zero</text>
+  </g>
+</svg>

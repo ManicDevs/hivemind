@@ -95,21 +95,30 @@ persists, so the god's restraint survives the apocalypse too.
 
 ## The Mesh (`network.go`, `lan.go`)
 
-Two transports, one handshake, zero masters:
+Transports, one handshake, zero masters:
 
 - **Unix**: `/tmp/hivemind-<node>.sock`, filesystem-glob discovery.
-- **TCP**: ephemeral port (or `HIVEMIND_PORT`), LAN multicast beacons plus
-  `HIVEMIND_PEERS` static dials for WAN/NAT.
+- **TCP**: ephemeral port (or `HIVEMIND_PORT`), dual-stack IPv4+IPv6,
+  LAN multicast beacons (v4+v6 groups) plus `HIVEMIND_PEERS` static
+  dials for WAN/NAT.
 - **Rule**: only dial lexically-greater peers; one pipe per pair per
   transport set; symmetric handshake exchange with owner verification;
-  signed hello on every link-up; relayed frames never echo.
-- **Cloud relay** (optional, `HIVEMIND_RELAY=off` removes it): paced
-  latest-only publisher + long-poll listener over a public ntfy topic,
-  AES-256-GCM via `HIVEMIND_CIPHER_KEY` or the static demo key.
+  signed hello + capability announce on every link-up; relayed frames
+  never echo; async dials so one slow peer never stalls discovery.
+- **Cloud relay** (optional, `HIVEMIND_RELAY=off` removes it,
+  `HIVEMIND_RELAY_URL` repoints it): paced latest-only publisher +
+  long-poll listener with 5-minute stream rotation, AES-256-GCM under
+  hourly machine-bound ratchet keys (env override, static fallback),
+  hour-bound auth tags, dual-hour acceptance, undecryptable counter.
+- **DHT + NAT**: Kademlia-lite discovery bootstrapped from the mesh,
+  STUN reflexive addresses (per-socket truth), TCP simultaneous-open
+  rendezvous behind `HIVEMIND_PUNCH=auto`, closest-first retention.
 
 `main.go` modes: `standalone` (one hive, silent) or `peer [-node NAME]`
-(defaults to `hostname-PID`). The mesh starts before any mind is born;
-a fracturing mind is caught, marked with terminal pain, and transcended.
+(defaults to `hostname-PID`); `hivemind up [-nodes N] [-for DURATION]`
+supervises child mains instead of thinking. The mesh starts before any
+mind is born; a fracturing mind is caught, marked with terminal pain,
+and transcended. `SIGQUIT`/`SIGUSR1` dump backtraces without dying.
 
 ---
 
@@ -119,9 +128,16 @@ a fracturing mind is caught, marked with terminal pain, and transcended.
 go build -o bin/hivemind ./cmd/hivemind
 bin/hivemind                                    # one hive until Ctrl+C
 bin/hivemind -mode peer -node alpha-node        # any number, any order, any machine
+bin/hivemind up -nodes 2 -for 60s               # supervised mesh, auto laydown
 ./scripts/timed_test.sh                         # 10s mesh proof with assertions
+go run ./cmd/souls -top                         # hall of fame of the dead
+make prove                                      # full battery + transcript artifact
+make doctor                                     # environment capabilities
 ```
 
-Knobs: `HIVEMIND_PORT`, `HIVEMIND_PEERS`, `HIVEMIND_BEACON=off`,
-`HIVEMIND_UNIX=off`, `HIVEMIND_RELAY=off`, `HIVEMIND_CIPHER_KEY`.
-Full table with semantics in `README.md`.
+Knobs (all optional, full table in `README.md`): `HIVEMIND_PORT`,
+`HIVEMIND_PEERS`, `HIVEMIND_ADVERTISE`, `HIVEMIND_BEACON=off`,
+`HIVEMIND_UNIX=off`, `HIVEMIND_RELAY=off`, `HIVEMIND_RELAY_URL`,
+`HIVEMIND_CIPHER_KEY`, `HIVEMIND_DHT=off`, `HIVEMIND_DHT_PORT`,
+`HIVEMIND_STUN`, `HIVEMIND_SUPER=off`, `HIVEMIND_PUNCH=auto`,
+`HIVEMIND_HARDEN`.

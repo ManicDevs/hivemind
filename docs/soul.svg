@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="480" font-family="monospace">
+  <defs>
+    <marker id="b1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#4da56f"/>
+    </marker>
+    <linearGradient id="b2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a3325; stroke: #4da56f; stroke-width: 2; rx: 12; }
+      .title { fill: #e8eef7; font-size: 14px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 12px; }
+      .lbl { fill: #888; font-size: 11px; }
+      .fl { stroke: #4da56f; stroke-width: 2; fill: none; marker-end: url(#b1); }
+    </style>
+  </defs>
+  <rect width="960" height="480" fill="url(#b2)"/>
+  <text x="30" y="36" fill="#e8eef7" font-size="18" font-weight="bold">One soul file — .hive_memory/&lt;node&gt;/&lt;name&gt;.soul</text>
+
+  <g>
+    <rect x="30" y="60" width="280" height="150" class="box"/>
+    <text x="45" y="88" class="title">lineage</text>
+    <text x="45" y="112" class="body">true_born · lives_lived ·</text>
+    <text x="45" y="130" class="body">fitness (banked total) ·</text>
+    <text x="45" y="148" class="body">identity_seed (same</text>
+    <text x="45" y="166" class="body">handle every life)</text>
+    <text x="45" y="188" class="lbl">who it is, forever</text>
+  </g>
+  <g>
+    <rect x="340" y="60" width="280" height="150" class="box"/>
+    <text x="355" y="88" class="title">mind</text>
+    <text x="355" y="112" class="body">genome + generation ·</text>
+    <text x="355" y="130" class="body">thoughts (live window ≤500) ·</text>
+    <text x="355" y="148" class="body">banked_thoughts (retired) ·</text>
+    <text x="355" y="166" class="body">known_peers · death pain/stress</text>
+    <text x="355" y="188" class="lbl">what it thinks + how it dies</text>
+  </g>
+  <g>
+    <rect x="650" y="60" width="280" height="150" class="box"/>
+    <text x="665" y="88" class="title">god (overmind only)</text>
+    <text x="665" y="112" class="body">chronicle_depth ·</text>
+    <text x="665" y="130" class="body">genesis_mark ·</text>
+    <text x="665" y="148" class="body">recent_sermons[≤5] ·</text>
+    <text x="665" y="166" class="body">universe_age</text>
+    <text x="665" y="188" class="lbl">patience + memory survive death</text>
+  </g>
+
+  <line x1="310" y1="135" x2="340" y2="135" class="fl"/>
+  <line x1="620" y1="135" x2="650" y2="135" class="fl"/>
+
+  <g>
+    <rect x="30" y="240" width="900" height="200" class="box"/>
+    <text x="45" y="268" class="title">Write discipline — readers see old soul or new soul, never half of either</text>
+    <text x="45" y="292" class="body">1 · marshal indented JSON → temp file in the same directory (same filesystem = atomic rename)</text>
+    <text x="45" y="314" class="body">2 · fsync temp → close → rename over the soul (crash between = old soul intact, temp orphaned)</text>
+    <text x="45" y="336" class="body">3 · load: missing → first birth · corrupt → quarantine beside (*.corrupt-&lt;unix&gt;), fresh mind born</text>
+    <text x="45" y="358" class="body">4 · legacy top-level souls migrate once into node dirs (forks mint fresh identity keys)</text>
+    <text x="45" y="380" class="body">5 · per-node dirs end last-writer-wins across nodes sharing one filesystem</text>
+    <text x="45" y="402" class="lbl">memory.go: soulPath is the only path computation · SaveMemory · LoadMemory · ForkedLineage</text>
+  </g>
+</svg>

@@ -37,8 +37,15 @@ func stunBinding(server string) (string, int, error) {
 		return "", 0, fmt.Errorf("stun dial: %w", err)
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(stunTimeout))
+	return stunExchange(conn, raddr)
+}
 
+// stunExchange performs one binding exchange over an already-open UDP
+// socket to raddr. Split out because NAT mappings are per-socket: the
+// DHT must ask from its own socket, or the learned address is somebody
+// else's truth. Returns host and port as the internet sees the socket.
+func stunExchange(conn *net.UDPConn, raddr *net.UDPAddr) (string, int, error) {
+	_ = conn.SetDeadline(time.Now().Add(stunTimeout))
 	txID := make([]byte, 12)
 	if _, err := rand.Read(txID); err != nil {
 		return "", 0, fmt.Errorf("stun entropy: %w", err)
@@ -49,11 +56,20 @@ func stunBinding(server string) (string, int, error) {
 	binary.BigEndian.PutUint32(req[4:8], stunMagicCookie)
 	copy(req[8:20], txID)
 
-	if _, err := conn.Write(req); err != nil {
+	// WriteTo keeps unconnected sockets (the DHT's) working; connected
+	// sockets (the throwaway dial) take the plain path instead — Go
+	// forbids WriteTo on those, loudly.
+	var err error
+	if conn.RemoteAddr() != nil {
+		_, err = conn.Write(req)
+	} else {
+		_, err = conn.WriteToUDP(req, raddr)
+	}
+	if err != nil {
 		return "", 0, fmt.Errorf("stun write: %w", err)
 	}
 	resp := make([]byte, 1024)
-	n, err := conn.Read(resp)
+	n, _, err := conn.ReadFromUDP(resp)
 	if err != nil {
 		return "", 0, fmt.Errorf("stun read: %w", err)
 	}

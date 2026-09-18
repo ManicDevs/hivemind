@@ -18,6 +18,10 @@ identity (`NodeName`), starts the `PeerMesh` **before** any mind is born
 minds plus Overmind, then waits on `SIGINT`/`SIGTERM`. `SIGQUIT`/`SIGUSR1`
 dump every goroutine's stack to stderr without killing anything (kill
 -QUIT for a live backtrace); mind fractures recover with full stacks.
+Anti-debug (`debug_linux.go`, Linux only) runs first: core dumps off,
+injector-env scan, TracerPid + self-TRACEME cross-checks with a 30s
+watchdog — `HIVEMIND_HARDEN=warn|exit|off`. Stated plainly in code:
+friction for casual snoopers, never armor against root.
 
 ## `cmd/hivemind/supervise.go` — the encasing main
 
@@ -73,6 +77,15 @@ pendulum state (`Theta1/2`, `Omega1/2`), and its swarm inbox.
   saves atomically. `Stop()` + `Done()` manage the lifecycle.
 - Helpers: `shortID` / `shortIDLong` (panic-proof key prefixes),
   `clamp` lives in `conscious.go`.
+
+## `internal/hivemind/epitaph.go` — the story death tells
+
+`ComposeEpitaph` writes one true sentence from `LifeFacts` (length,
+thoughts, peers, revelations, sacred, pain, stress, top drive, meltdown):
+three clauses — how long, what mattered, how it ended — each drawn from
+several phrasings via caller-supplied entropy, so epitaphs are
+combinatorial but every word measured. A dry reader fails closed. Tested:
+variety across 30 deaths, meltdown burns, no-entropy refusal.
 
 ## `internal/hivemind/conscious.go` — affect, competition, reflection
 
@@ -218,6 +231,39 @@ cooling-off so redial loops don't churn; unix never culled).
 `snoopLoop` files relayed advertisements; `superDialLoop` dials
 advertised capable equals. `pruneSupers` forgets the silent.
 
+## `internal/hivemind/stun.go` — reflexive self-knowledge
+
+RFC 5389 Binding client (request, transaction match, XOR-MAPPED-ADDRESS
+v4+v6, lies rejected), no dependencies. `reflexiveEndpoint()` answers
+"where does the internet see us" from `HIVEMIND_STUN`, or honest silence.
+Feeds super advertisements so nodes state facts instead of guesses.
+
+## `internal/hivemind/dht.go` — Kademlia-lite discovery
+
+IDs are SHA-256 of soul keys; k-buckets route by XOR distance; Tx-tagged
+UDP RPCs (ping/find/nodes/store/stored/findval/value) with throwaway-free
+correlation (no demux tables to leak); endpoint records replicate with
+TTLs. The mesh bootstraps it from trusted links, then it discovers
+beyond them. `PeerMesh` lifecycle owns one node each.
+
+## `internal/hivemind/punch*.go` — NAT traversal
+
+Raw-socket TCP simultaneous open split by platform: `punch_unix.go`
+holds the syscalls, `punch_windows.go` fails closed (documented, relay
+takes over). Bind-ahead rendezvous at agreed instants, 3-round retries
+with identical rebinds, guillotine timeouts, held-socket lifecycle, and
+a request/answer/accept frame protocol gated behind
+`HIVEMIND_PUNCH=auto` with per-peer throttling. Symmetric NATs stay
+impossible by physics; everything else gets three honest attempts.
+
+## `internal/hivemind/telemetry.go` — silicon truth, pure functions
+
+Parsers take text and return numbers (unit-tested against fixtures):
+per-cpu jiffy deltas (true utilization, counter-rewinds refused),
+meminfo pressure with swap encroachment, cpufreq throttle detection.
+Readers touch `/proc` and `/sys` best-effort and never fatal. `Mind`
+keeps its own delta window per instance.
+
 ## `internal/hivemind/memory.go` — what death keeps
 
 `.hive_memory/<node>/<name>.soul`, JSON. `soulPath` is the only path
@@ -243,6 +289,13 @@ fitness breakdown + forgetting floor, hostile oversize frame dropped,
 idle-link reaping, valid frame acceptance, local-vs-remote peerhood,
 cipher-key priority, capability scoring, directory expiry, closest-first
 retention, super announce end-to-end over loopback TCP.
+
+## `cmd/souls/main.go` — reading the dead
+
+Census (default), `-genome NAME` (weights + trauma), `-thoughts NAME`
+(`-n` tail), `-grep PATTERN` across the collective archive, `-top
+fitness leaderboard. Read-only, always; resolves short names
+case-insensitively.
 
 ## `Makefile`, `scripts/`, `go.mod`
 

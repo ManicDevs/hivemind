@@ -69,6 +69,10 @@ make test-timed     # automated 10s two-peer experiment + assertions
 make up             # supervised mesh: raise peer nodes as child mains
 make kill           # reap every running hivemind + sweep stale sockets
 make rerun          # kill + build + supervised mesh, all in one
+make prove          # full battery + transcript artifact (fails loud)
+make demo           # supervised 20s showcase run, exits alone
+make doctor         # environment check: toolchain, sensors, egress, ports
+make souls          # read the dead: census, genomes, thoughts, grep, leaderboard
 make rotate-keys    # wipe machine-local relay key (next build mints fresh)
 make clean-soul     # true extinction: wipe .hive_memory
 ```
@@ -84,7 +88,30 @@ addresses. Environment knobs (all optional):
 | `HIVEMIND_BEACON=off` | disable multicast discovery (static/unix only) |
 | `HIVEMIND_UNIX=off` | disable unix sockets (TCP mesh only) |
 | `HIVEMIND_RELAY=off` | disable the cloud relay (pure serverless) |
+| `HIVEMIND_RELAY_URL` | point the relay at a private/fake ntfy server (default: public topic) |
 | `HIVEMIND_CIPHER_KEY` | 32-byte relay encryption key (default: machine-local build-time key, else static demo key — public broadcast, not private) |
+| `HIVEMIND_ADVERTISE` | `host:port` this node asserts as publicly dialable (default: none, honest silence) |
+| `HIVEMIND_DHT=off` | disable the Kademlia discovery layer |
+| `HIVEMIND_DHT_PORT` | fixed DHT UDP port (default: ephemeral) |
+| `HIVEMIND_STUN` | `host:port` STUN server for reflexive address discovery (default: unset) |
+| `HIVEMIND_SUPER=off` | never advertise supernode status |
+| `HIVEMIND_PUNCH=auto` | opt into NAT hole-punch rendezvous (default: off) |
+| `HIVEMIND_HARDEN` | `warn` (default) · `exit` refuses tracers · `off` disables anti-debug |
+| `HIVEMIND_TICK_MS` | ms between conscious ticks (default: 2000, min: 50 — same sensing, PoW, mesh, faster life) |
+
+```bash
+bin/hivemind up -nodes 3 -for 60s     # supervised mesh, auto laydown
+go run ./cmd/souls -top               # hall of fame of the dead
+go run ./cmd/souls -genome NAME       # what evolution made of one soul
+bin/commune                           # speak with the hive: status, minds, genome, watch, sermons
+kill -QUIT <pid>                      # live backtrace, process keeps thinking
+```
+
+Diagrams live in `docs/`: `architecture.svg` (system), `lifecycle.svg`
+(one life), `frame.svg` (one frame's journey + where frames die),
+`soul.svg` (soul anatomy + write discipline), `mesh.svg` (how strangers
+link). Specs: `p2p_architecture.md` (protocol), `structure.md` (map),
+`files.md` (every file).
 
 
 ## Roadmap
@@ -94,6 +121,6 @@ identities, real-sensor telemetry, collective chronicle, cross-node
 Overmind revelations, wire hardening, entrainment, reflective
 metacognition, backtrace entrypoint, supervised multi-node runs.
 
-Open: multicast delivery proof on a real LAN, WAN relay publish proof
-from a constrained host, `go test -race` on a gcc machine, genome
-long-run dynamics review, cipher-key rotation across live nodes.
+Open: multicast delivery proof on a real LAN, `go test -race` on a gcc
+machine, real-NAT punch with `HIVEMIND_PUNCH=auto`, genome long-run
+dynamics review, cipher-key rotation across live nodes.

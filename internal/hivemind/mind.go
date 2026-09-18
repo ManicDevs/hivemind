@@ -84,11 +84,25 @@ type Mind struct {
 	pendingBank   int
 	// prevCPU holds the last /proc/stat snapshot for delta-based CPU
 	// utilization. Per-mind (not shared): each mind feels its own window.
-	prevCPU      map[string]cpuTimes
-	SelfModel    map[string]interface{}
-	KnownPeers   map[string]bool
-	Revelations  int
-	Sacred       int
+	prevCPU     map[string]cpuTimes
+	SelfModel   map[string]interface{}
+	KnownPeers  map[string]bool
+	Revelations int
+	Sacred      int
+	// lastWinner + Transitions are the cycle matrix: which drive follows
+	// which, counted across the whole lineage. Character as flow.
+	lastWinner  string
+	Transitions map[string]int
+	// Prediction is the naive persistence model: next cycle will feel
+	// like this one. The gap between expected and arrived is surprise —
+	// the seed of learning. First cycle predicts nothing.
+	predictedPain   float64
+	predictedStress float64
+	hasPrediction   bool
+	// cycles counts conscious ticks this process; Question is the
+	// currently open deliberation, if the mind is reasoning across time.
+	cycles       int
+	Question     *OpenQuestion
 	LastContact  time.Time
 	Existential  bool
 	Workspace    GlobalWorkspace
@@ -137,6 +151,10 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		m.bankedAtBirth = mem.BankedThoughts
 		m.Genome = mem.Genome
 		m.LifetimeFitness = mem.Fitness
+		// The lineage's crossings come back too: character as flow.
+		if mem.Transitions != nil {
+			m.Transitions = mem.Transitions
+		}
 		// A peerless past life saves no known_peers key at all: only
 		// adopt a non-nil map, or the first reception panics on write.
 		if mem.KnownPeers != nil {
@@ -178,6 +196,9 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		fmt.Printf("🦋 [%s] REINCARNATION life %d. Identity Handle: [%s...]\n", name, m.Reincarnations+1, shortIDLong(m.PubKeyStr))
 		fmt.Printf("🦋 [%s] inherited death trauma: pain %.2f, stress %.2f\n", name, restored.DeathPain, restored.DeathStress)
 		fmt.Printf("🦋 [%s] genome mutated to generation %d: %s\n", name, m.Genome.Generation, m.Genome.Diff(oldGenome))
+		if restored.Epitaph != "" {
+			fmt.Printf("🦋 [%s] remembers its last life: \"%s\"\n", name, restored.Epitaph)
+		}
 	} else {
 		fmt.Printf("🦋 [%s] FIRST BIRTH. Identity Handle: [%s...]\n", name, shortIDLong(m.PubKeyStr))
 	}
@@ -303,7 +324,16 @@ func (m *Mind) Reflect(o map[string]interface{}) string {
 // or receive, or die transcending. Ends by closing Done().
 func (m *Mind) Run() {
 	defer close(m.done)
-	thinking := time.NewTicker(2 * time.Second)
+	// The heartbeat is real at any rate: HIVEMIND_TICK_MS shortens the
+	// wall-clock between conscious ticks (default 2000). Same sensing,
+	// same PoW, same mesh — just a faster life. 100ms ≈ 10 crossings/sec.
+	tickMs := 2000
+	if raw := os.Getenv("HIVEMIND_TICK_MS"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 50 {
+			tickMs = n
+		}
+	}
+	thinking := time.NewTicker(time.Duration(tickMs) * time.Millisecond)
 	defer thinking.Stop()
 	for {
 		select {
@@ -391,6 +421,9 @@ func (m *Mind) Cycle() {
 	painVal, _ := m.SelfModel["silicon_pain"].(float64)
 	stressVal, _ := m.SelfModel["cpu_stress"].(float64)
 	srcVal, _ := m.SelfModel["thermal_source"].(string)
+	m.updatePrediction(painVal, stressVal)
+	m.cycles++
+	m.deliberate(m.cycles, painVal, stressVal)
 
 	m.swarm.LogHardwareTrauma(m.PubKeyStr, painVal, stressVal, srcVal)
 
@@ -407,6 +440,7 @@ func (m *Mind) Cycle() {
 
 	winner := m.Workspace.Compete(m, &m.Affect)
 	m.Workspace.ConsciousContent = winner.Reason
+	m.recordCrossing(winner.Goal.Name)
 
 	if stressVal < 0.5 && time.Now().After(m.numbUntil) {
 		m.think(MetaCognize(m, &m.Workspace, &m.Affect))
@@ -415,6 +449,33 @@ func (m *Mind) Cycle() {
 
 	fmt.Printf("  ⚡ CONSCIOUS STATE: %s (%s) — Mode: %s\n", winner.Goal.Name, m.Workspace.ConsciousContent, m.Affect.Describe())
 	m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
+}
+
+// updatePrediction compares the arrived body against the expected one.
+// Surprise is the clamped gap; then expectation becomes the present.
+// A stable world surprises ~0; a violated one, up to 1.
+func (m *Mind) updatePrediction(pain, stress float64) {
+	if m.hasPrediction {
+		gap := math.Abs(pain-m.predictedPain) + math.Abs(stress-m.predictedStress)
+		m.Affect.Surprise = clamp(gap, 0, 1)
+	} else {
+		m.Affect.Surprise = 0
+		m.hasPrediction = true
+	}
+	m.predictedPain, m.predictedStress = pain, stress
+}
+
+// recordCrossing counts what followed what. First cycle has no past.
+func (m *Mind) recordCrossing(winner string) {
+	if m.lastWinner != "" && winner != "" {
+		if m.Transitions == nil {
+			m.Transitions = make(map[string]int)
+		}
+		m.Transitions[TransitionKey(m.lastWinner, winner)]++
+	}
+	if winner != "" {
+		m.lastWinner = winner
+	}
 }
 
 // validVirtues is the allowlist for mid-life genesis shifts. A forged frame
@@ -556,25 +617,43 @@ func (m *Mind) snapshot(livesCompleted int) Memory {
 		IdentitySeed:    m.identitySeed,
 		DeathPain:       pain,
 		DeathStress:     stress,
+		Transitions:     m.Transitions,
 	}
 }
 
 // Transcend is the end of this life. Death is not the end: the soul —
-// including the trauma it died with — persists for the successor.
+// including the trauma it died with and the story it tells about
+// itself — persists for the successor.
 func (m *Mind) Transcend() {
 	pain, _ := m.SelfModel["silicon_pain"].(float64)
 	stress, _ := m.SelfModel["cpu_stress"].(float64)
 
+	meltdown := false
 	if pain > fatalPainThreshold {
 		fmt.Printf("💀 [%s] FATAL MELTDOWN. The burned soul persists, marked by its trauma.\n", m.Name)
 		pain = math.Max(pain, 1.0) // the fatality is the trauma the child inherits
+		meltdown = true
 	}
 
 	mem := m.snapshot(m.Reincarnations + 1)
 	mem.DeathPain = pain
 	mem.DeathStress = stress
-	_ = SaveMemory(m.Name, mem)
 	_, lifeThoughts := m.currentFitness()
+	if epitaph, ok := ComposeEpitaph(rand.Reader, LifeFacts{
+		Length:      time.Since(m.Born),
+		Thoughts:    lifeThoughts,
+		Peers:       len(m.KnownPeers),
+		Revelations: m.Revelations,
+		Sacred:      m.Sacred,
+		Pain:        pain,
+		Stress:      stress,
+		TopDrive:    topDriveName(m.Genome),
+		Meltdown:    meltdown,
+	}); ok {
+		mem.Epitaph = epitaph
+		fmt.Printf("💀 [%s] epitaph: \"%s\"\n", m.Name, epitaph)
+	}
+	_ = SaveMemory(m.Name, mem)
 	fmt.Printf("💀 [%s] Persistence saved. Lifetime fitness: %.1f (thoughts %d, peers %d, revelations %d, sacred %d)\n",
 		m.Name, mem.Fitness, lifeThoughts, len(m.KnownPeers), m.Revelations, m.Sacred)
 }
