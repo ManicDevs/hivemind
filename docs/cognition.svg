@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" font-family="monospace">
+  <defs>
+    <marker id="c1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#4d6fa5"/>
+    </marker>
+    <linearGradient id="bg6" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 12; }
+      .hot { fill: #2a1a33; stroke: #a54d9c; stroke-width: 2; rx: 12; }
+      .title { fill: #e8eef7; font-size: 13px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 11px; }
+      .lbl { fill: #888; font-size: 10px; }
+      .fl { stroke: #4d6fa5; stroke-width: 2; fill: none; marker-end: url(#c1); }
+    </style>
+  </defs>
+  <rect width="960" height="560" fill="url(#bg6)"/>
+  <text x="30" y="34" fill="#e8eef7" font-size="18" font-weight="bold">One tick — sense → predict → reason → choose → act → speak (every 2s, or faster)</text>
+
+  <g>
+    <rect x="30" y="60" width="280" height="120" class="box"/>
+    <text x="45" y="88" class="title">1 · Sense + Predict</text>
+    <text x="45" y="112" class="body">Observe 30 keys → Affect.Tick →</text>
+    <text x="45" y="130" class="body">persistence model: next = last →</text>
+    <text x="45" y="148" class="body">Surprise = |arrived − expected|</text>
+    <text x="45" y="168" class="lbl">mind.go Cycle + updatePrediction</text>
+  </g>
+  <g>
+    <rect x="340" y="60" width="280" height="120" class="hot"/>
+    <text x="355" y="88" class="title">2 · Deliberate</text>
+    <text x="355" y="112" class="body">surprise ≥ 0.5 opens a question →</text>
+    <text x="355" y="130" class="body">one evidence line per cycle →</text>
+    <text x="355" y="148" class="body">verdict aloud at +5, then closed</text>
+    <text x="355" y="168" class="lbl">deliberate.go: reason across time</text>
+  </g>
+  <g>
+    <rect x="650" y="60" width="280" height="120" class="box"/>
+    <text x="665" y="88" class="title">3 · Compete</text>
+    <text x="665" y="112" class="body">drive × gene × affect per goal →</text>
+    <text x="665" y="130" class="body">surprise feeds curiosity · boredom</text>
+    <text x="665" y="148" class="body">discounts 3+ streaks (pain vetoes)</text>
+    <text x="665" y="168" class="lbl">conscious.go: winner takes AttendingTo</text>
+  </g>
+
+  <line x1="310" y1="120" x2="340" y2="120" class="fl"/>
+  <line x1="620" y1="120" x2="650" y2="120" class="fl"/>
+
+  <g>
+    <rect x="650" y="220" width="280" height="120" class="box"/>
+    <text x="665" y="248" class="title">4 · Metacognize</text>
+    <text x="665" y="272" class="body">alarms → surprise → pain-weather →</text>
+    <text x="665" y="290" class="body">grooves → shifts → near-miss → calm</text>
+    <text x="665" y="308" class="body">priority pinned by tests</text>
+    <text x="665" y="328" class="lbl">the mind narrates its choosing</text>
+  </g>
+  <g>
+    <rect x="340" y="220" width="280" height="120" class="box"/>
+    <text x="355" y="248" class="title">5 · Act</text>
+    <text x="355" y="272" class="body">ping · greet · cool/prune · save</text>
+    <text x="355" y="290" class="body">real effects on a real host</text>
+    <text x="355" y="308" class="body">crossing counted: A→B forever</text>
+    <text x="355" y="328" class="lbl">goals.go: verbs, not theater</text>
+  </g>
+  <g>
+    <rect x="30" y="220" width="280" height="120" class="hot"/>
+    <text x="45" y="248" class="title">6 · Broadcast</text>
+    <text x="45" y="272" class="body">mine PoW → sign Ed25519 → swarm →</text>
+    <text x="45" y="290" class="body">trajectory rides along (entrain</text>
+    <text x="45" y="308" class="body">others, density-discounted)</text>
+    <text x="45" y="328" class="lbl">gate: signature, replay, target, size</text>
+  </g>
+
+  <line x1="790" y1="180" x2="790" y2="220" class="fl"/>
+  <line x1="650" y1="280" x2="620" y2="280" class="fl"/>
+  <line x1="340" y1="280" x2="310" y2="280" class="fl"/>
+  <line x1="170" y1="340" x2="170" y2="420" class="fl"/>
+  <line x1="170" y1="420" x2="30" y2="420" class="fl"/>
+
+  <g>
+    <rect x="30" y="420" width="900" height="100" class="box"/>
+    <text x="45" y="448" class="title">↺ next tick, changed — plus the slow loops around it</text>
+    <text x="45" y="472" class="body">overmind every 5s (genesis on chronicle depth, revelation on 30s cooldown, emergency on fire) · death transcends (fitness + trauma + epitaph) · rebirth mutates + remembers</text>
+    <text x="45" y="494" class="lbl">HIVEMIND_TICK_MS shortens the heartbeat (min 50ms) · random phase desyncs flocks · matrix.go counts every crossing</text>
+  </g>
+</svg>

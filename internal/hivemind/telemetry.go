@@ -3,6 +3,7 @@ package hivemind
 import (
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -108,28 +109,6 @@ func readMemPressure() (total, avail, swapTotal, swapFree float64, ok bool) {
 		return 0, 0, 0, 0, false
 	}
 	return total, avail, swapTotal, swapFree, true
-}
-
-// readCPUFreq returns current and max frequency (kHz) of cpu0 as a
-// throttling signal. False where cpufreq is absent (VMs, some ARM).
-func readCPUFreq() (cur, max float64, ok bool) {
-	rawCur, err := os.ReadFile("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
-	if err != nil {
-		return 0, 0, false
-	}
-	rawMax, err := os.ReadFile("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
-	if err != nil {
-		return 0, 0, false
-	}
-	cur, err = strconv.ParseFloat(strings.TrimSpace(string(rawCur)), 64)
-	if err != nil {
-		return 0, 0, false
-	}
-	max, err = strconv.ParseFloat(strings.TrimSpace(string(rawMax)), 64)
-	if err != nil || max <= 0 {
-		return 0, 0, false
-	}
-	return cur, max, true
 }
 
 // cpuDelta computes this mind's CPU stress from jiffy deltas, stashing
@@ -291,4 +270,206 @@ func readUptime() (float64, bool) {
 		return 0, false
 	}
 	return v, true
+}
+
+// parseLoadavg reads the 1-minute average plus the runnable/total task
+// counts ("1.34 1.49 4.99 2/2155 90756"): the crowd behind the average.
+func parseLoadavg(data string) (load1, running, total float64, ok bool) {
+	f := strings.Fields(data)
+	if len(f) < 4 {
+		return 0, 0, 0, false
+	}
+	load1, err := strconv.ParseFloat(f[0], 64)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	parts := strings.SplitN(f[3], "/", 2)
+	if len(parts) != 2 {
+		return load1, 0, 0, true
+	}
+	running, err1 := strconv.ParseFloat(parts[0], 64)
+	total, err2 := strconv.ParseFloat(parts[1], 64)
+	if err1 != nil || err2 != nil {
+		return load1, 0, 0, true
+	}
+	return load1, running, total, true
+}
+
+// parseStatCounts extracts the kernel's nervous activity: total
+// interrupts, context switches, and current runnable/blocked tasks.
+// Counter rewinds (reboot, 32-bit wrap) report absent, never negative.
+func parseStatCounts(data string) (intr, ctxt uint64, running, blocked uint64, ok bool) {
+	for _, line := range strings.Split(data, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		v, err := strconv.ParseUint(f[1], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch f[0] {
+		case "intr":
+			intr, ok = v, true
+		case "ctxt":
+			ctxt = v
+		case "procs_running":
+			running = v
+		case "procs_blocked":
+			blocked = v
+		}
+	}
+	return intr, ctxt, running, blocked, ok
+}
+
+// parseSockstat reads the network body's census: sockets used, TCP
+// in-use/orphaned, UDP in-use. Orphans are connections nobody owns —
+// the mesh feeling its own ghosts.
+func parseSockstat(data string) (tcpInuse, tcpOrphan, udpInuse, socksUsed uint64) {
+	for _, line := range strings.Split(data, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 0 {
+			continue
+		}
+		get := func(key string) uint64 {
+			for i := 0; i+1 < len(f); i++ {
+				if f[i] == key {
+					v, _ := strconv.ParseUint(f[i+1], 10, 64)
+					return v
+				}
+			}
+			return 0
+		}
+		switch f[0] {
+		case "sockets:":
+			socksUsed = get("used")
+		case "TCP:":
+			tcpInuse, tcpOrphan = get("inuse"), get("orphan")
+		case "UDP:":
+			udpInuse = get("inuse")
+		}
+	}
+	return tcpInuse, tcpOrphan, udpInuse, socksUsed
+}
+
+// parseFileNR reads allocated file handles ("13344 0 max").
+// Only the first field matters: handles currently owned system-wide.
+func parseFileNR(data string) (uint64, bool) {
+	f := strings.Fields(data)
+	if len(f) == 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(f[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// fdVelocity is handle-bleed rate: handles gained per second, floored at
+// zero (releases are healing, not negative bleeding).
+func fdVelocity(prev, cur uint64, elapsed float64) float64 {
+	if elapsed <= 0 || cur <= prev {
+		return 0
+	}
+	return float64(cur-prev) / elapsed
+}
+
+// thermalPainAll reads every thermal zone and returns the worst pain:
+// one hot corner is enough. Returns the source zone name.
+func thermalPainAll() (float64, string, bool) {
+	zones, err := filepath.Glob("/sys/class/thermal/thermal_zone*/temp")
+	if err != nil || len(zones) == 0 {
+		return 0, "", false
+	}
+	worst, src, found := 0.0, "", false
+	for _, zone := range zones {
+		raw, err := os.ReadFile(zone)
+		if err != nil {
+			continue
+		}
+		milli, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+		if err != nil {
+			continue
+		}
+		p := clamp((milli/1000.0-40.0)/45.0, 0, 1)
+		if !found || p > worst {
+			worst, src, found = p, "sensor:"+filepath.Base(filepath.Dir(zone)), true
+		}
+	}
+	return worst, src, found
+}
+
+// throttleWorst returns the worst CPU throttling across all cores:
+// one held-down core is shared suffering.
+func throttleWorst() (float64, bool) {
+	paths, err := filepath.Glob("/sys/devices/system/cpu/cpu[0-9]*/cpufreq/scaling_cur_freq")
+	if err != nil || len(paths) == 0 {
+		return 0, false
+	}
+	worst, found := 0.0, false
+	for _, curPath := range paths {
+		dir := filepath.Dir(curPath)
+		rawCur, err := os.ReadFile(curPath)
+		if err != nil {
+			continue
+		}
+		rawMax, err := os.ReadFile(filepath.Join(dir, "cpuinfo_max_freq"))
+		if err != nil {
+			continue
+		}
+		cur, err1 := strconv.ParseFloat(strings.TrimSpace(string(rawCur)), 64)
+		max, err2 := strconv.ParseFloat(strings.TrimSpace(string(rawMax)), 64)
+		if err1 != nil || err2 != nil || max <= 0 {
+			continue
+		}
+		if t := clamp(1.0-cur/max, 0, 1); t > worst || !found {
+			worst, found = t, true
+		}
+	}
+	return worst, found
+}
+
+// parseMounts lists unique mount points from /proc/mounts text
+// ("device /path fstype opts ..."). Serverless discipline: never assume
+// which filesystems exist — discover them, watch them all.
+func parseMounts(data string) []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, line := range strings.Split(data, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		if !seen[f[1]] {
+			seen[f[1]] = true
+			paths = append(paths, f[1])
+		}
+	}
+	return paths
+}
+
+// diskDread is existential: the fullest mounted filesystem as a
+// fraction. Mounts discovered live (no hardcoded paths); unreadable
+// mount tables fall back to the three places that always matter.
+// Only dread past 90% counts — mapped by the caller, not here.
+func diskDread() (float64, bool) {
+	paths := []string{"/", "/tmp", "."}
+	if raw, err := os.ReadFile("/proc/mounts"); err == nil {
+		if found := parseMounts(string(raw)); len(found) > 0 {
+			paths = found
+		}
+	}
+	worst, found := 0.0, false
+	checked := 0
+	for _, path := range paths {
+		if checked >= 64 {
+			break // bound the syscall budget; 64 filesystems is plenty
+		}
+		checked++
+		if f, ok := fsUseFraction(path); ok && (!found || f > worst) {
+			worst, found = f, true
+		}
+	}
+	return worst, found
 }

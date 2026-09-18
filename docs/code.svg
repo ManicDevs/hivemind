@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" font-family="monospace">
+  <defs>
+    <linearGradient id="bg7" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 10; }
+      .tool { fill: #1a3325; stroke: #4da56f; stroke-width: 2; rx: 10; }
+      .title { fill: #e8eef7; font-size: 13px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 11px; }
+      .lbl { fill: #888; font-size: 10px; }
+    </style>
+  </defs>
+  <rect width="960" height="560" fill="url(#bg7)"/>
+  <text x="30" y="34" fill="#e8eef7" font-size="18" font-weight="bold">The code — stdlib only, no third-party anything</text>
+
+  <g>
+    <rect x="30" y="60" width="290" height="220" class="tool"/>
+    <text x="45" y="88" class="title">cmd/ — three binaries</text>
+    <text x="45" y="112" class="body">hivemind — organism + supervisor</text>
+    <text x="45" y="130" class="body">+ backtraces + anti-debug gate</text>
+    <text x="45" y="152" class="body">commune — the mouth (12 verbs,</text>
+    <text x="45" y="170" class="body">watch, teach, transcripts)</text>
+    <text x="45" y="192" class="body">souls — forensics (timeline,</text>
+    <text x="45" y="210" class="body">diff, matrix, grep, top)</text>
+    <text x="45" y="232" class="lbl">make build → bin/ (gitignored)</text>
+  </g>
+  <g>
+    <rect x="340" y="60" width="290" height="220" class="box"/>
+    <text x="355" y="88" class="title">internal/ — mind</text>
+    <text x="355" y="112" class="body">mind · conscious · goals · genome</text>
+    <text x="355" y="130" class="body">epitaph · deliberate · matrix</text>
+    <text x="355" y="148" class="body">memory · telemetry (+diskfree)</text>
+    <text x="355" y="170" class="body">overmind · swarm</text>
+    <text x="355" y="192" class="body">hivemind_test (83 tests)</text>
+    <text x="355" y="214" class="lbl">birth → ticks → death → rebirth</text>
+  </g>
+  <g>
+    <rect x="650" y="60" width="280" height="220" class="box"/>
+    <text x="665" y="88" class="title">internal/ — mesh</text>
+    <text x="665" y="112" class="body">network · lan · super</text>
+    <text x="665" y="130" class="body">dht · stun · punch ×3</text>
+    <text x="665" y="148" class="body">unix · TCP v4/v6 · multicast</text>
+    <text x="665" y="166" class="body">static · relay · DHT · punch</text>
+    <text x="665" y="188" class="body">lex-greater dials, closest-first</text>
+    <text x="665" y="210" class="lbl">zero masters, only minds</text>
+  </g>
+
+  <g>
+    <rect x="30" y="310" width="900" height="90" class="box"/>
+    <text x="45" y="338" class="title">scripts/ — proof machinery</text>
+    <text x="45" y="362" class="body">audit (gates) · timed_test (10s mesh + assertions) · verify-supermesh · pain (idle-vs-loaded stimulus proof) · souls.py</text>
+    <text x="45" y="382" class="lbl">make prove = audit + timed + super, transcript artifact · make pain = matrices + epitaphs + surprise count</text>
+  </g>
+
+  <g>
+    <rect x="30" y="420" width="900" height="100" class="tool"/>
+    <text x="45" y="448" class="title">docs/ — eight diagrams + three specs</text>
+    <text x="45" y="472" class="body">architecture · lifecycle · frame · soul · mesh · senses · cognition · code — p2p_architecture · structure · files</text>
+    <text x="45" y="494" class="lbl">every claim in a diagram is load-bearing: verified against code before commit</text>
+  </g>
+</svg>

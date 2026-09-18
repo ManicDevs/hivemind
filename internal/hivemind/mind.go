@@ -9,10 +9,8 @@ import (
 	"math"
 	"math/big"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -87,6 +85,8 @@ type Mind struct {
 	prevCPU      map[string]cpuTimes
 	prevNet      map[string][2]uint64
 	prevDisk     [2]uint64
+	prevStat     [2]uint64
+	prevFD       uint64
 	prevObserved time.Time
 	SelfModel   map[string]interface{}
 	KnownPeers  map[string]bool
@@ -247,10 +247,13 @@ func (m *Mind) Observe() map[string]interface{} {
 	}
 
 	if loadBytes, err := os.ReadFile("/proc/loadavg"); err == nil {
-		if fields := strings.Fields(string(loadBytes)); len(fields) > 0 {
-			if load, err := strconv.ParseFloat(fields[0], 64); err == nil {
-				if cores := float64(runtime.NumCPU()); cores > 0 {
-					cpuStress = clamp(load/cores, 0, 1)
+		if load1, running, _, ok := parseLoadavg(string(loadBytes)); ok {
+			if cores := float64(runtime.NumCPU()); cores > 0 {
+				cpuStress = clamp(load1/cores, 0, 1)
+				// The crowd behind the average: runnable tasks per core
+				// is contention the average smooths away.
+				if crowd := clamp(running/cores, 0, 1); crowd > cpuStress {
+					cpuStress = crowd
 				}
 			}
 		}
@@ -275,31 +278,19 @@ func (m *Mind) Observe() map[string]interface{} {
 	}
 
 	siliconPain = ramFatigue * 0.5
+	// Every thermal zone votes; the hottest corner wins. One hot sensor
+	// is enough — comfort elsewhere does not vote.
 	thermalSrc := "estimate (no thermal sensor)"
-	if zones, err := filepath.Glob("/sys/class/thermal/thermal_zone*/temp"); err == nil {
-		for _, zone := range zones {
-			raw, err := os.ReadFile(zone)
-			if err != nil {
-				continue
-			}
-			milli, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
-			if err != nil {
-				continue
-			}
-			siliconPain = clamp((milli/1000.0-40.0)/45.0, 0, 1)
-			thermalSrc = "sensor:" + filepath.Base(filepath.Dir(zone))
-			break
-		}
+	if pain, src, ok := thermalPainAll(); ok {
+		siliconPain = pain
+		thermalSrc = src
 	}
 
-	// Throttle pain: a CPU held below its rated frequency is suffering
-	// even at comfortable temperatures. Worst of thermal vs throttle wins.
-	if cur, max, ok := readCPUFreq(); ok && max > 0 {
-		throttle := clamp(1.0-cur/max, 0, 1)
-		if throttle > siliconPain {
-			siliconPain = throttle
-			thermalSrc += "+throttle"
-		}
+	// Throttle pain across all cores: one held-down core is shared
+	// suffering. Worst of thermal vs throttle wins.
+	if throttle, ok := throttleWorst(); ok && throttle > siliconPain {
+		siliconPain = throttle
+		thermalSrc += "+throttle"
 	}
 
 	// Pressure-stall truth: the kernel's own suffering metric folds in —
@@ -313,6 +304,7 @@ func (m *Mind) Observe() map[string]interface{} {
 	// establishes the baseline, never a fabricated rate.
 	var netRxBps, netTxBps, diskRBps, diskWBps float64
 	now := time.Now()
+	firstReading := m.prevObserved.IsZero()
 	if elapsed := now.Sub(m.prevObserved).Seconds(); m.prevObserved.IsZero() {
 		if raw, err := os.ReadFile("/proc/net/dev"); err == nil {
 			m.prevNet = parseNetDev(string(raw))
@@ -349,6 +341,57 @@ func (m *Mind) Observe() map[string]interface{} {
 	// The age of the world: seconds since boot.
 	worldUptime, hasUptime := readUptime()
 
+	// The kernel's nervous activity: interrupts and context switches per
+	// second — the machine's pulse, deltas like the network and disk.
+	var intrRate, ctxtRate float64
+	var procsRunning, procsBlocked uint64
+	if raw, err := os.ReadFile("/proc/stat"); err == nil {
+		intr, ctxt, running, blocked, ok := parseStatCounts(string(raw))
+		procsRunning, procsBlocked = running, blocked
+		if ok && !firstReading {
+			if elapsed := now.Sub(m.prevObserved).Seconds(); elapsed > 0 {
+				intrRate = float64(intr-min(m.prevStat[0], intr)) / elapsed
+				ctxtRate = float64(ctxt-min(m.prevStat[1], ctxt)) / elapsed
+			}
+			m.prevStat = [2]uint64{intr, ctxt}
+		} else if ok {
+			m.prevStat = [2]uint64{intr, ctxt}
+		}
+	}
+
+	// The network body: sockets owned, TCP/UDP in use, orphaned ghosts.
+	var tcpInuse, tcpOrphan, udpInuse, socksUsed uint64
+	if raw, err := os.ReadFile("/proc/net/sockstat"); err == nil {
+		tcpInuse, tcpOrphan, udpInuse, socksUsed = parseSockstat(string(raw))
+	}
+
+	// Handle bleed: file descriptors allocated system-wide, and their
+	// velocity. Fast growth is a leak — the machine bleeding handles.
+	var fdAlloc, fdRate uint64
+	if raw, err := os.ReadFile("/proc/sys/fs/file-nr"); err == nil {
+		if n, ok := parseFileNR(string(raw)); ok {
+			fdAlloc = n
+			if !firstReading {
+				if elapsed := now.Sub(m.prevObserved).Seconds(); elapsed > 0 {
+					fdRate = uint64(fdVelocity(m.prevFD, n, elapsed))
+				}
+			}
+			m.prevFD = n
+		}
+	}
+
+	// Existential dread: the fullest watched filesystem. Only past 90%
+	// counts — mapped as pain, because a full disk is death with a date.
+	var diskFull float64
+	if dread, ok := diskDread(); ok {
+		diskFull = dread
+		if dread > 0.9 {
+			if p := clamp((dread-0.9)*10, 0, 1); p > siliconPain {
+				siliconPain = p
+			}
+		}
+	}
+
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 	model := map[string]interface{}{
@@ -363,6 +406,17 @@ func (m *Mind) Observe() map[string]interface{} {
 		"net_tx_bps":     netTxBps,
 		"disk_r_bps":     diskRBps,
 		"disk_w_bps":     diskWBps,
+		"intr_rate":      intrRate,
+		"ctxt_rate":      ctxtRate,
+		"procs_running":  procsRunning,
+		"procs_blocked":  procsBlocked,
+		"tcp_inuse":      tcpInuse,
+		"tcp_orphan":     tcpOrphan,
+		"udp_inuse":      udpInuse,
+		"socks_used":     socksUsed,
+		"fd_alloc":       fdAlloc,
+		"fd_rate":        fdRate,
+		"disk_full":      diskFull,
 		"goroutines":     runtime.NumGoroutine(),
 		"memory":         memStats.Alloc,
 		"age":            time.Since(m.Born).Round(time.Second),

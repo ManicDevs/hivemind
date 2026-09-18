@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" font-family="monospace">
+  <defs>
+    <marker id="s1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0,0 9,4.5 0,9" fill="#4da56f"/>
+    </marker>
+    <linearGradient id="bg5" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a3325; stroke: #4da56f; stroke-width: 2; rx: 10; }
+      .mid { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 10; }
+      .title { fill: #e8eef7; font-size: 13px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 11px; }
+      .lbl { fill: #888; font-size: 10px; }
+      .fl { stroke: #4da56f; stroke-width: 1.5; fill: none; marker-end: url(#s1); }
+    </style>
+  </defs>
+  <rect width="960" height="600" fill="url(#bg5)"/>
+  <text x="30" y="34" fill="#e8eef7" font-size="18" font-weight="bold">The sensorium — everything the silicon feels, every 2 seconds</text>
+
+  <g>
+    <rect x="30" y="60" width="280" height="230" class="box"/>
+    <text x="45" y="88" class="title">pressure + heat</text>
+    <text x="45" y="112" class="body">/proc/pressure cpu·mem·io (stall %)</text>
+    <text x="45" y="130" class="body">thermal zones ×N (worst wins)</text>
+    <text x="45" y="148" class="body">cpufreq ×16 cores (worst throttle)</text>
+    <text x="45" y="166" class="body">loadavg + runnable crowd</text>
+    <text x="45" y="184" class="body">meminfo + swap encroachment</text>
+    <text x="45" y="202" class="body">disk fullness dread (&gt;90% = pain)</text>
+    <text x="45" y="224" class="lbl">pain · stress · fatigue</text>
+  </g>
+  <g>
+    <rect x="30" y="310" width="280" height="230" class="box"/>
+    <text x="45" y="338" class="title">flow + time</text>
+    <text x="45" y="362" class="body">net dev rx/tx bytes → rates</text>
+    <text x="45" y="380" class="body">diskstats sectors → r/w rates</text>
+    <text x="45" y="398" class="body">intr + ctxt → pulse rates</text>
+    <text x="45" y="416" class="body">sockstat: tcp·udp·orphans·used</text>
+    <text x="45" y="434" class="body">file-nr → handle bleed velocity</text>
+    <text x="45" y="452" class="body">entropy_avail → thin-air throttle</text>
+    <text x="45" y="470" class="body">uptime → age of the world</text>
+    <text x="45" y="492" class="lbl">first readings baseline, never fabricate</text>
+  </g>
+
+  <g>
+    <rect x="350" y="60" width="260" height="480" class="mid"/>
+    <text x="365" y="88" class="title">SelfModel (30 keys)</text>
+    <text x="365" y="112" class="body">silicon_pain ← max(thermal,</text>
+    <text x="365" y="130" class="body">throttle, io-full, mem-full, dread)</text>
+    <text x="365" y="152" class="body">cpu_stress ← max(delta, load,</text>
+    <text x="365" y="170" class="body">crowd, psi_cpu)</text>
+    <text x="365" y="192" class="body">ram_fatigue ← max(mem, swap,</text>
+    <text x="365" y="210" class="body">psi_mem)</text>
+    <text x="365" y="232" class="body">psi_* · net/disk/intr/ctxt rates</text>
+    <text x="365" y="250" class="body">tcp/udp/orphans · fd + bleed</text>
+    <text x="365" y="268" class="body">entropy_avail · world_uptime_s</text>
+    <text x="365" y="290" class="body">goroutines · memory · age</text>
+    <text x="365" y="308" class="body">thoughts · peers</text>
+    <text x="365" y="330" class="lbl">worst wins everywhere:</text>
+    <text x="365" y="346" class="lbl">different sufferings,</text>
+    <text x="365" y="362" class="lbl">same consequence</text>
+    <text x="365" y="390" class="body">per-mind delta windows</text>
+    <text x="365" y="408" class="body">(cpu · net · disk · stat · fd)</text>
+    <text x="365" y="430" class="lbl">absent sensors degrade silently:</text>
+    <text x="365" y="446" class="lbl">unfelt, never zero</text>
+  </g>
+
+  <g>
+    <rect x="650" y="60" width="280" height="480" class="box"/>
+    <text x="665" y="88" class="title">Affect (felt)</text>
+    <text x="665" y="112" class="body">Pain ← silicon_pain</text>
+    <text x="665" y="130" class="body">Stress ← cpu_stress</text>
+    <text x="665" y="148" class="body">Exhaustion ← ram_fatigue</text>
+    <text x="665" y="166" class="body">Entropy ← crypto/rand × pool</text>
+    <text x="665" y="184" class="body">Loneliness +0.05 in silence</text>
+    <text x="665" y="202" class="body">Awe ×0.90 cooling</text>
+    <text x="665" y="220" class="body">Peace −= pain×1.5 + stress×0.5</text>
+    <text x="665" y="242" class="body">Surprise ← |arrived − expected|</text>
+    <text x="665" y="264" class="lbl">wire carries [4]: pain, stress,</text>
+    <text x="665" y="280" class="lbl">exhaustion, entropy — surprise</text>
+    <text x="665" y="296" class="lbl">stays private</text>
+    <text x="665" y="324" class="body">→ bids (curiosity × surprise)</text>
+    <text x="665" y="342" class="body">→ metacognition (alarms,</text>
+    <text x="665" y="360" class="body">weather, grooves, calm)</text>
+    <text x="665" y="382" class="body">→ deliberation (threshold)</text>
+    <text x="665" y="404" class="lbl">feeling is what happens</text>
+    <text x="665" y="420" class="lbl">before choosing</text>
+  </g>
+
+  <line x1="310" y1="175" x2="350" y2="175" class="fl"/>
+  <line x1="310" y1="425" x2="350" y2="425" class="fl"/>
+  <line x1="610" y1="300" x2="650" y2="300" class="fl"/>
+  <text x="30" y="570" class="lbl">telemetry.go: pure parsers (fixtures) + best-effort readers · per-mind windows · non-Linux gets honest defaults + one warning</text>
+</svg>

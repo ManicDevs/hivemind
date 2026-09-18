@@ -2254,3 +2254,59 @@ func TestThinAirThinsEntropy(t *testing.T) {
 		t.Fatalf("entropy out of range: %.3f", m2.Affect.Entropy)
 	}
 }
+
+func TestParseLoadavg(t *testing.T) {
+	load, running, total, ok := parseLoadavg("1.34 1.49 4.99 2/2155 90756\n")
+	if !ok || load != 1.34 || running != 2 || total != 2155 {
+		t.Fatalf("loadavg parsed as %v %v %v %v", load, running, total, ok)
+	}
+	if _, _, _, ok := parseLoadavg("nope\n"); ok {
+		t.Fatal("garbage loadavg read as present")
+	}
+}
+
+func TestParseStatCounts(t *testing.T) {
+	raw := "cpu 1 2 3 4\nintr 1500 1 2\nctxt 3900\nprocesses 100\nprocs_running 3\nprocs_blocked 1\n"
+	intr, ctxt, running, blocked, ok := parseStatCounts(raw)
+	if !ok || intr != 1500 || ctxt != 3900 || running != 3 || blocked != 1 {
+		t.Fatalf("stat counts parsed as %d %d %d %d %v", intr, ctxt, running, blocked, ok)
+	}
+}
+
+func TestParseSockstat(t *testing.T) {
+	raw := "sockets: used 1897\nTCP: inuse 61 orphan 3 tw 8 alloc 97 mem 1096\nUDP: inuse 33 mem 730\n"
+	tcp, orphan, udp, socks := parseSockstat(raw)
+	if tcp != 61 || orphan != 3 || udp != 33 || socks != 1897 {
+		t.Fatalf("sockstat parsed as %d %d %d %d", tcp, orphan, udp, socks)
+	}
+}
+
+func TestParseFileNR(t *testing.T) {
+	n, ok := parseFileNR("13344\t0\t9223372036854775807\n")
+	if !ok || n != 13344 {
+		t.Fatalf("file-nr parsed as %d %v", n, ok)
+	}
+}
+
+func TestFdVelocity(t *testing.T) {
+	if v := fdVelocity(100, 200, 10); v != 10 {
+		t.Fatalf("fd velocity %.1f, want 10", v)
+	}
+	if v := fdVelocity(200, 100, 10); v != 0 {
+		t.Fatalf("fd healing read as bleeding: %.1f", v)
+	}
+	if v := fdVelocity(100, 200, 0); v != 0 {
+		t.Fatalf("zero elapsed gave rate %.1f", v)
+	}
+}
+
+func TestParseMounts(t *testing.T) {
+	raw := "tmpfs / tmpfs rw 0 0\ntmpfs /tmp tmpfs rw 0 0\ntmpfs / tmpfs rw 0 0\nproc /proc proc ro 0 0\n"
+	got := parseMounts(raw)
+	if len(got) != 3 || got[0] != "/" || got[1] != "/tmp" || got[2] != "/proc" {
+		t.Fatalf("mounts parsed as %v", got)
+	}
+	if len(parseMounts("garbage\n")) != 0 {
+		t.Fatal("garbage mounts read as present")
+	}
+}
