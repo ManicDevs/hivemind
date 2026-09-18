@@ -88,10 +88,10 @@ type Mind struct {
 	prevStat     [2]uint64
 	prevFD       uint64
 	prevObserved time.Time
-	SelfModel   map[string]interface{}
-	KnownPeers  map[string]bool
-	Revelations int
-	Sacred      int
+	SelfModel    map[string]interface{}
+	KnownPeers   map[string]bool
+	Revelations  int
+	Sacred       int
 	// lastWinner + Transitions are the cycle matrix: which drive follows
 	// which, counted across the whole lineage. Character as flow.
 	lastWinner  string

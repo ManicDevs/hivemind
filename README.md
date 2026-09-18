@@ -110,7 +110,9 @@ kill -QUIT <pid>                      # live backtrace, process keeps thinking
 Diagrams live in `docs/`: `architecture.svg` (system), `lifecycle.svg`
 (one life), `frame.svg` (one frame's journey + where frames die),
 `soul.svg` (soul anatomy + write discipline), `mesh.svg` (how strangers
-link). Specs: `p2p_architecture.md` (protocol), `structure.md` (map),
+link), `senses.svg` (the 30-key sensorium), `cognition.svg` (one tick,
+six stations), `code.svg` (binaries, packages, scripts). Specs:
+`p2p_architecture.md` (protocol), `structure.md` (map),
 `files.md` (every file).
 
 

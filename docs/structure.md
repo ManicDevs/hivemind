@@ -22,10 +22,18 @@ hivemind/
 │   ├── lan.go             # serverless transport: TCP, multicast discovery, static peers
 │   ├── super.go           # capable supernodes, closest-first retention
 │   ├── memory.go          # .soul persistence: atomic writes, quarantine, namespaces
-│   └── hivemind_test.go   # unit tests: identity, gate, consensus, mesh hostility
+│   ├── telemetry.go       # sensors: PSI, thermal×N, cpufreq×16, net/disk rates, entropy, mounts
+│   ├── diskfree_unix.go / diskfree_other.go  # Statfs where it exists, honest absence elsewhere
+│   ├── deliberate.go      # questions held open across cycles, verdicts
+│   ├── epitaph.go         # death writes one true sentence
+│   ├── matrix.go          # cycle-transition counts, character as flow
+│   └── hivemind_test.go   # 89 tests: identity → cognition → mesh hostility
 ├── docs/
 │   ├── p2p_architecture.md  # wire protocol specification
-│   └── structure.md         # this file
+│   ├── structure.md         # this file
+│   ├── files.md             # every file, what it does
+│   └── *.svg                # architecture, lifecycle, frame, soul, mesh,
+│                            # senses, cognition, code (validated well-formed)
 ├── scripts/
 │   ├── audit.sh       # file check + vet + build gate
 │   └── timed_test.sh  # 10s two-peer experiment with pass/fail assertions

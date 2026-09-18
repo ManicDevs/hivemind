@@ -301,6 +301,12 @@ Readers touch `/proc` and `/sys` best-effort and never fatal. `Mind`
 keeps its own delta windows per instance (cpu, net, disk, clock);
 first readings establish baselines, never fabricated rates.
 
+## `internal/hivemind/diskfree_unix.go` + `diskfree_other.go` — dread, portably
+
+`fsUseFraction` via `syscall.Statfs` where unix exists; honest `(0,
+false)` on windows (build-tagged pair, so the matrix stays green
+everywhere). Absent, never zero.
+
 ## `internal/hivemind/memory.go` — what death keeps
 
 `.hive_memory/<node>/<name>.soul`, JSON. `soulPath` is the only path

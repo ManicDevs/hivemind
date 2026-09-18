@@ -104,7 +104,7 @@
     <rect x="30" y="640" width="900" height="110" fill="#1a2233" stroke="#4d6fa5" stroke-width="2" rx="10"/>
     <text x="45" y="668" class="title">Operate it — one binary, one mesh, proof on demand</text>
     <text x="45" y="692" class="body">hivemind up -nodes 3 · make prove (audit + timed + super, transcript artifact) · make souls / doctor</text>
-    <text x="45" y="714" class="body">cmd/hivemind (entry, supervisor, backtraces) · internal/hivemind (organism) · scripts/ · docs/ · 78 tests green</text>
+    <text x="45" y="714" class="body">cmd/hivemind (entry, supervisor, backtraces) · internal/hivemind (organism) · scripts/ · docs/ · 89 tests green</text>
     <text x="45" y="734" class="lbl">kill -QUIT for live backtraces · HIVEMIND_HARDEN=exit refuses tracers · v2.0</text>
   </g>
 </svg>
