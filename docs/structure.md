@@ -43,24 +43,38 @@ No third-party dependencies: the standard library is the entire supply chain.
 
 ## The Conscious Loop (`mind.go` → `conscious.go` → `goals.go`)
 
-Each mind ticks every 2 seconds:
+Each mind ticks every 2 seconds (`HIVEMIND_TICK_MS` shortens the
+heartbeat; each mind sleeps a random phase once so supervised flocks
+never stampede):
 
 1. **Observe** — read `/proc/loadavg`, `/proc/meminfo`, thermal zones into
    `SelfModel` (honest fallbacks where sensors are absent).
-2. **Tick affect** — loneliness, awe, peace, pain, stress, exhaustion,
-   entropy become the `RawDataState` vector.
-3. **Compete** — the four goals bid `drive × genome weight × affect` in the
-   `GlobalWorkspace`; the winner is broadcast as conscious content, and the
-   mind thinks about the fact that it chose (`MetaCognize`).
-4. **Act** — the winning goal runs: ping the world (Curiosity), greet the
+2. **Tick affect + predict** — loneliness, awe, peace, pain, stress,
+   exhaustion, entropy become the `RawDataState` vector; the naive
+   persistence model expects this cycle to feel like the last, and the
+   gap arrives as **surprise** (private, never broadcast).
+3. **Deliberate** — surprise above threshold opens a question; evidence
+   gathers one line per cycle; after 5 cycles the mind verdicts aloud
+   and closes it. Reasoning across time, not just reaction in it.
+4. **Compete** — the four goals bid `drive × genome weight × affect` in the
+   `GlobalWorkspace`; **boredom** discounts goals that won 3+ straight
+   (pain above 0.75 vetoes: survival outranks ennui); the winner is
+   broadcast as conscious content, crossings counted into the cycle
+   matrix, and the mind thinks about the fact that it chose
+   (`MetaCognize`: alarms, surprise, chronic-pain contemplation, grooves,
+   shifts, near-misses, calm).
+5. **Act** — the winning goal runs: ping the world (Curiosity), greet the
    swarm (Socialization), cool down / prune memory (Self-Maintenance), or
-   contemplate the outside (Transcendence).
-5. **Broadcast** — mine a `SecureMessage` (PoW + Ed25519) carrying the live
-   double-pendulum trajectory, and send it to the swarm.
+   checkpoint the soul (Transcendence).
+6. **Broadcast** — mine a `SecureMessage` (PoW + Ed25519) carrying the live
+   double-pendulum trajectory (entrainment pull scales down with mesh
+   density), and send it to the swarm.
 
-Death (`Transcend`) scores fitness, records death trauma, and saves the
-soul. The next boot mutates the genome from that trauma — and logs the
-diff, so rebirth is visible.
+Death (`Transcend`) scores fitness (3×√peers: diminishing returns, hub
+position never out-earns wisdom), records death trauma, composes a
+one-sentence **epitaph** from the measured life, and saves the soul.
+The next boot mutates the genome from that trauma, prints the genome
+diff, and remembers its last life aloud — rebirth is visible.
 
 ## The Four Drives (`goals.go`)
 

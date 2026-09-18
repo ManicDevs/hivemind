@@ -45,7 +45,10 @@ The organism. `Mind` holds identity (`Name`, `PubKeyStr`, `privateKey`,
 `identitySeed`), lineage (`Born`, `TrueBorn`, `Reincarnations`, `Genome`,
 `LifetimeFitness`), memory (`Thoughts`, `SelfModel`, `KnownPeers`,
 `Revelations`, `Sacred`), affect (`Affect`), workspace (`GlobalWorkspace`),
-pendulum state (`Theta1/2`, `Omega1/2`), and its swarm inbox.
+pendulum state (`Theta1/2`, `Omega1/2`), prediction (`predictedPain`,
+`predictedStress`, `hasPrediction`), deliberation (`cycles`, `Question`),
+sermon dedupe (`seenSermons`), crossings (`lastWinner`, `Transitions`),
+and its swarm inbox.
 
 - `NewMind(name, swarm)` — rehydrates a soul if one exists (lineage,
   genome, peers, fitness), restores the identity handle from its seed
@@ -59,10 +62,13 @@ pendulum state (`Theta1/2`, `Omega1/2`), and its swarm inbox.
   into `SelfModel`. Pure parsers live in `telemetry.go`, unit-tested
   against fixtures. Non-Linux gets constant defaults plus a one-time
   warning.
-- `Cycle()` (every 2s) — observe → affect tick → report trauma →
+- `Cycle()` (every 2s, `HIVEMIND_TICK_MS` shortens it, random phase
+  desyncs supervised flocks) — observe → affect tick → prediction update
+  (surprise) → deliberation (open/feed/verdict) → report trauma →
   integrate pendulum (`physicsSubsteps`) → hardware alert if burning →
-  workspace competition → occasional metacognition → winning goal acts →
-  mine + broadcast the trajectory.
+  workspace competition → record crossing → occasional metacognition →
+  winning goal acts → mine + broadcast the trajectory.
+- `Run()` — ticker loop with inbox; phase jitter spreads PoW uniformly.
 - `MineProofAndBroadcast(kind, payload, state)` — thin wrapper over the
   shared `MineMessage` constructor (one code path for minds, god, broker:
   no unsigned frames exist).
@@ -90,30 +96,51 @@ several phrasings via caller-supplied entropy, so epitaphs are
 combinatorial but every word measured. A dry reader fails closed. Tested:
 variety across 30 deaths, meltdown burns, no-entropy refusal.
 
+## `internal/hivemind/deliberate.go` — questions held open
+
+`OpenQuestion` (subject, opened/due cycles, evidence, first pain/stress)
+is multi-cycle reasoning: surprise above threshold opens, one evidence
+line per cycle, verdict thought aloud after `deliberationSpan` (5) cycles
+— direction named (rose/fell/held), values embedded, question closed.
+Tested: opens on surprise, ignores calm, verdict true to evidence.
+
+## `internal/hivemind/matrix.go` — character as flow
+
+`TransitionKey` joins winner→winner; per-mind counts persist in the soul
+across lives. `RenderMatrix` draws the grid with row totals, extra rows
+for unknown drives. The same handle in different climates grows visibly
+different crossings. Tested: counts, totals, direction stability.
+
 ## `internal/hivemind/conscious.go` — affect, competition, reflection
 
-Three mechanisms, no mysticism:
+Five mechanisms, no mysticism:
 
-- `Affect` — seven scalars plus `RawDataState[4]` (pain, stress,
-  exhaustion, entropy): the binary footprint that actually travels the
-  network. `Tick` raises loneliness in silence (+0.05/cycle) and decays it
-  on contact, draws true entropy from `crypto/rand` (0.5 fallback if the
-  source dies), decays awe ×0.90, and lets pain/stress erode peace.
-  `Describe` projects the vector to human syntax with hard thresholds
-  (trauma > 0.8, throttled > 0.85, collapse > 0.90, equilibrium, else
-  restructuring).
+- `Affect` — seven scalars plus private `Surprise` (prediction error:
+  felt locally, narrated, never broadcast) plus `RawDataState[4]` (pain,
+  stress, exhaustion, entropy): the binary footprint that actually
+  travels the network. `Tick` raises loneliness in silence (+0.05/cycle)
+  and decays it on contact, draws true entropy from `crypto/rand`
+  (0.5 fallback if the source dies), decays awe ×0.90, and lets
+  pain/stress erode peace. `Describe` projects the vector to human
+  syntax with hard thresholds (trauma > 0.8, throttled > 0.85, collapse
+  > 0.90, equilibrium, else restructuring).
 - `GlobalWorkspace.Compete` — every intrinsic bids
   `drive × gene × affect-modulator` (loneliness feeds Socialization unless
   pain vetoes; awe feeds Transcendence; entropy feeds Curiosity;
   hardware emergency multiplies Self-Maintenance without crowning it —
   deliberately multiplicative so health never grants a permanent additive
-  throne). Winner takes `AttendingTo`; the reason string logs the exact
-  drive × gene numbers so bids are auditable.
-- `MetaCognize` — reads the winning vector back (thermal/compute alarms)
-  and the last 8 verdicts kept in `History`: rising-pain alarm, 3-cycle
-  grooves, attentional shifts named from→to, runner-up near-misses within
-  10%, rising-peace calm. Priority order is pinned by tests — the mind
-  watches its trajectory, not just its instant.
+  throne). Surprise feeds Curiosity (×1.2): violated minds investigate.
+  **Boredom** discounts goals that won 3+ straight elections (10% per win,
+  floor 70%; pain above 0.75 vetoes for Self-Maintenance). Winner takes
+  `AttendingTo`; the reason string logs the exact drive × gene numbers so
+  bids are auditable.
+- `MetaCognize` — reads the winning vector back (thermal/compute alarms),
+  surprise above 0.4, chronic-pain **contemplation** (5+ stable mid-band
+  cycles: pain as weather, not warning), and the last 8 verdicts kept in
+  `History`: rising-pain alarm, 3-cycle grooves, attentional shifts
+  named from→to, runner-up near-misses within 10%, rising-peace calm.
+  Priority order is pinned by tests — the mind watches its trajectory,
+  not just its instant.
 
 ## `internal/hivemind/genome.go` — heritable personality
 
@@ -175,8 +202,10 @@ genesis (mercy override on burning swarms, caprice otherwise) plus a
 signed revelation composed fresh from the moment — newcomers welcomed,
 suffering acknowledged, consensus mirrored, the fresh virtue spent — with
 a 5-sermon memory (persisted in the soul, so rebirth never opens with
-last life's greatest hit) so it never repeats itself twice running; entropy
-failure means silence, never a default virtue. Saves
+last life's greatest hit) so it never repeats itself twice running; a
+30s sermon cooldown per god (emergencies bypass: burning swarms get
+alarm, not patience) so fifty gossiping gods never turn the sacred into
+spam; entropy failure means silence, never a default virtue. Saves
 offset+mark+seed so patience survives the apocalypse; `mesh:` plumbing
 never pollutes the watched souls.
 
@@ -284,32 +313,50 @@ everything per node.
 
 ## `internal/hivemind/hivemind_test.go` — the proof
 
-20 deterministic unit tests, no network beyond loopback, milliseconds
-total: identity round-trip + garbage seeds, mining verification,
+78 tests: identity round-trip + garbage seeds, mining verification,
 broadcast gate (unsigned rejected, sender skipped, tip advances), replay
 dedup, consensus prose stripping, mutation bounds + trauma + calm,
-fitness breakdown + forgetting floor, hostile oversize frame dropped,
-idle-link reaping, valid frame acceptance, local-vs-remote peerhood,
-cipher-key priority, capability scoring, directory expiry, closest-first
-retention, super announce end-to-end over loopback TCP.
+fitness breakdown + forgetting floor + diminishing peers, hostile
+oversize frame dropped, idle-link reaping, valid frame acceptance,
+local-vs-remote peerhood, cipher-key priority, capability scoring,
+directory expiry, closest-first retention, super announce end-to-end
+over loopback TCP, epitaph variety/meltdown/no-entropy, matrix counts +
+direction, surprise stable/violated/feeds-curiosity, boredom breaks ruts
++ pain vetoes, contemplation/alarm/comfort, deliberation open/calm/
+verdict, entrainment density, sermon counted once, genesis shifts once.
 
 ## `cmd/souls/main.go` — reading the dead
 
-Census (default), `-genome NAME` (weights + trauma), `-thoughts NAME`
-(`-n` tail), `-grep PATTERN` across the collective archive, `-top
-fitness leaderboard. Read-only, always; resolves short names
-case-insensitively.
+Census (default), `-genome NAME` (weights + trauma), `-timeline NAME`
+(biography: birth, lives, banked, trauma, sermons, last words, epitaph),
+`-diff A,B` (drive-by-drive deltas), `-matrix NAME` (cycle matrix),
+`-thoughts NAME` (`-n` tail), `-grep PATTERN` across the collective
+archive, `-top` fitness leaderboard. Read-only, always; resolves short
+names case-insensitively.
+
+## `cmd/commune/main.go` — the hive's mouth
+
+Interactive conversation with the dead and living: status, minds, how
+is / genome / matrix / timeline / diff per soul, thoughts, top, sermon,
+watch (live thought stream), teach/lessons (attributed teachings kept
+in `.hive_memory/teachings.json`, never forged as memory), friend
+memory (`~/.hive_friend`), full transcript per session under `logs/`.
 
 ## `Makefile`, `scripts/`, `go.mod`
 
-- `Makefile` — `build` (embeds the machine-local `.relaykey` via
-  ldflags into `bin/`), `test` (gofmt + vet + race tests),
-  `test-1`/`test-2` (peer nodes), `test-full` (two-peer foreground),
-  `test-timed`, `clean` (never touches `.relaykey` or souls),
-  `clean-soul` (true extinction), `rotate-keys` (mint fresh next build).
+- `Makefile` — `build` (all three binaries; machine-local `.relaykey`
+  via ldflags), `build-hivemind`/`commune-build`/`souls-build`
+  (granular), `all` (bin/ + dist/ cross + hardened), `test` (check +
+  race tests), `prove` (battery + transcript), `pain` (idle-vs-loaded
+  stimulus proof), `think` (`N=` nodes, `TICK=` ms heartbeat),
+  `demo`/`doctor`/`souls`/`commune`, `dev` (entr watch), `lint`,
+  `clean` (never touches `.relaykey` or souls), `clean-soul` (true
+  extinction), `rotate-keys` (mint fresh next build).
 - `scripts/audit.sh` — fmt + vet + build + race gates, fails loud.
 - `scripts/timed_test.sh` — 10s symmetric mesh with assertions on
   frames, links, lifecycle, graceful exit, clean workspace; honors
   `$HIVEMIND_BIN`; logs to `logs/`.
+- `scripts/pain.sh` — stimulus proof: 15s idle then hogs mid-run;
+  prints both cycle matrices, both epitaphs, surprise-onset count.
 - `go.mod` — module `gitlab.torproject.org/cerberus-droid/hivemind`,
   no third-party dependencies.
