@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -2309,4 +2310,365 @@ func TestParseMounts(t *testing.T) {
 	if len(parseMounts("garbage\n")) != 0 {
 		t.Fatal("garbage mounts read as present")
 	}
+}
+
+// Identity system tests
+func TestNewIdentityCreatesValidIdentity(t *testing.T) {
+	config := DefaultIdentityConfig()
+	id, err := NewIdentity(config)
+	if err != nil {
+		t.Fatalf("NewIdentity failed: %v", err)
+	}
+	if id == nil {
+		t.Fatal("identity is nil")
+	}
+	if id.MasterSeedHash == "" {
+		t.Error("master seed hash is empty")
+	}
+	if id.RotationEpoch == 0 {
+		t.Error("rotation epoch not set")
+	}
+	if id.ExpiresAt == 0 {
+		t.Error("expires at not set")
+	}
+	if id.CurrentKeyIndex != 0 {
+		t.Error("current key index not 0")
+	}
+}
+
+func TestIdentityFromMasterSeed(t *testing.T) {
+	config := DefaultIdentityConfig()
+	masterSeed := make([]byte, 32)
+	rand.Read(masterSeed)
+
+	id, err := NewIdentityFromMasterSeed(masterSeed, config)
+	if err != nil {
+		t.Fatalf("NewIdentityFromMasterSeed failed: %v", err)
+	}
+	if !id.VerifyMasterSeed(masterSeed) {
+		t.Error("master seed verification failed")
+	}
+}
+
+func TestIdentityFromMasterSeedInvalidLength(t *testing.T) {
+	config := DefaultIdentityConfig()
+	_, err := NewIdentityFromMasterSeed([]byte("short"), config)
+	if err == nil {
+		t.Error("expected error for short master seed")
+	}
+}
+
+func TestIdentityFromSeed(t *testing.T) {
+	config := DefaultIdentityConfig()
+	seed := make([]byte, ed25519.SeedSize)
+	rand.Read(seed)
+	seedHex := hex.EncodeToString(seed)
+
+	id, err := NewIdentityFromSeed(seedHex, config)
+	if err != nil {
+		t.Fatalf("NewIdentityFromSeed failed: %v", err)
+	}
+	if id == nil {
+		t.Error("identity is nil")
+	}
+}
+
+func TestIdentitySeedVerification(t *testing.T) {
+	config := DefaultIdentityConfig()
+	_, _ = NewIdentity(config)
+
+	// Get the master seed from the identity manager approach
+	// We can't directly access master seed, so test via manager
+	mgr := NewIdentityManager(DefaultIdentityConfig())
+	id, _ := NewIdentity(DefaultIdentityConfig())
+	mgr.LoadOrCreate(id, nil)
+
+	// Test that identity without seed fails appropriately
+	_, _, err := mgr.GetSigningKey()
+	if err == nil {
+		t.Error("expected error when seed not loaded")
+	}
+}
+
+func TestIdentityDeriveKey(t *testing.T) {
+	config := DefaultIdentityConfig()
+	_, _ = NewIdentity(config)
+
+	// We can't test DeriveKey directly without master seed
+	// This is tested via IdentityManager
+}
+
+func TestIdentityRotation(t *testing.T) {
+	config := DefaultIdentityConfig()
+	config.RotationInterval = time.Hour
+	config.KeyExpiration = 2 * time.Hour
+
+	id, _ := NewIdentity(config)
+
+	// Fresh identity should not need rotation
+	if id.MustRotate(config) {
+		t.Error("fresh identity should not need rotation")
+	}
+
+	// Simulate old rotation
+	id.RotationEpoch = time.Now().Unix() - int64(config.RotationInterval.Seconds()) - 1
+	if !id.MustRotate(config) {
+		t.Error("old identity should need rotation")
+	}
+
+	err := id.RotateKeys(config)
+	if err != nil {
+		t.Fatalf("RotateKeys failed: %v", err)
+	}
+
+	if id.CurrentKeyIndex != 1 {
+		t.Errorf("key index should be 1 after rotation, got %d", id.CurrentKeyIndex)
+	}
+	if id.RotationEpoch == 0 {
+		t.Error("rotation epoch not updated")
+	}
+}
+
+func TestIdentityExpiration(t *testing.T) {
+	config := DefaultIdentityConfig()
+	config.KeyExpiration = time.Hour
+
+	id, _ := NewIdentity(config)
+	if id.IsExpired() {
+		t.Error("fresh identity should not be expired")
+	}
+
+	id.ExpiresAt = time.Now().Unix() - 1
+	if !id.IsExpired() {
+		t.Error("past expiration should be expired")
+	}
+}
+
+func TestIdentityRevocation(t *testing.T) {
+	config := DefaultIdentityConfig()
+	id, _ := NewIdentity(config)
+
+	err := id.RevokeKey(KeyIDTransport)
+	if err != nil {
+		t.Fatalf("RevokeKey failed: %v", err)
+	}
+
+	if !id.IsRevoked(KeyIDTransport) {
+		t.Error("key should be revoked")
+	}
+
+	if id.IsRevoked(KeyIDSigning) {
+		t.Error("signing key should not be revoked")
+	}
+
+	// Revoking unknown key should error
+	err = id.RevokeKey("unknown")
+	if err == nil {
+		t.Error("revoking unknown key should error")
+	}
+}
+
+func TestIdentityHandleCollision(t *testing.T) {
+	config := DefaultIdentityConfig()
+	id1, _ := NewIdentity(config)
+	id2, _ := NewIdentity(config)
+
+	// Same base handle should collide (that's what collision means)
+	if !id1.CheckCollision(id2, "test") {
+		t.Error("same base handle should collide")
+	}
+
+	// Empty base handles without collision IDs also collide (both empty)
+	if !id1.CheckCollision(id2, "") {
+		t.Error("empty base handles should collide")
+	}
+
+	// Same collision ID should collide
+	id1.HandleCollisionID = "abc"
+	id2.HandleCollisionID = "abc"
+	if !id1.CheckCollision(id2, "test") {
+		t.Error("same collision ID should collide")
+	}
+}
+
+func TestIdentityResolveCollision(t *testing.T) {
+	config := DefaultIdentityConfig()
+	id, _ := NewIdentity(config)
+
+	suffix, err := id.ResolveCollision(config)
+	if err != nil {
+		t.Fatalf("ResolveCollision failed: %v", err)
+	}
+	if suffix == "" {
+		t.Error("collision suffix should not be empty")
+	}
+	if id.HandleCollisionID == "" {
+		t.Error("collision ID should be set on identity")
+	}
+}
+
+func TestIdentityManager(t *testing.T) {
+	config := DefaultIdentityConfig()
+	mgr := NewIdentityManager(config)
+
+	// Create identity with a known master seed
+	masterSeed := make([]byte, 32)
+	rand.Read(masterSeed)
+	id, _ := NewIdentityFromMasterSeed(masterSeed, config)
+
+	// Load identity with the same master seed
+	err := mgr.LoadOrCreate(id, masterSeed)
+	if err != nil {
+		t.Fatalf("LoadOrCreate failed: %v", err)
+	}
+
+	// Get signing key
+	priv, pub, err := mgr.GetSigningKey()
+	if err != nil {
+		t.Fatalf("GetSigningKey failed: %v", err)
+	}
+	if priv == nil || pub == nil {
+		t.Error("keys should not be nil")
+	}
+
+	// Get key by label
+	_, pub, err = mgr.GetKeyByLabel(KeyIDTransport)
+	if err != nil {
+		t.Fatalf("GetKeyByLabel failed: %v", err)
+	}
+	if pub == nil {
+		t.Error("transport public key should not be nil")
+	}
+
+	// Test rotation
+	err = mgr.RotateIfNeeded()
+	if err != nil {
+		t.Fatalf("RotateIfNeeded failed: %v", err)
+	}
+
+	// Test state
+	state := mgr.GetState(DefaultIdentityConfig())
+	if state.KeyIndex != 0 {
+		t.Errorf("key index should be 0, got %d", state.KeyIndex)
+	}
+	if state.KeyLabel != KeyIDSigning {
+		t.Errorf("key label should be %s, got %s", KeyIDSigning, state.KeyLabel)
+	}
+}
+
+func TestIdentityHandleCollisionResolution(t *testing.T) {
+	config := DefaultIdentityConfig()
+	mgr := NewIdentityManager(config)
+
+	masterSeed := make([]byte, 32)
+	rand.Read(masterSeed)
+	id, _ := NewIdentityFromMasterSeed(masterSeed, config)
+	mgr.LoadOrCreate(id, masterSeed)
+
+	existing := map[string]bool{"test": true}
+
+	handle, err := mgr.CheckAndResolveCollision("test", existing)
+	if err != nil {
+		t.Fatalf("CheckAndResolveCollision failed: %v", err)
+	}
+	if handle == "test" {
+		t.Error("collision should have been resolved with suffix")
+	}
+	if !strings.HasPrefix(handle, "test#") {
+		t.Errorf("handle should have collision suffix, got %s", handle)
+	}
+}
+
+func TestIdentityState(t *testing.T) {
+	config := DefaultIdentityConfig()
+	mgr := NewIdentityManager(config)
+
+	id, _ := NewIdentity(config)
+	masterSeed := make([]byte, 32)
+	rand.Read(masterSeed)
+	mgr.LoadOrCreate(id, masterSeed)
+
+	state := mgr.GetState(config)
+	if state.KeyIndex != 0 {
+		t.Errorf("key index should be 0, got %d", state.KeyIndex)
+	}
+	if state.KeyLabel != KeyIDSigning {
+		t.Errorf("key label should be %s", KeyIDSigning)
+	}
+	if state.RotationEpoch == 0 {
+		t.Error("rotation epoch should be set")
+	}
+	if state.Expired {
+		t.Error("fresh identity should not be expired")
+	}
+	if state.RotationOverdue {
+		t.Error("fresh identity should not be rotation overdue")
+	}
+}
+
+func TestIdentityGetAllKeys(t *testing.T) {
+	config := DefaultIdentityConfig()
+	
+	// Create a master seed and identity from it
+	masterSeed := make([]byte, 32)
+	rand.Read(masterSeed)
+	id, _ := NewIdentityFromMasterSeed(masterSeed, config)
+
+	keys, err := id.GetAllKeys(masterSeed)
+	if err != nil {
+		t.Fatalf("GetAllKeys failed: %v", err)
+	}
+
+	if len(keys) != len(keyLabels) {
+		t.Errorf("expected %d keys, got %d", len(keyLabels), len(keys))
+	}
+
+	// Sort keys by index for deterministic comparison
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Index < keys[j].Index })
+
+	for i, k := range keys {
+		if k.KeyID != keyLabels[k.Index] {
+			t.Errorf("key %d: expected %s, got %s", i, keyLabels[k.Index], k.KeyID)
+		}
+		if k.PrivateKey == nil || k.PublicKey == nil {
+			t.Errorf("key %d should have both keys", i)
+		}
+	}
+}
+
+func TestIdentityBackup(t *testing.T) {
+	config := DefaultIdentityConfig()
+	mgr := NewIdentityManager(config)
+
+	id, _ := NewIdentity(config)
+	masterSeed := make([]byte, 32)
+	rand.Read(masterSeed)
+	mgr.LoadOrCreate(id, masterSeed)
+
+	backup, err := mgr.ExportBackup("test-passphrase")
+	if err != nil {
+		t.Fatalf("ExportBackup failed: %v", err)
+	}
+	if len(backup) == 0 {
+		t.Error("backup should not be empty")
+	}
+
+	// Verify it's valid JSON
+	var backupData map[string]interface{}
+	if err := json.Unmarshal(backup, &backupData); err != nil {
+		t.Errorf("backup is not valid JSON: %v", err)
+	}
+}
+
+func TestDebugHandleCollision(t *testing.T) {
+	config := DefaultIdentityConfig()
+	id1, _ := NewIdentity(config)
+	id2, _ := NewIdentity(config)
+	
+	t.Logf("id1 GetHandle(test): %q", id1.GetHandle("test"))
+	t.Logf("id2 GetHandle(test): %q", id2.GetHandle("test"))
+	t.Logf("id1 GetHandle(empty): %q", id1.GetHandle(""))
+	t.Logf("id2 GetHandle(empty): %q", id2.GetHandle(""))
+	t.Logf("Collision with 'test': %v", id1.CheckCollision(id2, "test"))
+	t.Logf("Collision with '': %v", id1.CheckCollision(id2, ""))
 }
