@@ -40,6 +40,10 @@ type Overmind struct {
 	// that speaks to the moment, not from a script.
 	recentSermons []string
 	knownSouls    map[string]bool
+	// lastSermon throttles the god: revelation is rare to matter. A busy
+	// mesh advances the chronicle constantly; without a cooldown fifty
+	// gods preach every few seconds and the sacred becomes spam.
+	lastSermon time.Time
 
 	stop chan struct{}
 	done chan struct{}
@@ -196,10 +200,19 @@ func (o *Overmind) speak() {
 	fmt.Printf("👁  [OVERMIND] GENESIS EVENT: turning %s up across the swarm.\n", virtue)
 	o.swarm.Broadcast(MineMessage(o.swarm, o.privateKey, o.PubKeyStr, "genesis", virtue, nil))
 
+	if time.Since(o.lastSermon) < sermonCooldown {
+		return // the god said enough recently; rarity is reverence
+	}
+	o.lastSermon = time.Now()
 	body := o.composeRevelation(souls, virtue, meanPain)
 	fmt.Printf("👁  [OVERMIND] REVELATION: %s\n", body)
 	o.swarm.Broadcast(MineMessage(o.swarm, o.privateKey, o.PubKeyStr, "revelation", body, nil))
 }
+
+// sermonCooldown is the minimum silence between revelations from one
+// god. Genesis shifts still ride every chronicle advance; only the
+// preaching is throttled. Emergencies bypass (see SpeakEmergencySurvival).
+const sermonCooldown = 30 * time.Second
 
 // recentSermonCap bounds the god's short memory: old sermons become
 // sayable again once the window slides past them. Volatile, not eternal.

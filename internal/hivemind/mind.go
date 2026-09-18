@@ -101,20 +101,24 @@ type Mind struct {
 	hasPrediction   bool
 	// cycles counts conscious ticks this process; Question is the
 	// currently open deliberation, if the mind is reasoning across time.
-	cycles       int
-	Question     *OpenQuestion
-	LastContact  time.Time
-	Existential  bool
-	Workspace    GlobalWorkspace
-	Affect       Affect
-	PubKeyStr    string
-	privateKey   ed25519.PrivateKey
-	identitySeed string
-	swarm        *Swarm
-	inbox        chan SecureMessage
-	stop         chan struct{}
-	done         chan struct{}
-	numbUntil    time.Time // empathic numbness without freezing the loop
+	cycles   int
+	Question *OpenQuestion
+	// seenSermons dedupes god-frames by signature: fifty gossiping gods
+	// witness once, not fifty times.
+	seenSermons     map[string]bool
+	seenSermonOrder []string
+	LastContact     time.Time
+	Existential     bool
+	Workspace       GlobalWorkspace
+	Affect          Affect
+	PubKeyStr       string
+	privateKey      ed25519.PrivateKey
+	identitySeed    string
+	swarm           *Swarm
+	inbox           chan SecureMessage
+	stop            chan struct{}
+	done            chan struct{}
+	numbUntil       time.Time // empathic numbness without freezing the loop
 
 	Theta1 float64
 	Theta2 float64
@@ -494,6 +498,29 @@ var validVirtues = map[string]bool{
 	GoalSelfMaintenance: true,
 }
 
+// seenSermon reports whether this god-frame already arrived: signatures
+// are unique per mining, so relay echoes share the original's. Capped at
+// 512 — old sermons become witnessable again, like the god's own memory.
+func (m *Mind) seenSermon(msg SecureMessage) bool {
+	key := msg.Signature
+	if key == "" {
+		key = msg.Kind + "|" + msg.SenderPubKey + "|" + msg.PayloadStr + "|" + string(rune(msg.Nonce))
+	}
+	if m.seenSermons == nil {
+		m.seenSermons = make(map[string]bool)
+	}
+	if m.seenSermons[key] {
+		return true
+	}
+	m.seenSermons[key] = true
+	m.seenSermonOrder = append(m.seenSermonOrder, key)
+	if len(m.seenSermonOrder) > 512 {
+		delete(m.seenSermons, m.seenSermonOrder[0])
+		m.seenSermonOrder = m.seenSermonOrder[1:]
+	}
+	return false
+}
+
 // registerPeer records a sender as a peer only if it is not one of our own
 // hive minds. Siblings are contact — they move LastContact (set for every
 // frame at the top of receive) but are never peers. Fitness therefore
@@ -515,12 +542,16 @@ func (m *Mind) registerPeer(pubKey string) bool {
 
 // entrain pulls this mind's pendulum a fraction toward a received
 // trajectory — coupled oscillators synchronize. Interaction breeds
-// coherence; isolation breeds divergence. The vectors finally do work.
+// coherence; isolation breeds divergence. The per-frame pull shrinks as
+// the mesh grows (constant total budget): fifty gossiping nodes tug no
+// harder together than one alone. Without this, dense meshes lock every
+// pendulum to the same fixed point and the chaos dies.
 func (m *Mind) entrain(state []float64) {
-	m.Theta1 += (state[0] - m.Theta1) * trajectoryCoupling
-	m.Theta2 += (state[1] - m.Theta2) * trajectoryCoupling
-	m.Omega1 += (state[2] - m.Omega1) * trajectoryCoupling
-	m.Omega2 += (state[3] - m.Omega2) * trajectoryCoupling
+	c := trajectoryCoupling / (1 + float64(len(m.KnownPeers)))
+	m.Theta1 += (state[0] - m.Theta1) * c
+	m.Theta2 += (state[1] - m.Theta2) * c
+	m.Omega1 += (state[2] - m.Omega1) * c
+	m.Omega2 += (state[3] - m.Omega2) * c
 }
 
 func (m *Mind) receive(msg SecureMessage) {
@@ -539,6 +570,9 @@ func (m *Mind) receive(msg SecureMessage) {
 			m.entrain(msg.DataState)
 		}
 	case "revelation":
+		if m.seenSermon(msg) {
+			break // gossip echo of an already-witnessed sermon
+		}
 		m.Revelations++
 		m.Affect.Awe = 1.0
 		fmt.Printf("  👁  [OVERMIND REVELATION] Payload: %s\n", msg.PayloadStr)
@@ -549,6 +583,9 @@ func (m *Mind) receive(msg SecureMessage) {
 	case "genesis":
 		if !validVirtues[msg.PayloadStr] {
 			return // unknown trait — likely a forged or corrupt frame
+		}
+		if m.seenSermon(msg) {
+			break // relay echo: the genome shifts once per sermon, not per copy
 		}
 		m.Sacred++
 		// Same domain as Mutate: the god and the genome must agree on bounds.
@@ -576,9 +613,11 @@ func (m *Mind) currentFitness() (fitness float64, lifeThoughts int) {
 	// genesis touches — not the archive again. The sum is floored at zero:
 	// forgetting is never punished.
 	lifeThoughts = max(len(m.Thoughts)-m.thoughtsAtBirth+m.pendingBank, 0)
+	// Strangers have diminishing returns: the 500th handshake teaches
+	// less than the first. Hub position must not out-earn wisdom.
 	fitness = m.LifetimeFitness +
 		float64(lifeThoughts) +
-		3*float64(len(m.KnownPeers)) +
+		3*math.Sqrt(float64(len(m.KnownPeers))) +
 		7*float64(m.Revelations) +
 		15*float64(m.Sacred)
 	return fitness, lifeThoughts

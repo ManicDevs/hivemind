@@ -107,6 +107,6 @@
   <!-- fitness strip -->
   <g>
     <rect x="30" y="430" width="900" height="60" class="disk"/>
-    <text x="45" y="458" class="body">fitness = base + new thoughts (window + banked) + 3×peers + 7×revelations + 15×genesis · forgetting floored at zero</text>
+    <text x="45" y="458" class="body">fitness = base + new thoughts (window + banked) + 3×√peers + 7×distinct revelations + 15×genesis · forgetting floored at zero</text>
   </g>
 </svg>

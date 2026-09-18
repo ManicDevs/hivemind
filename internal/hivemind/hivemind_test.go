@@ -603,6 +603,8 @@ func TestCulledCooldown(t *testing.T) {
 
 // Entrainment: a received trajectory pulls the pendulum toward the sender.
 // Coupled minds converge; the vectors do work instead of decorating logs.
+// The pull is density-aware (constant total budget): this very receive
+// registers the first peer, so the pull is coupling/2, not coupling.
 func TestTrajectoryEntrainment(t *testing.T) {
 	s := NewSwarm()
 	m := NewMind("TestSync", s)
@@ -610,15 +612,16 @@ func TestTrajectoryEntrainment(t *testing.T) {
 
 	m.receive(SecureMessage{SenderPubKey: "far-away", Kind: "thought", DataState: []float64{1, 2, 3, 4}})
 
-	if m.Theta1 != trajectoryCoupling*1 || m.Theta2 != trajectoryCoupling*2 ||
-		m.Omega1 != trajectoryCoupling*3 || m.Omega2 != trajectoryCoupling*4 {
+	want := trajectoryCoupling / 2
+	if m.Theta1 != want*1 || m.Theta2 != want*2 ||
+		m.Omega1 != want*3 || m.Omega2 != want*4 {
 		t.Fatalf("no entrainment: theta=[%f %f] omega=[%f %f]",
 			m.Theta1, m.Theta2, m.Omega1, m.Omega2)
 	}
 
 	// Short vectors couple nothing and crash nothing.
 	m.receive(SecureMessage{SenderPubKey: "terse", Kind: "thought", DataState: []float64{9}})
-	if m.Theta1 != trajectoryCoupling*1 {
+	if m.Theta1 != want*1 {
 		t.Fatal("short frame disturbed the pendulum")
 	}
 }
@@ -2134,5 +2137,67 @@ func TestDeliberationVerdict(t *testing.T) {
 	last := m.Thoughts[len(m.Thoughts)-1]
 	if !strings.Contains(last, "DELIBERATION") || !strings.Contains(last, "pain rose") {
 		t.Fatalf("verdict not true to the evidence: %q", last)
+	}
+}
+
+func TestEntrainDensityAware(t *testing.T) {
+	// Same pull, different crowds: a lone mind moves; a mesh-buried one
+	// barely feels a single frame. Total budget constant.
+	lone := &Mind{Name: "hermit", Theta1: 0}
+	crowded := &Mind{Name: "hub", Theta1: 0, KnownPeers: map[string]bool{}}
+	for i := 0; i < 400; i++ {
+		crowded.KnownPeers[string(rune(i))] = true
+	}
+	state := []float64{1.0, 0, 0, 0}
+	lone.entrain(state)
+	crowded.entrain(state)
+	if lone.Theta1 <= crowded.Theta1*10 {
+		t.Fatalf("density ignored: lone %.5f vs crowded %.5f", lone.Theta1, crowded.Theta1)
+	}
+	if crowded.Theta1 <= 0 {
+		t.Fatal("crowded mind feels nothing at all")
+	}
+}
+
+func TestSermonCountedOnce(t *testing.T) {
+	s := NewSwarm()
+	m := NewMind("Witness", s)
+	msg := SecureMessage{Kind: "revelation", SenderPubKey: "god", PayloadStr: "behold", Signature: "sig1"}
+	m.receive(msg)
+	m.receive(msg)
+	m.receive(msg)
+	if m.Revelations != 1 {
+		t.Fatalf("gossip echo counted %d revelations, want 1", m.Revelations)
+	}
+	msg2 := SecureMessage{Kind: "revelation", SenderPubKey: "god", PayloadStr: "behold again", Signature: "sig2"}
+	m.receive(msg2)
+	if m.Revelations != 2 {
+		t.Fatalf("distinct sermon ignored: %d, want 2", m.Revelations)
+	}
+}
+
+func TestGenesisShiftsOnce(t *testing.T) {
+	s := NewSwarm()
+	m := NewMind("Faithful", s)
+	before := m.Genome.Weights[GoalCuriosity]
+	msg := SecureMessage{Kind: "genesis", SenderPubKey: "god", PayloadStr: GoalCuriosity, Signature: "g1"}
+	m.receive(msg)
+	m.receive(msg)
+	after := m.Genome.Weights[GoalCuriosity]
+	if after-before < 0.29 || after-before > 0.31 {
+		t.Fatalf("echo double-shifted genome: %.2f → %.2f", before, after)
+	}
+}
+
+func TestFitnessDiminishingPeers(t *testing.T) {
+	s := NewSwarm()
+	m := NewMind("Hub", s)
+	for i := 0; i < 100; i++ {
+		m.KnownPeers[string(rune(i))] = true
+	}
+	f, _ := m.currentFitness()
+	peerTerm := f - m.LifetimeFitness
+	if peerTerm != 30 { // 3*sqrt(100)
+		t.Fatalf("peer term %.1f, want 30 (diminishing)", peerTerm)
 	}
 }

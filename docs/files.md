@@ -71,10 +71,13 @@ pendulum state (`Theta1/2`, `Omega1/2`), and its swarm inbox.
   (siblings are contact, strangers are peers); genesis validates the
   virtue name before touching the genome; hardware alerts induce brief
   empathic numbness, never a frozen loop.
-- `Transcend()` — fitness = base + new thoughts + 3×peers +
-  7×revelations + 15×genesis touches (pruning floor at zero: forgetting is
-  never punished); fatal heat persists the burned soul marked by trauma;
-  saves atomically. `Stop()` + `Done()` manage the lifecycle.
+- `Transcend()` — fitness = base + new thoughts + 3×√peers +
+  7×distinct revelations + 15×distinct genesis touches (pruning floor at
+  zero: forgetting is never punished); strangers have diminishing
+  returns so hub position never out-earns wisdom; god-frames dedupe by
+  signature (gossip echoes witness once); fatal heat persists the burned
+  soul marked by trauma; saves atomically. `Stop()` + `Done()` manage
+  the lifecycle.
 - Helpers: `shortID` / `shortIDLong` (panic-proof key prefixes),
   `clamp` lives in `conscious.go`.
 
