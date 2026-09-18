@@ -333,6 +333,13 @@ func (m *Mind) Run() {
 			tickMs = n
 		}
 	}
+	// Phase desync: supervisor births nodes in lockstep, so undisciplined
+	// tickers would stampede the CPUs every tick. Each mind sleeps a
+	// random phase in [0, tick) once — PoW spreads uniformly forever.
+	phase := make([]byte, 1)
+	if _, err := rand.Read(phase); err == nil {
+		time.Sleep(time.Duration(int(phase[0]) * tickMs / 256 * int(time.Millisecond)))
+	}
 	thinking := time.NewTicker(time.Duration(tickMs) * time.Millisecond)
 	defer thinking.Stop()
 	for {
