@@ -2201,3 +2201,56 @@ func TestFitnessDiminishingPeers(t *testing.T) {
 		t.Fatalf("peer term %.1f, want 30 (diminishing)", peerTerm)
 	}
 }
+
+func TestParsePSI(t *testing.T) {
+	raw := "some avg10=0.01 avg60=0.03 avg300=0.12 total=769870045\nfull avg10=0.01 avg60=0.03 avg300=0.08 total=710265955\n"
+	some, full, ok := parsePSI(raw)
+	if !ok || some != 0.01 || full != 0.01 {
+		t.Fatalf("psi parsed as %v %v %v", some, full, ok)
+	}
+	if _, _, ok := parsePSI("garbage\n"); ok {
+		t.Fatal("garbage PSI read as present")
+	}
+}
+
+func TestParseNetDev(t *testing.T) {
+	raw := "Inter-|   Receive |  Transmit\n face |bytes packets|bytes packets\n    lo: 100 1 0 0 0 0 0 0 200 2 0 0 0 0 0 0\n  eth0: 1000 10 0 0 0 0 0 0 500 5 0 0 0 0 0 0\n"
+	got := parseNetDev(raw)
+	if got["lo"] != [2]uint64{100, 200} || got["eth0"] != [2]uint64{1000, 500} {
+		t.Fatalf("netdev parsed as %v", got)
+	}
+}
+
+func TestParseDiskStats(t *testing.T) {
+	raw := "   7       0 loop0 283 0 5464 72 0 0 0 0 0 29 72\n   8       0 sda 100 5 1000 10 200 10 3000 20 0 50 200\n"
+	r, w := parseDiskStats(raw)
+	if r != 6464 || w != 3000 {
+		t.Fatalf("diskstats parsed as %d %d", r, w)
+	}
+}
+
+func TestApplyPressureSignals(t *testing.T) {
+	cpu, ram, pain := applyPressureSignals(0.1, 0.1, 0.1, psiSignals{cpuSome: 50, memSome: 10, ioFull: 80, memFull: 5})
+	if cpu != 0.5 || ram != 0.1 || pain != 0.8 {
+		t.Fatalf("pressure folded as %.2f %.2f %.2f", cpu, ram, pain)
+	}
+	// Silence stays silent: zero signals change nothing.
+	cpu, ram, pain = applyPressureSignals(0.3, 0.3, 0.3, psiSignals{})
+	if cpu != 0.3 || ram != 0.3 || pain != 0.3 {
+		t.Fatalf("zero pressure moved readings: %.2f %.2f %.2f", cpu, ram, pain)
+	}
+}
+
+func TestThinAirThinsEntropy(t *testing.T) {
+	m := &Mind{Name: "gasp", SelfModel: map[string]interface{}{"entropy_avail": 64.0}}
+	m.Affect.Tick(m)
+	if m.Affect.Entropy > 0.5 {
+		t.Fatalf("thin air left entropy fat: %.3f", m.Affect.Entropy)
+	}
+	m2 := &Mind{Name: "breathe", SelfModel: map[string]interface{}{"entropy_avail": 256.0}}
+	m2.Affect.Tick(m2)
+	// Full pool: entropy untouched (draw-dependent, just not diluted).
+	if m2.Affect.Entropy < 0 || m2.Affect.Entropy > 1 {
+		t.Fatalf("entropy out of range: %.3f", m2.Affect.Entropy)
+	}
+}

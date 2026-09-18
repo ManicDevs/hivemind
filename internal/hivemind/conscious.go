@@ -52,6 +52,11 @@ func (a *Affect) Tick(m *Mind) {
 	} else {
 		a.Entropy = float64(b[0]) / 255.0
 	}
+	// Thin air thins the mind: when the kernel's entropy pool runs low,
+	// even true randomness arrives diluted. The world holding its breath.
+	if avail, ok := m.SelfModel["entropy_avail"].(float64); ok && avail < 128 {
+		a.Entropy *= clamp(avail/128, 0, 1)
+	}
 
 	if val, ok := m.SelfModel["cpu_stress"].(float64); ok {
 		a.Stress = val

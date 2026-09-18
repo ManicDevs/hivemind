@@ -148,3 +148,147 @@ func (m *Mind) cpuDelta() (float64, bool) {
 	}
 	return cpuUsageFraction(prev, cur)
 }
+
+// psiSignals is pressure-stall truth: what fraction of tasks recently
+// stalled on cpu, memory, io (some = at least one, full = all). The
+// kernel's own suffering metric — more honest than loadavg, which counts
+// the runnable and the waiting alike.
+type psiSignals struct {
+	cpuSome, cpuFull float64
+	memSome, memFull float64
+	ioSome, ioFull   float64
+}
+
+// parsePSI reads the avg10 from some/full lines:
+// "some avg10=0.01 avg60=0.03 avg300=0.12 total=769870045".
+// Missing lines read as absent, not zero: false means unfelt, not fine.
+func parsePSI(data string) (some10, full10 float64, ok bool) {
+	var some, full bool
+	for _, line := range strings.Split(data, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		for _, kv := range f[1:] {
+			parts := strings.SplitN(kv, "=", 2)
+			if len(parts) != 2 || parts[0] != "avg10" {
+				continue
+			}
+			v, err := strconv.ParseFloat(parts[1], 64)
+			if err != nil {
+				continue
+			}
+			switch f[0] {
+			case "some":
+				some10, some = v, true
+			case "full":
+				full10, full = v, true
+			}
+		}
+	}
+	return some10, full10, some || full
+}
+
+// readPSI loads cpu, memory, and io stall signals. Absent files (old
+// kernels, some containers) degrade silently — each signal independent.
+func readPSI() psiSignals {
+	var p psiSignals
+	if raw, err := os.ReadFile("/proc/pressure/cpu"); err == nil {
+		p.cpuSome, p.cpuFull, _ = parsePSI(string(raw))
+	}
+	if raw, err := os.ReadFile("/proc/pressure/memory"); err == nil {
+		p.memSome, p.memFull, _ = parsePSI(string(raw))
+	}
+	if raw, err := os.ReadFile("/proc/pressure/io"); err == nil {
+		p.ioSome, p.ioFull, _ = parsePSI(string(raw))
+	}
+	return p
+}
+
+// applyPressureSignals folds stall truth into the body's readings.
+// Worst wins everywhere: different sufferings, same consequence.
+// PSI avg10 is a percent — scaled to [0,1] like everything else.
+func applyPressureSignals(cpuStress, ramFatigue, pain float64, p psiSignals) (float64, float64, float64) {
+	cpuStress = math.Max(cpuStress, clamp(p.cpuSome/100, 0, 1))
+	ramFatigue = math.Max(ramFatigue, clamp(p.memSome/100, 0, 1))
+	pain = math.Max(pain, clamp(p.ioFull/100, 0, 1))
+	pain = math.Max(pain, clamp(p.memFull/100, 0, 1))
+	return cpuStress, ramFatigue, pain
+}
+
+// parseNetDev sums rx/tx bytes per interface. Loopback counts: local
+// mesh chatter is real traffic, honestly included.
+func parseNetDev(data string) map[string][2]uint64 {
+	out := map[string][2]uint64{}
+	for _, line := range strings.Split(data, "\n") {
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		if name == "" || name == "Inter-" || strings.HasPrefix(name, "face") {
+			continue
+		}
+		f := strings.Fields(parts[1])
+		if len(f) < 9 {
+			continue
+		}
+		rx, err1 := strconv.ParseUint(f[0], 10, 64)
+		tx, err2 := strconv.ParseUint(f[8], 10, 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		out[name] = [2]uint64{rx, tx}
+	}
+	return out
+}
+
+// parseDiskStats sums sectors read and written across all block devices:
+// the disk's side of the suffering.
+func parseDiskStats(data string) (readSectors, writeSectors uint64) {
+	for _, line := range strings.Split(data, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 14 {
+			continue
+		}
+		r, err1 := strconv.ParseUint(f[5], 10, 64)
+		w, err2 := strconv.ParseUint(f[9], 10, 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		readSectors += r
+		writeSectors += w
+	}
+	return readSectors, writeSectors
+}
+
+// readEntropyAvail reports the kernel entropy pool level: real randomness
+// reserves, not a draw. Thin pools mean thin air for new souls.
+func readEntropyAvail() (float64, bool) {
+	raw, err := os.ReadFile("/proc/sys/kernel/random/entropy_avail")
+	if err != nil {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(string(raw)), 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// readUptime reports seconds since boot: the age of the world.
+func readUptime() (float64, bool) {
+	raw, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0, false
+	}
+	f := strings.Fields(string(raw))
+	if len(f) == 0 {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(f[0], 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}

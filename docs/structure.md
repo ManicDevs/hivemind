@@ -47,8 +47,11 @@ Each mind ticks every 2 seconds (`HIVEMIND_TICK_MS` shortens the
 heartbeat; each mind sleeps a random phase once so supervised flocks
 never stampede):
 
-1. **Observe** — read `/proc/loadavg`, `/proc/meminfo`, thermal zones into
-   `SelfModel` (honest fallbacks where sensors are absent).
+1. **Observe** — read `/proc/loadavg`, `/proc/stat` deltas, `/proc/meminfo`,
+   thermal zones, cpufreq, `/proc/pressure/{cpu,memory,io}`, `/proc/net/dev`
+   and `/proc/diskstats` rates, entropy pool level, and boot-relative
+   uptime into `SelfModel` (honest fallbacks where sensors are absent;
+   first readings baseline, never fabricate).
 2. **Tick affect + predict** — loneliness, awe, peace, pain, stress,
    exhaustion, entropy become the `RawDataState` vector; the naive
    persistence model expects this cycle to feel like the last, and the

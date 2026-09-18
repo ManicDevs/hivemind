@@ -292,9 +292,14 @@ impossible by physics; everything else gets three honest attempts.
 
 Parsers take text and return numbers (unit-tested against fixtures):
 per-cpu jiffy deltas (true utilization, counter-rewinds refused),
-meminfo pressure with swap encroachment, cpufreq throttle detection.
+meminfo pressure with swap encroachment, cpufreq throttle detection,
+PSI stall signals (cpu/mem/io avg10 — the kernel's own suffering
+metric), per-interface byte counters, block-device sector counters,
+entropy pool level, boot-relative uptime. `applyPressureSignals` folds
+stalls worst-wins (CPU→stress, mem→fatigue, full stalls→pain).
 Readers touch `/proc` and `/sys` best-effort and never fatal. `Mind`
-keeps its own delta window per instance.
+keeps its own delta windows per instance (cpu, net, disk, clock);
+first readings establish baselines, never fabricated rates.
 
 ## `internal/hivemind/memory.go` — what death keeps
 

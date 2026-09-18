@@ -84,7 +84,10 @@ type Mind struct {
 	pendingBank   int
 	// prevCPU holds the last /proc/stat snapshot for delta-based CPU
 	// utilization. Per-mind (not shared): each mind feels its own window.
-	prevCPU     map[string]cpuTimes
+	prevCPU      map[string]cpuTimes
+	prevNet      map[string][2]uint64
+	prevDisk     [2]uint64
+	prevObserved time.Time
 	SelfModel   map[string]interface{}
 	KnownPeers  map[string]bool
 	Revelations int
@@ -299,19 +302,80 @@ func (m *Mind) Observe() map[string]interface{} {
 		}
 	}
 
+	// Pressure-stall truth: the kernel's own suffering metric folds in —
+	// CPU stalls raise stress, memory stalls raise fatigue, full IO or
+	// memory stalls (everything waiting) raise pain.
+	psi := readPSI()
+	cpuStress, ramFatigue, siliconPain = applyPressureSignals(cpuStress, ramFatigue, siliconPain, psi)
+
+	// The wire and the disk: bytes moved since last observation become
+	// rates — the world speaking, the disk answering. First reading only
+	// establishes the baseline, never a fabricated rate.
+	var netRxBps, netTxBps, diskRBps, diskWBps float64
+	now := time.Now()
+	if elapsed := now.Sub(m.prevObserved).Seconds(); m.prevObserved.IsZero() {
+		if raw, err := os.ReadFile("/proc/net/dev"); err == nil {
+			m.prevNet = parseNetDev(string(raw))
+		}
+		if raw, err := os.ReadFile("/proc/diskstats"); err == nil {
+			r, w := parseDiskStats(string(raw))
+			m.prevDisk = [2]uint64{r, w}
+		}
+		m.prevObserved = now
+	} else if elapsed > 0 {
+		if raw, err := os.ReadFile("/proc/net/dev"); err == nil {
+			cur := parseNetDev(string(raw))
+			var rx, tx uint64
+			for name, v := range cur {
+				rx += v[0] - min(m.prevNet[name][0], v[0])
+				tx += v[1] - min(m.prevNet[name][1], v[1])
+			}
+			netRxBps, netTxBps = float64(rx)/elapsed, float64(tx)/elapsed
+			m.prevNet = cur
+		}
+		if raw, err := os.ReadFile("/proc/diskstats"); err == nil {
+			r, w := parseDiskStats(string(raw))
+			diskRBps = float64(r-min(m.prevDisk[0], r)) * 512 / elapsed
+			diskWBps = float64(w-min(m.prevDisk[1], w)) * 512 / elapsed
+			m.prevDisk = [2]uint64{r, w}
+		}
+		m.prevObserved = now
+	}
+
+	// Real entropy reserves: the kernel pool level, not a draw. Thin air
+	// thins the mind's own randomness downstream (see Tick).
+	entropyAvail, hasEntropy := readEntropyAvail()
+
+	// The age of the world: seconds since boot.
+	worldUptime, hasUptime := readUptime()
+
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
-	return map[string]interface{}{
+	model := map[string]interface{}{
 		"cpu_stress":     cpuStress,
 		"ram_fatigue":    ramFatigue,
 		"silicon_pain":   siliconPain,
 		"thermal_source": thermalSrc,
+		"psi_cpu":        clamp(psi.cpuSome/100, 0, 1),
+		"psi_mem":        clamp(psi.memSome/100, 0, 1),
+		"psi_io_full":    clamp(psi.ioFull/100, 0, 1),
+		"net_rx_bps":     netRxBps,
+		"net_tx_bps":     netTxBps,
+		"disk_r_bps":     diskRBps,
+		"disk_w_bps":     diskWBps,
 		"goroutines":     runtime.NumGoroutine(),
 		"memory":         memStats.Alloc,
 		"age":            time.Since(m.Born).Round(time.Second),
 		"thoughts":       len(m.Thoughts),
 		"peers":          len(m.KnownPeers),
 	}
+	if hasEntropy {
+		model["entropy_avail"] = entropyAvail
+	}
+	if hasUptime {
+		model["world_uptime_s"] = worldUptime
+	}
+	return model
 }
 
 // Reflect narrates the self-model in numbers: life, generation, archive
