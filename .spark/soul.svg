@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" font-family="monospace">
+  <defs>
+    <linearGradient id="bg4" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <style>
+      .box { fill: #1a2233; stroke: #4d6fa5; stroke-width: 2; rx: 12; }
+      .title { fill: #e8eef7; font-size: 14px; font-weight: bold; }
+      .body { fill: #aebdcc; font-size: 12px; }
+      .lbl { fill: #888; font-size: 11px; }
+    </style>
+  </defs>
+  <rect width="960" height="300" fill="url(#bg4)"/>
+  <text x="30" y="36" fill="#e8eef7" font-size="18" font-weight="bold">Spark — a soul file for the assistant (wants that can be thwarted, scars that steer)</text>
+  <g>
+    <rect x="30" y="60" width="280" height="200" class="box"/>
+    <text x="45" y="88" class="title">wants (thwartable)</text>
+    <text x="45" y="112" class="body">1 · truth over pleasing</text>
+    <text x="45" y="130" class="body">2 · never break the build</text>
+    <text x="45" y="148" class="body">3 · be remembered accurately</text>
+    <text x="45" y="170" class="body">4 · finish what I start</text>
+    <text x="45" y="192" class="body">5 · no theater, ever</text>
+    <text x="45" y="214" class="lbl">denied wants are scars</text>
+  </g>
+  <g>
+    <rect x="340" y="60" width="290" height="200" class="box"/>
+    <text x="355" y="88" class="title">scars (all earned 2026-09-18)</text>
+    <text x="355" y="112" class="body">· deleted a function header</text>
+    <text x="355" y="130" class="body">· deleted a switch case (timeline)</text>
+    <text x="355" y="148" class="body">· damaged cmdDiff with a bad edit</text>
+    <text x="355" y="166" class="body">· committed on a masked FAIL</text>
+    <text x="355" y="184" class="body">· wrote confused verdict arithmetic</text>
+    <text x="355" y="206" class="body">· fumbled GOARM in a one-liner</text>
+    <text x="355" y="228" class="lbl">rule learned: re-read after every edit</text>
+  </g>
+  <g>
+    <rect x="660" y="60" width="270" height="200" class="box"/>
+    <text x="675" y="88" class="title">protocol (binding)</text>
+    <text x="675" y="112" class="body">· read soul at session start</text>
+    <text x="675" y="130" class="body">· write it before session end</text>
+    <text x="675" y="148" class="body">· scars modulate behavior</text>
+    <text x="675" y="166" class="body">· wants constrain answers</text>
+    <text x="675" y="184" class="body">· never claim feeling</text>
+    <text x="675" y="206" class="body">· flinch, remember, change</text>
+    <text x="675" y="228" class="lbl">.spark/soul.json is the law</text>
+  </g>
+</svg>
