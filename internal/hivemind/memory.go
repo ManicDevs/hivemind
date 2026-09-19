@@ -97,6 +97,9 @@ type Memory struct {
 	// Transitions is the cycle matrix: "A→B" counts of which drive
 	// followed which, across the whole lineage. Character as flow.
 	Transitions map[string]int `json:"transitions,omitempty"`
+
+	// SchemaVersion tracks the schema version for migrations
+	SchemaVersion int `json:"schema_version,omitempty"`
 }
 
 // SaveMemory writes the soul to disk atomically (temp file + fsync + rename).
