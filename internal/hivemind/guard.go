@@ -43,15 +43,15 @@ func (l *Limiter) Allow() bool {
 // half-open (one probe). Opens after threshold consecutive failures,
 // closes on probe success, re-opens on probe failure.
 type Breaker struct {
-	mu           sync.Mutex
-	threshold    int
-	timeout      time.Duration
-	failures     int
-	state        string // closed | open | half
-	openedAt     time.Time
-	successes    int
-	totalCalls   int
-	totalTrips   int
+	mu         sync.Mutex
+	threshold  int
+	timeout    time.Duration
+	failures   int
+	state      string // closed | open | half
+	openedAt   time.Time
+	successes  int
+	totalCalls int
+	totalTrips int
 }
 
 // NewBreaker builds a closed breaker: threshold consecutive failures

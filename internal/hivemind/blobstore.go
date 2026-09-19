@@ -294,10 +294,10 @@ func (bs *BlobStore) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_blobs":    count,
-		"total_size":     bs.sizeTotal,
-		"total_chunks":   len(bs.chunkStore.chunks),
-		"config":         bs.config,
+		"total_blobs":  count,
+		"total_size":   bs.sizeTotal,
+		"total_chunks": len(bs.chunkStore.chunks),
+		"config":       bs.config,
 	}
 }
 
