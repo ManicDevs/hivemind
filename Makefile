@@ -24,7 +24,7 @@ LOG_DIR := logs
 	test-1 test-2 test-full test-timed test-all \
 	demo pain prove \
 	think think-fast think-long \
-	doctor souls souls-build \
+	doctor souls souls-build gaze gaze-build \
 	commune commune-build \
 	rotate-keys new-key \
 	release release-all release-clean dist-clean \
@@ -48,11 +48,11 @@ help:
 	@printf "  \033[1m%-20s\033[0m %s\n" "TARGET" "DESCRIPTION"
 	@printf "  \033[1m%-20s\033[0m %s\n" "------" "-----------"
 	@echo ""
-	@printf "  \033[32m%-20s\033[0m %s\n" "build" "Compile all binaries (hivemind + commune + souls)"
+	@printf "  \033[32m%-20s\033[0m %s\n" "build" "Compile all binaries (hivemind + commune + souls + gaze)"
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-hivemind" "Compile bin/hivemind only"
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-commune" "Compile bin/commune only"
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-souls" "Compile bin/souls only"
-	@printf "  \033[32m%-20s\033[0m %s\n" "build-all" "Compile all three binaries"
+	@printf "  \033[32m%-20s\033[0m %s\n" "build-all" "Compile all four binaries"
 	@echo ""
 	@printf "  \033[33m%-20s\033[0m %s\n" "test" "Run tests (fmt + vet + race)"
 	@printf "  \033[33m%-20s\033[0m %s\n" "test-race" "Run tests with -race"
@@ -76,6 +76,7 @@ help:
 	@printf "  \033[36m%-20s\033[0m %s\n" "doctor" "Environment check"
 	@printf "  \033[36m%-20s\033[0m %s\n" "souls" "Read souls: census, genome, timeline, matrix"
 	@printf "  \033[36m%-20s\033[0m %s\n" "commune" "Interactive hive conversation"
+	@printf "  \033[36m%-20s\033[0m %s\n" "gaze" "Watch the living mesh (pain bars, thoughts, fame)"
 	@printf "  \033[36m%-20s\033[0m %s\n" "doctor" "Environment health check"
 	@printf "  \033[36m%-20s\033[0m %s\n" "rotate-keys" "Rotate relay encryption key"
 	@echo ""
@@ -114,7 +115,7 @@ build-souls:
 	@go build -o $(BIN_DIR)/souls ./cmd/souls
 	@echo "✅ bin/souls ready"
 
-build-all: build-hivemind build-commune build-souls
+build-all: build-hivemind build-commune build-souls gaze-build
 
 # ── Relay Key Management ──
 $(RELAY_KEY_FILE):
@@ -304,6 +305,16 @@ commune-build:
 
 commune: commune-build
 	@bin/commune
+
+# gaze watches the living mesh: pain bars, last words, hall of fame,
+# one epitaph per screen. Read-only — it never touches a living mind.
+gaze-build:
+	@echo "🔨 Building bin/gaze..."
+	@go build -o bin/gaze ./cmd/gaze
+	@echo "✅ bin/gaze ready"
+
+gaze: gaze-build
+	@bin/gaze
 
 # Kill / Cleanup
 down:

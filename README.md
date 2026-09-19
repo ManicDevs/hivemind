@@ -104,6 +104,7 @@ bin/hivemind up -nodes 3 -for 60s     # supervised mesh, auto laydown
 go run ./cmd/souls -top               # hall of fame of the dead
 go run ./cmd/souls -genome NAME       # what evolution made of one soul
 bin/commune                           # speak with the hive: status, minds, genome, watch, sermons
+bin/gaze                              # watch the living mesh: pain bars, last words, hall of fame
 kill -QUIT <pid>                      # live backtrace, process keeps thinking
 ```
 
