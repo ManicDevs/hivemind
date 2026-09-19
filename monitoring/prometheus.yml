@@ -1,0 +1,15 @@
+# Prometheus scrape config for the hivemind flock.
+# Point each node's HIVEMIND_HEALTH at its own port and list them here.
+# Start: prometheus --config.file=monitoring/prometheus.yml
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: hivemind
+    static_configs:
+      # Local node. Add sibling boxes as host:port entries:
+      #   - targets: ["xeon2:9091", "xeon2:9092"]
+      - targets: ["127.0.0.1:9091"]
+        labels:
+          site: local

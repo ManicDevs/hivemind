@@ -2748,7 +2748,7 @@ func TestHealthHandlers(t *testing.T) {
 	rr2 := httptest.NewRecorder()
 	h.metrics(rr2, httptest.NewRequest("GET", "/metrics", nil))
 	out := rr2.Body.String()
-	for _, want := range []string{"hivemind_up", "hivemind_swarm_members", "hivemind_chronicle_depth", "hivemind_max_pain", "hivemind_go_goroutines"} {
+	for _, want := range []string{"hivemind_up", "hivemind_swarm_members", "hivemind_chronicle_total", "hivemind_max_pain", "hivemind_go_goroutines"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("metrics missing %s:\n%s", want, out)
 		}

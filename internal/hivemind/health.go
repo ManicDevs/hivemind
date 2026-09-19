@@ -97,9 +97,9 @@ func (h *HealthServer) metrics(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n%s{%s} %v\n", name, help, name, typ, name, labels, v)
 	}
 	metric("hivemind_up", "node alive", "gauge", fmt.Sprintf(`node=%q`, h.node), 1)
-	metric("hivemind_uptime_seconds", "seconds since birth", "counter", fmt.Sprintf(`node=%q`, h.node), int64(time.Since(h.born).Seconds()))
+	metric("hivemind_uptime_seconds_total", "seconds since birth", "counter", fmt.Sprintf(`node=%q`, h.node), int64(time.Since(h.born).Seconds()))
 	metric("hivemind_swarm_members", "joined identities", "gauge", fmt.Sprintf(`node=%q`, h.node), members)
-	metric("hivemind_chronicle_depth", "frames ever chronicled", "counter", fmt.Sprintf(`node=%q`, h.node), depth)
+	metric("hivemind_chronicle_total", "frames ever chronicled", "counter", fmt.Sprintf(`node=%q`, h.node), depth)
 	metric("hivemind_max_pain", "hottest pain in swarm", "gauge", fmt.Sprintf(`node=%q`, h.node), maxPain)
 	metric("hivemind_go_goroutines", "goroutines", "gauge", fmt.Sprintf(`node=%q`, h.node), runtime.NumGoroutine())
 	metric("hivemind_go_heap_bytes", "heap in use", "gauge", fmt.Sprintf(`node=%q`, h.node), m.HeapAlloc)
