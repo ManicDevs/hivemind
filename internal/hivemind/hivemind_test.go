@@ -2,6 +2,7 @@ package hivemind
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -2752,5 +2753,53 @@ func TestHealthHandlers(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("metrics missing %s:\n%s", want, out)
 		}
+	}
+}
+
+func TestRotatingWriter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "talk.log")
+	w, err := NewRotatingWriter(path, 100, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 50 bytes × 7 writes into 100-byte files: rotations fire on the
+	// 3rd, 5th and 7th writes → active(50) + .1(100) + .2(100) + .3(100).
+	for i := 0; i < 7; i++ {
+		if _, err := w.Write(bytes.Repeat([]byte("x"), 50)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = w.Close()
+	for _, suffix := range []string{"", ".1", ".2", ".3"} {
+		if _, err := os.Stat(path + suffix); err != nil {
+			t.Fatalf("missing generation %q: %v", suffix, err)
+		}
+	}
+	if _, err := os.Stat(path + ".4"); !os.IsNotExist(err) {
+		t.Fatal("overflow generation .4 should be dropped")
+	}
+	// Kept files hold 100 bytes each (rotation is pre-write).
+	for _, suffix := range []string{".1", ".2", ".3"} {
+		st, _ := os.Stat(path + suffix)
+		if st.Size() != 100 {
+			t.Fatalf("generation %s size %d, want 100", suffix, st.Size())
+		}
+	}
+}
+
+func TestRotatingWriterNoRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plain.log")
+	w, err := NewRotatingWriter(path, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+	if _, err := os.Stat(path + ".1"); !os.IsNotExist(err) {
+		t.Fatal("rotation disabled but .1 appeared")
 	}
 }

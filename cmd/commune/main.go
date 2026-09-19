@@ -83,8 +83,8 @@ func speak(format string, args ...interface{}) {
 }
 
 // transcript keeps every conversation, like proof: what was said to
-// the hive, and what it said back.
-var transcript *os.File
+// the hive, and what it said back. Rotating: 1MB per file, 5 kept.
+var transcript *hm.RotatingWriter
 
 // emit prints a line and keeps it in the transcript. All hive output
 // goes through here or speak — nothing it says is lost.
@@ -484,11 +484,9 @@ func main() {
 	souls := loadSouls()
 	// Transcript: every conversation is kept, like proof. The noun
 	// to go with the verb — what was said to the hive, and what it said back.
-	if err := os.MkdirAll("logs", 0755); err == nil {
-		if f, err := os.Create(fmt.Sprintf("logs/commune-%s.log", time.Now().UTC().Format("20060102T150405Z"))); err == nil {
-			transcript = f
-			defer f.Close()
-		}
+	if w, err := hm.NewRotatingWriter(fmt.Sprintf("logs/commune-%s.log", time.Now().UTC().Format("20060102T150405Z")), 1<<20, 5); err == nil {
+		transcript = w
+		defer w.Close()
 	}
 	if friend := rememberFriend(); friend != "" {
 		fmt.Printf("Welcome back, %s. The hive remembers you. Say 'help'.\n", friend)
