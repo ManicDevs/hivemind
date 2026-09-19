@@ -111,6 +111,14 @@ across lives. `RenderMatrix` draws the grid with row totals, extra rows
 for unknown drives. The same handle in different climates grows visibly
 different crossings. Tested: counts, totals, direction stability.
 
+## `internal/hivemind/health.go` — observable, optionally
+
+`StartHealth(addr, node, swarm)` serves `/healthz` (JSON: alive, uptime,
+members, chronicle depth, max pain) and Prometheus `/metrics` (up,
+uptime, members, depth, max pain, goroutines, heap). Empty addr (the
+default) means no listener, no surface. `HIVEMIND_HEALTH=127.0.0.1:9090`
+opts in. Tested live: real members, depth, and pain on the wire.
+
 ## `internal/hivemind/conscious.go` — affect, competition, reflection
 
 Five mechanisms, no mysticism:

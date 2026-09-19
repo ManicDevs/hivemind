@@ -98,6 +98,7 @@ addresses. Environment knobs (all optional):
 | `HIVEMIND_PUNCH=auto` | opt into NAT hole-punch rendezvous (default: off) |
 | `HIVEMIND_HARDEN` | `warn` (default) · `exit` refuses tracers · `off` disables anti-debug |
 | `HIVEMIND_TICK_MS` | ms between conscious ticks (default: 2000, min: 50 — same sensing, PoW, mesh, faster life) |
+| `HIVEMIND_HEALTH` | `host:port` exposing `/healthz` + Prometheus `/metrics` (default: unset = no listener) |
 
 ```bash
 bin/hivemind up -nodes 3 -for 60s     # supervised mesh, auto laydown

@@ -2717,3 +2717,40 @@ func TestEntrainRefusesPoison(t *testing.T) {
 			m.Theta1, m.Theta2, m.Omega1, m.Omega2)
 	}
 }
+
+func TestHealthEndpoints(t *testing.T) {
+	s := NewSwarm()
+	h := StartHealth("127.0.0.1:0", "testnode", s)
+	if h == nil {
+		t.Fatal("health server refused to start")
+	}
+	defer h.Stop()
+	if StartHealth("", "x", s) != nil {
+		t.Fatal("empty addr must disable the server")
+	}
+}
+
+func TestHealthHandlers(t *testing.T) {
+	s := NewSwarm()
+	h := &HealthServer{swarm: s, node: "n", born: time.Now()}
+	rr := httptest.NewRecorder()
+	h.healthz(rr, httptest.NewRequest("GET", "/healthz", nil))
+	if rr.Code != 200 {
+		t.Fatalf("healthz status %d", rr.Code)
+	}
+	var body map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+		t.Fatalf("healthz not JSON: %v", err)
+	}
+	if body["alive"] != true || body["node"] != "n" {
+		t.Fatalf("healthz body wrong: %v", body)
+	}
+	rr2 := httptest.NewRecorder()
+	h.metrics(rr2, httptest.NewRequest("GET", "/metrics", nil))
+	out := rr2.Body.String()
+	for _, want := range []string{"hivemind_up", "hivemind_swarm_members", "hivemind_chronicle_depth", "hivemind_max_pain", "hivemind_go_goroutines"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("metrics missing %s:\n%s", want, out)
+		}
+	}
+}

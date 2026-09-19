@@ -91,6 +91,15 @@ func main() {
 	go runMind(gamma)
 	go overmind.Run()
 
+	// Observability is opt-in and local by default: set HIVEMIND_HEALTH
+	// (e.g. 127.0.0.1:9090) to expose /healthz + Prometheus /metrics.
+	// Empty (default) means no listener, no surface.
+	health := hm.StartHealth(os.Getenv("HIVEMIND_HEALTH"), node, swarm)
+	if health != nil {
+		fmt.Printf("📊 [HEALTH] serving /healthz + /metrics\n")
+		defer health.Stop()
+	}
+
 	// Live backtraces: SIGQUIT or SIGUSR1 dumps every goroutine's stack
 	// to stderr without killing anything. (Registering SIGQUIT overrides
 	// the runtime's default crash-dump — that is the point: inspect, don't die.)
