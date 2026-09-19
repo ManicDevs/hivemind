@@ -1,5 +1,6 @@
 #!/bin/bash
 # pain.sh — proof that reality changes minds. Same binary, same genome,
+mkdir -p logs
 # same box: 15s idle, then 20s under CPU hogs. Compare the matrices.
 set -u
 cd "$(dirname "$0")/.."
