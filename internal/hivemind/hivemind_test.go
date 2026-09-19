@@ -2925,3 +2925,32 @@ func TestWASMPersistsAcrossRestarts(t *testing.T) {
 		t.Fatal("module missing after reload")
 	}
 }
+
+func TestTOTDRoot(t *testing.T) {
+	seed := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+	nowHour := hourEpoch(time.Now())
+	day := nowHour / 24
+	// Determinism: same day derives identically.
+	d1, ok1 := dayKey(seed, "cpu|ram", "mid", day)
+	d2, ok2 := dayKey(seed, "cpu|ram", "mid", day)
+	if !ok1 || !ok2 || string(d1) != string(d2) {
+		t.Fatal("same day must derive same root")
+	}
+	// Daily rotation: adjacent days differ.
+	dPrev, _ := dayKey(seed, "cpu|ram", "mid", day-1)
+	if string(dPrev) == string(d1) {
+		t.Fatal("adjacent days share a root — no daily rotation")
+	}
+	// Hourly keys under one day all differ, and differ across the
+	// midnight boundary even for adjacent hours.
+	h1, _ := ratchetKey(seed, "cpu|ram", "mid", day*24)
+	h2, _ := ratchetKey(seed, "cpu|ram", "mid", day*24+1)
+	hMid, _ := ratchetKey(seed, "cpu|ram", "mid", day*24-1)
+	if string(h1) == string(h2) || string(h1) == string(hMid) {
+		t.Fatal("hourly keys collide within/across day boundary")
+	}
+	// AAD names day and hour: armor distinguishes eras.
+	if hourAAD(day*24) == hourAAD(day*24-1) {
+		t.Fatal("AAD identical across day boundary")
+	}
+}

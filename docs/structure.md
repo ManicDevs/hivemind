@@ -133,8 +133,8 @@ Transports, one handshake, zero masters:
 - **Cloud relay** (optional, `HIVEMIND_RELAY=off` removes it,
   `HIVEMIND_RELAY_URL` repoints it): paced latest-only publisher +
   long-poll listener with 5-minute stream rotation, AES-256-GCM under
-  hourly machine-bound ratchet keys (env override, static fallback),
-  hour-bound auth tags, dual-hour acceptance, undecryptable counter.
+  two-tier ratchet keys — daily TOTD root, hourly HMAC leaves
+  (env override, static fallback), day+hour-bound auth tags, dual-hour acceptance, undecryptable counter.
 - **DHT + NAT**: Kademlia-lite discovery bootstrapped from the mesh,
   STUN reflexive addresses (per-socket truth), TCP simultaneous-open
   rendezvous behind `HIVEMIND_PUNCH=auto`, closest-first retention.

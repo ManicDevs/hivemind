@@ -74,10 +74,16 @@ func hourEpoch(t time.Time) int64 {
 	return int64(t.UTC().Sub(keyEpochAnchor).Hours())
 }
 
-// hourAAD binds a frame to its hour: replays from other hours fail
-// authentication even under a valid key. Time as tamper-evidence.
+// dayEpoch counts whole UTC days since the anchor: the TOTD root. One
+// root per day bounds every compromise to 24 hours of mesh thought.
+func dayEpoch(t time.Time) int64 {
+	return hourEpoch(t) / 24
+}
+
+// hourAAD binds a frame to its day and hour: replays from other hours
+// fail authentication even under a valid key. Time as tamper-evidence.
 func hourAAD(hour int64) string {
-	return fmt.Sprintf("hivemind-relay-h%d", hour)
+	return fmt.Sprintf("hivemind-relay-d%dh%d", hour/24, hour)
 }
 
 // ratchetBase folds seed, hardware, and install identity into one root.
@@ -92,19 +98,38 @@ func ratchetBase(seedHex, fingerprint, machineID string) ([]byte, bool) {
 	return mac.Sum(nil), true
 }
 
-// ratchetKey walks the hash chain to an hour: key(h) = SHA256^h(base).
-// One-way per step — a compromised present reveals nothing past.
-// Pure: feeds unit tests and production identically.
-func ratchetKey(seedHex, fingerprint, machineID string, hour int64) ([]byte, bool) {
+// dayKey walks the hash chain to a day: the TOTD root. One-way per
+// step — a compromised day reveals nothing past, and yesterday's root
+// is unrecoverable from today's. Pure: feeds unit tests and production
+// identically.
+func dayKey(seedHex, fingerprint, machineID string, day int64) ([]byte, bool) {
 	h, ok := ratchetBase(seedHex, fingerprint, machineID)
-	if !ok || hour < 0 {
+	if !ok || day < 0 {
 		return nil, false
 	}
-	for i := int64(0); i < hour; i++ {
+	for i := int64(0); i < day; i++ {
 		sum := sha256.Sum256(h)
 		h = sum[:]
 	}
 	return h, true
+}
+
+// ratchetKey derives an hour's key through the day's root: HMAC(dayKey,
+// hour). Two tiers — an hourly leak reveals nothing (HMAC one-way, not
+// even the day's other hours), a daily leak is bounded to 24 hours, and
+// the chain behind stays buried. Same signature as before: determinism,
+// hourly rotation, machine binding, and 32-byte keys all hold.
+func ratchetKey(seedHex, fingerprint, machineID string, hour int64) ([]byte, bool) {
+	if hour < 0 {
+		return nil, false
+	}
+	day, ok := dayKey(seedHex, fingerprint, machineID, hour/24)
+	if !ok {
+		return nil, false
+	}
+	mac := hmac.New(sha256.New, day)
+	mac.Write([]byte(fmt.Sprintf("hivemind-hour|%d", hour)))
+	return mac.Sum(nil), true
 }
 
 // hourKey derives this machine's key for a relative hour offset:

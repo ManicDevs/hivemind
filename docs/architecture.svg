@@ -76,8 +76,8 @@
   <g>
     <rect x="30" y="330" width="900" height="110" class="relay"/>
     <text x="45" y="358" class="title">ntfy.sh public relay — bulletin board, not a server</text>
-    <text x="45" y="382" class="body">POST AES-256-GCM frames (hourly ratchet keys: HMAC(seed, hw-id) hashed per UTC hour)</text>
-    <text x="45" y="404" class="body">hour-bound auth tags kill cross-hour replays · yesterday accepted thru boundary · backoff + key warnings</text>
+    <text x="45" y="382" class="body">POST AES-256-GCM frames (two-tier keys: daily TOTD root → hourly HMAC leaves)</text>
+    <text x="45" y="404" class="body">day+hour auth tags kill cross-era replays · yesterday accepted thru boundary · backoff + key warnings</text>
     <text x="45" y="424" class="lbl">https://ntfy.sh/cerberus-hive-relay-99 — anyone can read · only key-holders understand</text>
   </g>
   <line x1="165" y1="280" x2="165" y2="330" class="wire2"/>
