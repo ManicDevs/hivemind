@@ -47,9 +47,20 @@ if ! kill -0 "${PID_B}" 2>/dev/null; then
     cat logs/sv-b.log 2>/dev/null || true
     exit 1
 fi
-echo "✔ both nodes alive, sampling 45s..."
+echo "✔ both nodes alive, sampling (up to 90s, ends early on evidence)..."
 
-sleep 45
+# Adaptive sampling: the super tick is 30s, and a hot box runs slow.
+# Poll every 5s; stop as soon as both nodes announced AND learned, or
+# at 90s come what may. Fast boxes finish in ~35s, hot ones get room.
+announces=0; learns=0
+for _ in $(seq 1 18); do
+    sleep 5
+    announces=$(grep -c "announced super" "$LOG_A" "$LOG_B" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+    learns=$(grep -c 'Super "sv-' "$LOG_A" "$LOG_B" 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')
+    if [ "$announces" -ge 2 ] && [ "$learns" -ge 2 ]; then
+        break
+    fi
+done
 
 for p in "${PID_A}" "${PID_B}"; do
     kill -0 "$p" 2>/dev/null || { echo "❌ a node died mid-run"; FAILED=1; }

@@ -57,14 +57,18 @@ echo "🧠 Sampling telemetry and mesh traffic over a 10s window..."
 sleep 10
 
 kill -TERM "${PID_B}" "${PID_A}" 2>/dev/null
-for _ in $(seq 1 40); do
+# Graceful shutdown persists souls (Transcend ×3 + overmind + diagnostics
+# dump): on a hot box that legitimately takes a while. 20s grace, then
+# wait reaps the (possibly zombie) children so kill -0 tells the truth.
+for _ in $(seq 1 80); do
     if ! kill -0 "${PID_A}" 2>/dev/null && ! kill -0 "${PID_B}" 2>/dev/null; then
         break
     fi
     sleep 0.25
 done
+wait "${PID_A}" "${PID_B}" 2>/dev/null || true
 if kill -0 "${PID_A}" 2>/dev/null || kill -0 "${PID_B}" 2>/dev/null; then
-    echo "❌ processes did not exit gracefully within 10s"
+    echo "❌ processes did not exit gracefully within 20s"
     exit 1
 fi
 echo "✔ Both peers exited gracefully (souls persisted)"
