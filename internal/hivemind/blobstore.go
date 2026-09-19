@@ -294,11 +294,75 @@ func (bs *BlobStore) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_blobs":  count,
-		"total_size":   bs.sizeTotal,
-		"total_chunks": len(bs.chunkStore.chunks),
-		"config":       bs.config,
+		"total_blobs":    count,
+		"total_size":     bs.sizeTotal,
+		"total_chunks":   len(bs.chunkStore.chunks),
+		"config":         bs.config,
 	}
+}
+
+// SyncFrom pulls blobs we lack from a peer store: index entries merge by
+// checksum (newer UpdatedAt wins conflicts), missing chunks arrive via
+// fetch. Transport-agnostic by design — the mesh binding decides how
+// indexes and bytes travel; this is the merge truth either way.
+// Returns names adopted.
+func (bs *BlobStore) SyncFrom(other *BlobStore, fetch func(chunkID string) ([]byte, error)) ([]string, error) {
+	theirs, err := other.List("")
+	if err != nil {
+		return nil, err
+	}
+	var adopted []string
+	for _, remote := range theirs {
+		bs.mu.Lock()
+		local, ok := bs.index[remote.Name]
+		if ok && !local.Deleted && local.Checksum == remote.Checksum {
+			bs.mu.Unlock()
+			continue
+		}
+		if ok && !local.Deleted && !remote.UpdatedAt.After(local.UpdatedAt) {
+			bs.mu.Unlock()
+			continue
+		}
+		bs.mu.Unlock()
+
+		// Fetch every chunk we don't already hold (dedup by checksum).
+		full := &BlobIndex{
+			ID: remote.ID, Name: remote.Name, Size: remote.Size,
+			Checksum: remote.Checksum, ContentType: remote.ContentType,
+			Metadata: remote.Metadata, CreatedAt: remote.CreatedAt,
+			UpdatedAt: remote.UpdatedAt, Versions: remote.Versions,
+			RefCount: 1,
+		}
+		for _, c := range remote.Chunks {
+			if bs.chunkStore.has(c.Checksum) {
+				full.Chunks = append(full.Chunks, c)
+				continue
+			}
+			data, err := fetch(c.ID)
+			if err != nil {
+				break
+			}
+			h := sha256.New().Sum(data)
+			if hex.EncodeToString(h) != c.Checksum {
+				break // corrupt in flight: adopt nothing, keep ours
+			}
+			stored := &Chunk{ID: c.ID, Data: data, Checksum: c.Checksum, RefCount: 1, CreatedAt: time.Now()}
+			if err := bs.chunkStore.put(stored); err != nil {
+				break
+			}
+			full.Chunks = append(full.Chunks, c)
+		}
+		if len(full.Chunks) != len(remote.Chunks) {
+			continue
+		}
+		bs.mu.Lock()
+		bs.index[remote.Name] = full
+		bs.sizeTotal += full.Size
+		_ = bs.persistIndex(remote.Name)
+		bs.mu.Unlock()
+		adopted = append(adopted, remote.Name)
+	}
+	return adopted, nil
 }
 
 func (bs *BlobStore) chunkData(reader io.Reader) ([]ChunkRef, []byte, int64, error) {
@@ -453,6 +517,19 @@ func (cs *ChunkStore) decrementRef(id string) {
 			os.Remove(filepath.Join(cs.basePath, id))
 		}
 	}
+}
+
+// has reports whether a chunk with this checksum is already held
+// (deduplication across syncs: identical bytes, one copy).
+func (cs *ChunkStore) has(checksum string) bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	for _, c := range cs.chunks {
+		if c.Checksum == checksum {
+			return true
+		}
+	}
+	return false
 }
 
 func generateBlobID() string {

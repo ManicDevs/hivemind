@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -2801,5 +2802,126 @@ func TestRotatingWriterNoRotation(t *testing.T) {
 	_ = w.Close()
 	if _, err := os.Stat(path + ".1"); !os.IsNotExist(err) {
 		t.Fatal("rotation disabled but .1 appeared")
+	}
+}
+
+func TestLimiterBurstsThenThrottles(t *testing.T) {
+	l := NewLimiter(1000, 3)
+	for i := 0; i < 3; i++ {
+		if !l.Allow() {
+			t.Fatalf("burst token %d refused", i)
+		}
+	}
+	if l.Allow() {
+		t.Fatal("bucket over capacity allowed")
+	}
+}
+
+func TestBreakerTripsAndHeals(t *testing.T) {
+	b := NewBreaker(2, 20*time.Millisecond)
+	if !b.Allow() {
+		t.Fatal("closed breaker refused")
+	}
+	b.Failure()
+	if !b.Allow() {
+		t.Fatal("single failure tripped too early")
+	}
+	b.Failure()
+	if b.Allow() {
+		t.Fatal("open breaker let call through")
+	}
+	time.Sleep(25 * time.Millisecond)
+	if !b.Allow() {
+		t.Fatal("half-open probe refused")
+	}
+	b.Success()
+	if !b.Allow() {
+		t.Fatal("healed breaker still open")
+	}
+	if state, _, trips := b.State(); state != "closed" || trips != 1 {
+		t.Fatalf("state=%s trips=%d, want closed/1", state, trips)
+	}
+}
+
+func TestBlobSyncAdopts(t *testing.T) {
+	cfg := func(dir string) BlobConfig {
+		return BlobConfig{BasePath: dir, MaxBlobSize: 1 << 20, MaxTotalSize: 1 << 30, ChunkSize: 1 << 20}
+	}
+	a, err := NewBlobStore(cfg(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewBlobStore(cfg(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Put(context.Background(), "poem", strings.NewReader("the silicon dreams"), "text/plain", nil); err != nil {
+		t.Fatal(err)
+	}
+	fetch := func(id string) ([]byte, error) {
+		a.chunkStore.mu.RLock()
+		defer a.chunkStore.mu.RUnlock()
+		for _, c := range a.chunkStore.chunks {
+			if c.ID == id {
+				return c.Data, nil
+			}
+		}
+		return nil, errors.New("no such chunk")
+	}
+	adopted, err := b.SyncFrom(a, fetch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adopted) != 1 || adopted[0] != "poem" {
+		t.Fatalf("adopted=%v", adopted)
+	}
+	r, _, err := b.Get(context.Background(), "poem")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(r)
+	if string(body) != "the silicon dreams" {
+		t.Fatalf("synced bytes wrong: %q", body)
+	}
+	// Second sync adopts nothing (checksums match).
+	adopted, err = b.SyncFrom(a, fetch)
+	if err != nil || len(adopted) != 0 {
+		t.Fatalf("re-sync adopted=%v err=%v", adopted, err)
+	}
+}
+
+func TestWASMPersistsAcrossRestarts(t *testing.T) {
+	dir := t.TempDir()
+	empty := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(filepath.Join(dir, "seed.wasm"), empty, 0644); err != nil {
+		t.Fatal(err)
+	}
+	e1, err := NewWASMEngine(DefaultWASMConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e1.Stop()
+	if err := e1.LoadModule(context.Background(), "seed", filepath.Join(dir, "seed.wasm")); err != nil {
+		t.Fatal(err)
+	}
+	e1.Refuel("seed", 42)
+	keep := t.TempDir()
+	if err := e1.SaveModules(keep); err != nil {
+		t.Fatal(err)
+	}
+	e2, err := NewWASMEngine(DefaultWASMConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e2.Stop()
+	n, err := e2.LoadPersisted(context.Background(), keep)
+	if err != nil || n != 1 {
+		t.Fatalf("reloaded=%d err=%v", n, err)
+	}
+	if e2.GetFuel("seed") != 42 {
+		t.Fatalf("fuel not restored: %d", e2.GetFuel("seed"))
+	}
+	if _, ok := e2.GetModule("seed"); !ok {
+		t.Fatal("module missing after reload")
 	}
 }

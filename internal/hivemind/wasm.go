@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +47,7 @@ func DefaultWASMConfig() WASMConfig {
 type compiledModule struct {
 	module   api.Module
 	compiled wazero.CompiledModule
+	data     []byte // raw bytes, kept so modules survive restarts
 }
 
 type WASMEngine struct {
@@ -91,8 +94,8 @@ func (we *WASMEngine) LoadModule(ctx context.Context, name, path string) error {
 	}
 
 	we.modules[name] = &compiledModule{
-		module:   nil, // will be set on instantiate
 		compiled: compiled,
+		data:     data,
 	}
 	we.moduleHashes[name] = hashModule(data)
 	we.cacheOrder = append(we.cacheOrder, name)
@@ -255,6 +258,69 @@ func (we *WASMEngine) Stop() {
 	if we.runtime != nil {
 		we.runtime.Close(context.Background())
 	}
+}
+
+// SaveModules persists every loaded module's bytes plus fuel, so a
+// restart rehydrates the exact menagerie. Atomic per file.
+func (we *WASMEngine) SaveModules(dir string) error {
+	we.mu.RLock()
+	defer we.mu.RUnlock()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	for _, name := range we.cacheOrder {
+		cm, ok := we.modules[name]
+		if !ok {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".wasm"), cm.data, 0644); err != nil {
+			return err
+		}
+		meta, _ := json.Marshal(map[string]uint64{"fuel": we.fuelTracker[name]})
+		if err := os.WriteFile(filepath.Join(dir, name+".json"), meta, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadPersisted recompiles every .wasm in dir and restores fuel.
+// Corrupt files are skipped, never fatal: one bad module must not
+// kill the menagerie.
+func (we *WASMEngine) LoadPersisted(ctx context.Context, dir string) (int, error) {
+	files, err := filepath.Glob(filepath.Join(dir, "*.wasm"))
+	if err != nil {
+		return 0, err
+	}
+	loaded := 0
+	for _, f := range files {
+		name := strings.TrimSuffix(filepath.Base(f), ".wasm")
+		data, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		compiled, err := we.runtime.CompileModule(ctx, data)
+		if err != nil {
+			continue
+		}
+		var fuel uint64
+		if raw, err := os.ReadFile(filepath.Join(dir, name+".json")); err == nil {
+			var meta map[string]uint64
+			if json.Unmarshal(raw, &meta) == nil {
+				fuel = meta["fuel"]
+			}
+		}
+		we.mu.Lock()
+		we.modules[name] = &compiledModule{compiled: compiled, data: data}
+		we.moduleHashes[name] = hashModule(data)
+		we.cacheOrder = append(we.cacheOrder, name)
+		if fuel > 0 {
+			we.fuelTracker[name] = fuel
+		}
+		we.mu.Unlock()
+		loaded++
+	}
+	return loaded, nil
 }
 
 type MindImports struct {

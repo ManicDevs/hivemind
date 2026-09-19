@@ -250,6 +250,12 @@ type PeerMesh struct {
 	cloudQueue  chan SecureMessage
 	cloudCtx    context.Context
 	cloudCancel context.CancelFunc
+
+	// Guardrails on the cloud leg: at most 2 relay posts/sec, and a
+	// breaker that fails fast after 3 straight errors (30s half-open).
+	// A dead relay must not eat the mesh's time.
+	relayLimiter *Limiter
+	relayBreaker *Breaker
 }
 
 // NewPeerMesh births a mesh identity for one node: soul keypair, empty
@@ -274,6 +280,8 @@ func NewPeerMesh(swarm *Swarm, node string) *PeerMesh {
 		cloudQueue:   make(chan SecureMessage, 16),
 		cloudCtx:     ctx,
 		cloudCancel:  cancel,
+		relayLimiter: NewLimiter(2, 4),
+		relayBreaker: NewBreaker(3, 30*time.Second),
 	}
 }
 
@@ -750,6 +758,22 @@ func (pm *PeerMesh) cloudPublisher() {
 }
 
 func (pm *PeerMesh) publishCloud(msg SecureMessage) error {
+	if !pm.relayLimiter.Allow() {
+		return fmt.Errorf("relay rate-limited, retry later")
+	}
+	if !pm.relayBreaker.Allow() {
+		return fmt.Errorf("relay breaker open, failing fast")
+	}
+	err := pm.postCloud(msg)
+	if err != nil {
+		pm.relayBreaker.Failure()
+		return err
+	}
+	pm.relayBreaker.Success()
+	return nil
+}
+
+func (pm *PeerMesh) postCloud(msg SecureMessage) error {
 	payload, err := json.Marshal(msg)
 	if err != nil {
 		return err
