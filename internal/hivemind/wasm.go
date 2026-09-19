@@ -32,16 +32,16 @@ type WASMConfig struct {
 func DefaultWASMConfig() WASMConfig {
 	return WASMConfig{
 		MaxFuel:         10_000_000,
-		MemoryLimit:    256, // 16MB
-		EnableWASI:     false,
-		AllowNetwork:   false,
+		MemoryLimit:     256, // 16MB
+		EnableWASI:      false,
+		AllowNetwork:    false,
 		AllowFileSystem: false,
 		ModuleCacheSize: 50,
 	}
 }
 
 type compiledModule struct {
-	module  api.Module
+	module   api.Module
 	compiled wazero.CompiledModule
 }
 
@@ -89,7 +89,7 @@ func (we *WASMEngine) LoadModule(ctx context.Context, name, path string) error {
 	}
 
 	we.modules[name] = &compiledModule{
-		module:  nil, // will be set on instantiate
+		module:   nil, // will be set on instantiate
 		compiled: compiled,
 	}
 	we.moduleHashes[name] = hashModule(data)
@@ -265,11 +265,11 @@ func NewMindImports(mind *Mind) *MindImports {
 
 func (mi *MindImports) GetImports() map[string]interface{} {
 	return map[string]interface{}{
-		"sense":      mi.sense,
-		"act":        mi.act,
-		"remember":   mi.remember,
-		"broadcast":  mi.broadcast,
-		"sleep_ms":   sleepMS,
+		"sense":     mi.sense,
+		"act":       mi.act,
+		"remember":  mi.remember,
+		"broadcast": mi.broadcast,
+		"sleep_ms":  sleepMS,
 	}
 }
 

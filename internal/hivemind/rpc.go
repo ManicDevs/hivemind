@@ -19,7 +19,7 @@ var (
 )
 
 type RPCConfig struct {
-	DefaultTimeout    time.Duration
+	DefaultTimeout     time.Duration
 	MaxConcurrentCalls int
 	EnableCompression  bool
 	CompressionLevel   int
@@ -29,7 +29,7 @@ type RPCConfig struct {
 
 func DefaultRPCConfig() RPCConfig {
 	return RPCConfig{
-		DefaultTimeout:    30 * time.Second,
+		DefaultTimeout:     30 * time.Second,
 		MaxConcurrentCalls: 100,
 		EnableCompression:  false,
 		CompressionLevel:   3,
@@ -39,19 +39,19 @@ func DefaultRPCConfig() RPCConfig {
 }
 
 type RPCRequest struct {
-	ID        string          `json:"id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params"`
-	Timeout   int64           `json:"timeout,omitempty"`
-	Token     string          `json:"token,omitempty"`
-	TraceID   string          `json:"trace_id,omitempty"`
-	SpanID    string          `json:"span_id,omitempty"`
+	ID      string          `json:"id"`
+	Method  string          `json:"method"`
+	Params  json.RawMessage `json:"params"`
+	Timeout int64           `json:"timeout,omitempty"`
+	Token   string          `json:"token,omitempty"`
+	TraceID string          `json:"trace_id,omitempty"`
+	SpanID  string          `json:"span_id,omitempty"`
 }
 
 type RPCResponse struct {
-	ID      string          `json:"id"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *RPCError       `json:"error,omitempty"`
+	ID     string          `json:"id"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *RPCError       `json:"error,omitempty"`
 }
 
 type RPCError struct {
@@ -63,20 +63,20 @@ type RPCError struct {
 type MethodHandler func(ctx context.Context, params json.RawMessage) (interface{}, error)
 
 type RPCServer struct {
-	mu           sync.RWMutex
-	config       RPCConfig
-	methods      map[string]MethodHandler
-	middleware   []Middleware
-	capManager   CapabilityManager
-	stopChan     chan struct{}
-	activeCalls  int64
-	totalCalls   int64
-	totalErrors  int64
+	mu          sync.RWMutex
+	config      RPCConfig
+	methods     map[string]MethodHandler
+	middleware  []Middleware
+	capManager  *CapabilityManager
+	stopChan    chan struct{}
+	activeCalls int64
+	totalCalls  int64
+	totalErrors int64
 }
 
 type Middleware func(next MethodHandler) MethodHandler
 
-func NewRPCServer(config RPCConfig, capManager CapabilityManager) *RPCServer {
+func NewRPCServer(config RPCConfig, capManager *CapabilityManager) *RPCServer {
 	return &RPCServer{
 		config:     config,
 		methods:    make(map[string]MethodHandler),
@@ -96,16 +96,16 @@ func (s *RPCServer) RegisterMethod(name string, handler MethodHandler, requiredC
 				return nil, ErrUnauthorized
 			}
 
-token, err := s.capManager.VerifyToken(ctx, tokenStr, "")
-		if err != nil {
-			return nil, ErrUnauthorized
-		}
-
-		for _, cap := range requiredCaps {
-			if !s.capManager.HasCapability(token, cap) {
-				return nil, ErrInsufficientScope
+			token, err := s.capManager.VerifyToken(ctx, tokenStr, "")
+			if err != nil {
+				return nil, ErrUnauthorized
 			}
-		}
+
+			for _, cap := range requiredCaps {
+				if !s.capManager.HasCapability(token, cap) {
+					return nil, ErrInsufficientScope
+				}
+			}
 		}
 		return handler(ctx, params)
 	}
@@ -135,12 +135,13 @@ func (s *RPCServer) HandleRequest(ctx context.Context, req *RPCRequest) *RPCResp
 	atomic.AddInt64(&s.totalCalls, 1)
 
 	baseCtx := context.Background()
-	var _ context.CancelFunc
+	var cancel context.CancelFunc
 	if req.Timeout > 0 {
-		ctx, _ = context.WithTimeout(baseCtx, time.Duration(req.Timeout)*time.Millisecond)
+		ctx, cancel = context.WithTimeout(baseCtx, time.Duration(req.Timeout)*time.Millisecond)
 	} else {
-		ctx, _ = context.WithTimeout(baseCtx, s.config.DefaultTimeout)
+		ctx, cancel = context.WithTimeout(baseCtx, s.config.DefaultTimeout)
 	}
+	defer cancel()
 
 	if req.Token != "" {
 		ctx = context.WithValue(ctx, "token", req.Token)
@@ -234,12 +235,12 @@ func (s *RPCServer) Stop() {
 }
 
 type RPCClient struct {
-	config      RPCConfig
-	transport   Transport
-	callID      uint64
-	pending     map[string]chan *RPCResponse
-	mu          sync.RWMutex
-	stopChan    chan struct{}
+	config    RPCConfig
+	transport Transport
+	callID    uint64
+	pending   map[string]chan *RPCResponse
+	mu        sync.RWMutex
+	stopChan  chan struct{}
 }
 
 type Transport interface {
@@ -301,15 +302,15 @@ func (c *RPCClient) Close() error {
 }
 
 type MethodRegistry struct {
-	mu       sync.RWMutex
-	methods  map[string]MethodInfo
+	mu      sync.RWMutex
+	methods map[string]MethodInfo
 }
 
 type MethodInfo struct {
-	Name        string
-	Handler     MethodHandler
+	Name         string
+	Handler      MethodHandler
 	RequiredCaps []Capability
-	Description string
+	Description  string
 	ParamsSchema interface{}
 	ResultSchema interface{}
 }

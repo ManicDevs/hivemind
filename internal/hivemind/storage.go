@@ -72,18 +72,18 @@ type Snapshot struct {
 
 // SoulStore manages soul persistence with snapshots, compression, and integrity
 type SoulStore struct {
-	mu            sync.RWMutex
-	config        StorageConfig
-	nodeName      string
-	basePath      string
-	snapshots     map[string][]*Snapshot // soulName -> []*Snapshot
-	snapshotIndex map[string]int         // soulName -> latest snapshot index
-	zstdEncoder   *zstd.Encoder
-	zstdDecoder   *zstd.Decoder
-	stopChan      chan struct{}
-	snapshotTicker *time.Ticker
+	mu              sync.RWMutex
+	config          StorageConfig
+	nodeName        string
+	basePath        string
+	snapshots       map[string][]*Snapshot // soulName -> []*Snapshot
+	snapshotIndex   map[string]int         // soulName -> latest snapshot index
+	zstdEncoder     *zstd.Encoder
+	zstdDecoder     *zstd.Decoder
+	stopChan        chan struct{}
+	snapshotTicker  *time.Ticker
 	integrityTicker *time.Ticker
-	syncTicker    *time.Ticker
+	syncTicker      *time.Ticker
 }
 
 // NewSoulStore creates a new soul store

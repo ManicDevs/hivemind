@@ -319,8 +319,8 @@ func (m *Mind) Observe() map[string]interface{} {
 			cur := parseNetDev(string(raw))
 			var rx, tx uint64
 			for name, v := range cur {
-rx += v[0] - minUint64(m.prevNet[name][0], v[0])
-			tx += v[1] - minUint64(m.prevNet[name][1], v[1])
+				rx += v[0] - minUint64(m.prevNet[name][0], v[0])
+				tx += v[1] - minUint64(m.prevNet[name][1], v[1])
 			}
 			netRxBps, netTxBps = float64(rx)/elapsed, float64(tx)/elapsed
 			m.prevNet = cur
@@ -350,8 +350,8 @@ rx += v[0] - minUint64(m.prevNet[name][0], v[0])
 		procsRunning, procsBlocked = running, blocked
 		if ok && !firstReading {
 			if elapsed := now.Sub(m.prevObserved).Seconds(); elapsed > 0 {
-intrRate = float64(intr-minUint64(m.prevStat[0], intr)) / elapsed
-		ctxtRate = float64(ctxt-minUint64(m.prevStat[1], ctxt)) / elapsed
+				intrRate = float64(intr-minUint64(m.prevStat[0], intr)) / elapsed
+				ctxtRate = float64(ctxt-minUint64(m.prevStat[1], ctxt)) / elapsed
 			}
 			m.prevStat = [2]uint64{intr, ctxt}
 		} else if ok {

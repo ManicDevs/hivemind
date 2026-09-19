@@ -17,54 +17,54 @@ import (
 )
 
 var (
-	ErrBlobNotFound     = errors.New("blob not found")
-	ErrBlobTooLarge     = errors.New("blob too large")
-	ErrInvalidChecksum  = errors.New("invalid checksum")
-	ErrStorageFull      = errors.New("storage full")
+	ErrBlobNotFound    = errors.New("blob not found")
+	ErrBlobTooLarge    = errors.New("blob too large")
+	ErrInvalidChecksum = errors.New("invalid checksum")
+	ErrStorageFull     = errors.New("storage full")
 )
 
 type BlobConfig struct {
-	BasePath           string
-	MaxBlobSize        int64
-	MaxTotalSize       int64
-	EnableCompression  bool
-	CompressionLevel   int
+	BasePath            string
+	MaxBlobSize         int64
+	MaxTotalSize        int64
+	EnableCompression   bool
+	CompressionLevel    int
 	EnableDeduplication bool
-	EnableEncryption   bool
-	EncryptionKey      []byte
-	ChunkSize          int
-	EnableVersioning   bool
-	MaxVersions        int
-	GCInterval         time.Duration
-	MaxAge             time.Duration
+	EnableEncryption    bool
+	EncryptionKey       []byte
+	ChunkSize           int
+	EnableVersioning    bool
+	MaxVersions         int
+	GCInterval          time.Duration
+	MaxAge              time.Duration
 }
 
 func DefaultBlobConfig() BlobConfig {
 	return BlobConfig{
-		BasePath:           ".hive_blobs",
-		MaxBlobSize:        100 * 1024 * 1024,
-		MaxTotalSize:       10 * 1024 * 1024 * 1024,
-		EnableCompression:  true,
-		CompressionLevel:   3,
+		BasePath:            ".hive_blobs",
+		MaxBlobSize:         100 * 1024 * 1024,
+		MaxTotalSize:        10 * 1024 * 1024 * 1024,
+		EnableCompression:   true,
+		CompressionLevel:    3,
 		EnableDeduplication: true,
-		EnableEncryption:   false,
-		ChunkSize:          4 * 1024 * 1024,
-		EnableVersioning:   true,
-		MaxVersions:        10,
-		GCInterval:         1 * time.Hour,
-		MaxAge:             30 * 24 * time.Hour,
+		EnableEncryption:    false,
+		ChunkSize:           4 * 1024 * 1024,
+		EnableVersioning:    true,
+		MaxVersions:         10,
+		GCInterval:          1 * time.Hour,
+		MaxAge:              30 * 24 * time.Hour,
 	}
 }
 
 type BlobStore struct {
-	mu           sync.RWMutex
-	config       BlobConfig
-	basePath     string
-	index        map[string]*BlobIndex
-	sizeTotal    int64
-	chunkStore   *ChunkStore
-	stopChan     chan struct{}
-	gcTicker     *time.Ticker
+	mu         sync.RWMutex
+	config     BlobConfig
+	basePath   string
+	index      map[string]*BlobIndex
+	sizeTotal  int64
+	chunkStore *ChunkStore
+	stopChan   chan struct{}
+	gcTicker   *time.Ticker
 }
 
 type BlobIndex struct {
@@ -128,9 +128,9 @@ func NewBlobStore(config BlobConfig) (*BlobStore, error) {
 	}
 
 	bs := &BlobStore{
-		config:    config,
-		basePath:  basePath,
-		index:     make(map[string]*BlobIndex),
+		config:   config,
+		basePath: basePath,
+		index:    make(map[string]*BlobIndex),
 		chunkStore: &ChunkStore{
 			chunks:   make(map[string]*Chunk),
 			basePath: filepath.Join(basePath, "chunks"),
@@ -294,10 +294,10 @@ func (bs *BlobStore) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_blobs":    count,
-		"total_size":     bs.sizeTotal,
-		"total_chunks":   len(bs.chunkStore.chunks),
-		"config":         bs.config,
+		"total_blobs":  count,
+		"total_size":   bs.sizeTotal,
+		"total_chunks": len(bs.chunkStore.chunks),
+		"config":       bs.config,
 	}
 }
 

@@ -2608,7 +2608,7 @@ func TestIdentityState(t *testing.T) {
 
 func TestIdentityGetAllKeys(t *testing.T) {
 	config := DefaultIdentityConfig()
-	
+
 	// Create a master seed and identity from it
 	masterSeed := make([]byte, 32)
 	rand.Read(masterSeed)
@@ -2664,7 +2664,7 @@ func TestDebugHandleCollision(t *testing.T) {
 	config := DefaultIdentityConfig()
 	id1, _ := NewIdentity(config)
 	id2, _ := NewIdentity(config)
-	
+
 	t.Logf("id1 GetHandle(test): %q", id1.GetHandle("test"))
 	t.Logf("id2 GetHandle(test): %q", id2.GetHandle("test"))
 	t.Logf("id1 GetHandle(empty): %q", id1.GetHandle(""))

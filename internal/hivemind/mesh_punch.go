@@ -7,19 +7,19 @@ import (
 )
 
 type PunchAttempt struct {
-	mu             sync.RWMutex
-	PeerID         string
-	TargetAddr     string
-	LocalAddr      string
-	AttemptCount   int
-	FirstAttempt   time.Time
-	LastAttempt    time.Time
-	NextAttempt    time.Time
-	Backoff        time.Duration
-	MaxRetries     int
-	Status         PunchStatus
-	Cancel         context.CancelFunc
-	ctx            context.Context
+	mu              sync.RWMutex
+	PeerID          string
+	TargetAddr      string
+	LocalAddr       string
+	AttemptCount    int
+	FirstAttempt    time.Time
+	LastAttempt     time.Time
+	NextAttempt     time.Time
+	Backoff         time.Duration
+	MaxRetries      int
+	Status          PunchStatus
+	Cancel          context.CancelFunc
+	ctx             context.Context
 	SuccessCallback func(error)
 	FailureCallback func(error)
 }
@@ -35,11 +35,11 @@ const (
 )
 
 type PunchRetryManager struct {
-	mu            sync.RWMutex
-	config        MeshConfig
+	mu             sync.RWMutex
+	config         MeshConfig
 	pendingPunches map[string]*PunchAttempt
-	stopChan      chan struct{}
-	cleanupTicker *time.Ticker
+	stopChan       chan struct{}
+	cleanupTicker  *time.Ticker
 }
 
 func NewPunchRetryManager(config MeshConfig) *PunchRetryManager {
@@ -234,13 +234,13 @@ func (pa *PunchAttempt) GetStats() map[string]interface{} {
 	pa.mu.RLock()
 	defer pa.mu.RUnlock()
 	return map[string]interface{}{
-		"peer_id":        pa.PeerID,
-		"attempt_count":  pa.AttemptCount,
-		"status":         string(pa.Status),
-		"first_attempt":  pa.FirstAttempt,
-		"last_attempt":   pa.LastAttempt,
-		"next_attempt":   pa.NextAttempt,
-		"backoff":        pa.Backoff.String(),
-		"max_retries":    pa.MaxRetries,
+		"peer_id":       pa.PeerID,
+		"attempt_count": pa.AttemptCount,
+		"status":        string(pa.Status),
+		"first_attempt": pa.FirstAttempt,
+		"last_attempt":  pa.LastAttempt,
+		"next_attempt":  pa.NextAttempt,
+		"backoff":       pa.Backoff.String(),
+		"max_retries":   pa.MaxRetries,
 	}
 }

@@ -27,14 +27,14 @@ var (
 )
 
 type CapabilityConfig struct {
-	Issuer              string
-	DefaultTTL          time.Duration
-	MaxTTL              time.Duration
-	SigningKey          ed25519.PrivateKey
-	VerificationKey     ed25519.PublicKey
-	ClockSkew           time.Duration
-	RevocationCheck     bool
-	RevocationListTTL   time.Duration
+	Issuer            string
+	DefaultTTL        time.Duration
+	MaxTTL            time.Duration
+	SigningKey        ed25519.PrivateKey
+	VerificationKey   ed25519.PublicKey
+	ClockSkew         time.Duration
+	RevocationCheck   bool
+	RevocationListTTL time.Duration
 }
 
 func DefaultCapabilityConfig() CapabilityConfig {
@@ -70,16 +70,16 @@ const (
 )
 
 type Token struct {
-	ID            string                 `json:"jti"`
-	Subject       string                 `json:"sub"`
-	Issuer        string                 `json:"iss"`
-	Audience      string                 `json:"aud"`
-	IssuedAt      int64                  `json:"iat"`
-	ExpiresAt     int64                  `json:"exp"`
-	NotBefore     int64                  `json:"nbf"`
-	Capabilities  []Capability           `json:"cap"`
-	Constraints   map[string]interface{} `json:"cnf,omitempty"`
-	Nonce         string                 `json:"nonce,omitempty"`
+	ID           string                 `json:"jti"`
+	Subject      string                 `json:"sub"`
+	Issuer       string                 `json:"iss"`
+	Audience     string                 `json:"aud"`
+	IssuedAt     int64                  `json:"iat"`
+	ExpiresAt    int64                  `json:"exp"`
+	NotBefore    int64                  `json:"nbf"`
+	Capabilities []Capability           `json:"cap"`
+	Constraints  map[string]interface{} `json:"cnf,omitempty"`
+	Nonce        string                 `json:"nonce,omitempty"`
 }
 
 type CapabilityManager struct {
@@ -103,11 +103,11 @@ func NewCapabilityManager(config CapabilityConfig) (*CapabilityManager, error) {
 	}
 
 	cm := &CapabilityManager{
-		config:         config,
-		revoked:        make(map[string]time.Time),
-		revokedNonces:  make(map[string]bool),
-		issuedTokens:   make(map[string]*Token),
-		stopChan:       make(chan struct{}),
+		config:        config,
+		revoked:       make(map[string]time.Time),
+		revokedNonces: make(map[string]bool),
+		issuedTokens:  make(map[string]*Token),
+		stopChan:      make(chan struct{}),
 	}
 
 	cm.cleanupTicker = time.NewTicker(config.RevocationListTTL)
@@ -131,16 +131,16 @@ func (cm *CapabilityManager) IssueToken(ctx context.Context, subject string, cap
 	nonce := generateNonce()
 
 	token := &Token{
-		ID:            tokenID,
-		Subject:       subject,
-		Issuer:        cm.config.Issuer,
-		Audience:      audience,
-		IssuedAt:      now.Unix(),
-		ExpiresAt:     expiresAt.Unix(),
-		NotBefore:     now.Unix(),
-		Capabilities:  capabilities,
-		Constraints:   constraints,
-		Nonce:         nonce,
+		ID:           tokenID,
+		Subject:      subject,
+		Issuer:       cm.config.Issuer,
+		Audience:     audience,
+		IssuedAt:     now.Unix(),
+		ExpiresAt:    expiresAt.Unix(),
+		NotBefore:    now.Unix(),
+		Capabilities: capabilities,
+		Constraints:  constraints,
+		Nonce:        nonce,
 	}
 
 	cm.mu.Lock()
@@ -391,23 +391,23 @@ func (cm *CapabilityManager) Stop() {
 }
 
 type DelegationToken struct {
-	Token          string    `json:"token"`
-	Delegator      string    `json:"delegator"`
-	Delegatee      string    `json:"delegatee"`
-	OriginalCaps   []Capability `json:"original_caps"`
-	DelegatedCaps  []Capability `json:"delegated_caps"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CreatedAt      time.Time `json:"created_at"`
-	Revoked        bool      `json:"revoked"`
+	Token         string       `json:"token"`
+	Delegator     string       `json:"delegator"`
+	Delegatee     string       `json:"delegatee"`
+	OriginalCaps  []Capability `json:"original_caps"`
+	DelegatedCaps []Capability `json:"delegated_caps"`
+	ExpiresAt     time.Time    `json:"expires_at"`
+	CreatedAt     time.Time    `json:"created_at"`
+	Revoked       bool         `json:"revoked"`
 }
 
 type DelegationManager struct {
-	mu            sync.RWMutex
-	delegations   map[string]*DelegationToken
-	byDelegator   map[string][]string
-	byDelegatee   map[string][]string
-	capManager    *CapabilityManager
-	stopChan      chan struct{}
+	mu          sync.RWMutex
+	delegations map[string]*DelegationToken
+	byDelegator map[string][]string
+	byDelegatee map[string][]string
+	capManager  *CapabilityManager
+	stopChan    chan struct{}
 }
 
 func NewDelegationManager(capManager *CapabilityManager) *DelegationManager {
@@ -437,14 +437,14 @@ func (dm *DelegationManager) Delegate(ctx context.Context, delegator, delegatee 
 	expiresAt := now.Add(ttl)
 
 	delegation := &DelegationToken{
-		Token:          generateTokenID(),
-		Delegator:      delegator,
-		Delegatee:      delegatee,
-		OriginalCaps:   delegatorToken.Capabilities,
-		DelegatedCaps:  capabilities,
-		ExpiresAt:      expiresAt,
-		CreatedAt:      now,
-		Revoked:        false,
+		Token:         generateTokenID(),
+		Delegator:     delegator,
+		Delegatee:     delegatee,
+		OriginalCaps:  delegatorToken.Capabilities,
+		DelegatedCaps: capabilities,
+		ExpiresAt:     expiresAt,
+		CreatedAt:     now,
+		Revoked:       false,
 	}
 
 	dm.mu.Lock()
@@ -514,9 +514,9 @@ func (dm *DelegationManager) GetDelegationsForDelegator(delegator string) []*Del
 
 func (dm *DelegationManager) getDelegatorToken(subject string) (*Token, error) {
 	return &Token{
-		Subject:       subject,
-		Capabilities:  []Capability{CapAdmin},
-		ExpiresAt:     time.Now().Add(24 * time.Hour).Unix(),
+		Subject:      subject,
+		Capabilities: []Capability{CapAdmin},
+		ExpiresAt:    time.Now().Add(24 * time.Hour).Unix(),
 	}, nil
 }
 
@@ -532,7 +532,7 @@ func (dm *DelegationManager) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_delegations": len(dm.delegations),
+		"total_delegations":  len(dm.delegations),
 		"active_delegations": active,
 	}
 }

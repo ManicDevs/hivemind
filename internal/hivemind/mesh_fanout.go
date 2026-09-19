@@ -18,9 +18,9 @@ type AdaptiveFanout struct {
 
 func NewAdaptiveFanout(config MeshConfig) *AdaptiveFanout {
 	af := &AdaptiveFanout{
-		config:         config,
-		currentFanout:  config.MinFanout,
-		lastUpdate:     time.Now(),
+		config:        config,
+		currentFanout: config.MinFanout,
+		lastUpdate:    time.Now(),
 	}
 	if config.EnableAdaptiveFanout {
 		go af.updateLoop()

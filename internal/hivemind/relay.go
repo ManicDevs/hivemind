@@ -18,30 +18,30 @@ import (
 )
 
 var (
-	ErrNoRelayAvailable    = errors.New("no relay available")
+	ErrNoRelayAvailable     = errors.New("no relay available")
 	ErrAuthenticationFailed = errors.New("authentication failed")
-	ErrFrameTooLarge       = errors.New("frame too large")
-	ErrRelayUnhealthy      = errors.New("relay unhealthy")
-	ErrDuplicateFrame      = errors.New("duplicate frame")
-	ErrOrderingViolation   = errors.New("ordering violation")
+	ErrFrameTooLarge        = errors.New("frame too large")
+	ErrRelayUnhealthy       = errors.New("relay unhealthy")
+	ErrDuplicateFrame       = errors.New("duplicate frame")
+	ErrOrderingViolation    = errors.New("ordering violation")
 )
 
 // RelayConfig holds relay configuration
 type RelayConfig struct {
-	PrimaryURL       string
-	FallbackURLs     []string
-	AuthToken        string
-	HMACKey          []byte
-	Timeout          time.Duration
-	MaxFrameSize     int
-	ReplayWindow     time.Duration
+	PrimaryURL          string
+	FallbackURLs        []string
+	AuthToken           string
+	HMACKey             []byte
+	Timeout             time.Duration
+	MaxFrameSize        int
+	ReplayWindow        time.Duration
 	HealthCheckInterval time.Duration
-	UnhealthyThreshold int
-	OrderedDelivery  bool
-	ReplayFrom       int64
-	BackoffBase      time.Duration
-	BackoffMax       time.Duration
-	BackoffMultiplier float64
+	UnhealthyThreshold  int
+	OrderedDelivery     bool
+	ReplayFrom          int64
+	BackoffBase         time.Duration
+	BackoffMax          time.Duration
+	BackoffMultiplier   float64
 }
 
 func DefaultRelayConfig() RelayConfig {
@@ -65,14 +65,14 @@ func DefaultRelayConfig() RelayConfig {
 
 // RelayMessage represents a message sent through the relay
 type RelayMessage struct {
-	ID          string                 `json:"id"`
-	Timestamp   int64                  `json:"timestamp"`
-	Sequence    uint64                 `json:"sequence"`
-	Topic       string                 `json:"topic"`
-	Payload     []byte                 `json:"payload"`
-	Signature   string                 `json:"signature"`
-	HMAC        string                 `json:"hmac"`
-	Headers     map[string]string      `json:"headers,omitempty"`
+	ID        string            `json:"id"`
+	Timestamp int64             `json:"timestamp"`
+	Sequence  uint64            `json:"sequence"`
+	Topic     string            `json:"topic"`
+	Payload   []byte            `json:"payload"`
+	Signature string            `json:"signature"`
+	HMAC      string            `json:"hmac"`
+	Headers   map[string]string `json:"headers,omitempty"`
 }
 
 // RelayClient is a client for a single relay endpoint
@@ -263,15 +263,15 @@ func (rc *RelayClient) verifyMessage(data string) (*RelayMessage, error) {
 	if len(rc.config.HMACKey) > 0 && msg.HMAC != "" {
 		mac := hmac.New(sha256.New, rc.config.HMACKey)
 		msgCopy := msg
-msgCopy.HMAC = ""
-	data, _ := json.Marshal(msgCopy)
-	mac = hmac.New(sha256.New, rc.config.HMACKey)
-	mac.Write(data)
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(msg.HMAC), []byte(expected)) {
-		return nil, ErrAuthenticationFailed
+		msgCopy.HMAC = ""
+		data, _ := json.Marshal(msgCopy)
+		mac = hmac.New(sha256.New, rc.config.HMACKey)
+		mac.Write(data)
+		expected := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(msg.HMAC), []byte(expected)) {
+			return nil, ErrAuthenticationFailed
+		}
 	}
-}
 
 	return &msg, nil
 }
@@ -338,11 +338,11 @@ func (rc *RelayClient) GetStats() map[string]interface{} {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return map[string]interface{}{
-		"url":                rc.url,
-		"healthy":            rc.healthy,
-		"consecutive_fails":  rc.consecutiveFails,
-		"last_error":         rc.lastError,
-		"last_health_check":  rc.lastHealthCheck,
+		"url":               rc.url,
+		"healthy":           rc.healthy,
+		"consecutive_fails": rc.consecutiveFails,
+		"last_error":        rc.lastError,
+		"last_health_check": rc.lastHealthCheck,
 	}
 }
 
@@ -355,16 +355,16 @@ func (rc *RelayClient) Stop() {
 
 // MultiRelay manages multiple relay clients with failover
 type MultiRelay struct {
-	mu              sync.RWMutex
-	config          RelayConfig
-	clients         []*RelayClient
-	current         int
-	sequence        uint64
-	pending         map[uint64]*PendingMessage
-	pendingMu       sync.Mutex
-	stopChan        chan struct{}
-	healthTicker    *time.Ticker
-	failoverChan    chan struct{}
+	mu           sync.RWMutex
+	config       RelayConfig
+	clients      []*RelayClient
+	current      int
+	sequence     uint64
+	pending      map[uint64]*PendingMessage
+	pendingMu    sync.Mutex
+	stopChan     chan struct{}
+	healthTicker *time.Ticker
+	failoverChan chan struct{}
 }
 
 type PendingMessage struct {
@@ -499,9 +499,9 @@ func (mr *MultiRelay) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"current":    mr.current,
-		"clients":    clients,
-		"pending":    len(mr.pending),
+		"current": mr.current,
+		"clients": clients,
+		"pending": len(mr.pending),
 	}
 }
 
@@ -517,12 +517,12 @@ func (mr *MultiRelay) Stop() {
 
 // OrderedDelivery ensures ordered delivery of messages
 type OrderedDelivery struct {
-	mu           sync.Mutex
-	expectedSeq  uint64
-	buffer       map[uint64]*RelayMessage
-	handler      func(*RelayMessage) error
-	flushTicker  *time.Ticker
-	stopChan     chan struct{}
+	mu          sync.Mutex
+	expectedSeq uint64
+	buffer      map[uint64]*RelayMessage
+	handler     func(*RelayMessage) error
+	flushTicker *time.Ticker
+	stopChan    chan struct{}
 }
 
 // NewOrderedDelivery creates a new ordered delivery handler

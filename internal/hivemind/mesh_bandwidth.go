@@ -13,39 +13,39 @@ type PeerSample struct {
 }
 
 type PeerBandwidth struct {
-	PeerID           string
-	BytesSent        uint64
-	BytesReceived    uint64
-	CurrentSendRate  float64
-	CurrentRecvRate  float64
-	PeakSendRate     float64
-	PeakRecvRate     float64
-	AvgSendRate      float64
-	AvgRecvRate      float64
-	TotalSent        uint64
-	TotalReceived    uint64
-	Samples          int
-	LastUpdate       time.Time
-	WindowSamples    []RateSample
+	PeerID          string
+	BytesSent       uint64
+	BytesReceived   uint64
+	CurrentSendRate float64
+	CurrentRecvRate float64
+	PeakSendRate    float64
+	PeakRecvRate    float64
+	AvgSendRate     float64
+	AvgRecvRate     float64
+	TotalSent       uint64
+	TotalReceived   uint64
+	Samples         int
+	LastUpdate      time.Time
+	WindowSamples   []RateSample
 }
 
 type RateSample struct {
-	Timestamp   time.Time
-	SendRate    float64
-	RecvRate    float64
+	Timestamp time.Time
+	SendRate  float64
+	RecvRate  float64
 }
 
 type GlobalBandwidthStats struct {
-	TotalSent        uint64
-	TotalReceived    uint64
-	CurrentSendRate  float64
-	CurrentRecvRate  float64
-	PeakSendRate     float64
-	PeakRecvRate     float64
-	AvgSendRate      float64
-	AvgRecvRate      float64
-	ActivePeers      int
-	OverLimitCount   int64
+	TotalSent       uint64
+	TotalReceived   uint64
+	CurrentSendRate float64
+	CurrentRecvRate float64
+	PeakSendRate    float64
+	PeakRecvRate    float64
+	AvgSendRate     float64
+	AvgRecvRate     float64
+	ActivePeers     int
+	OverLimitCount  int64
 }
 
 type TokenBucket struct {
@@ -80,9 +80,9 @@ func NewBandwidthAccounting(config MeshConfig) *BandwidthAccounting {
 			refillRate: float64(config.TotalBandwidthLimit),
 			lastRefill: time.Now(),
 		},
-		prevSample:    make(map[string]PeerSample),
+		prevSample:     make(map[string]PeerSample),
 		lastSampleTime: time.Now(),
-		stopChan:      make(chan struct{}),
+		stopChan:       make(chan struct{}),
 	}
 	if config.EnableBandwidthAccounting {
 		ba.sampleTicker = time.NewTicker(config.BandwidthSampleInterval)
@@ -213,7 +213,7 @@ func (ba *BandwidthAccounting) sample() {
 	ba.mu.Lock()
 	defer ba.mu.Unlock()
 	for _, pb := range ba.peerUsage {
-	prev, ok := ba.prevSample[pb.PeerID]
+		prev, ok := ba.prevSample[pb.PeerID]
 		if ok && prev.Timestamp.Before(ba.lastSampleTime) {
 			interval := ba.lastSampleTime.Sub(prev.Timestamp).Seconds()
 			if interval > 0 {
@@ -315,19 +315,19 @@ func (tb *TokenBucket) refill() {
 
 func (pb *PeerBandwidth) Copy() *PeerBandwidth {
 	return &PeerBandwidth{
-		PeerID:         pb.PeerID,
-		BytesSent:      pb.BytesSent,
-		BytesReceived:  pb.BytesReceived,
+		PeerID:          pb.PeerID,
+		BytesSent:       pb.BytesSent,
+		BytesReceived:   pb.BytesReceived,
 		CurrentSendRate: pb.CurrentSendRate,
 		CurrentRecvRate: pb.CurrentRecvRate,
-		PeakSendRate:   pb.PeakSendRate,
-		PeakRecvRate:   pb.PeakRecvRate,
-		AvgSendRate:    pb.AvgSendRate,
-		AvgRecvRate:    pb.AvgRecvRate,
-		TotalSent:      pb.TotalSent,
-		TotalReceived:  pb.TotalReceived,
-		Samples:        pb.Samples,
-		LastUpdate:     pb.LastUpdate,
+		PeakSendRate:    pb.PeakSendRate,
+		PeakRecvRate:    pb.PeakRecvRate,
+		AvgSendRate:     pb.AvgSendRate,
+		AvgRecvRate:     pb.AvgRecvRate,
+		TotalSent:       pb.TotalSent,
+		TotalReceived:   pb.TotalReceived,
+		Samples:         pb.Samples,
+		LastUpdate:      pb.LastUpdate,
 	}
 }
 
@@ -357,8 +357,8 @@ func (ba *BandwidthAccounting) GetStats() map[string]interface{} {
 	ba.mu.RLock()
 	defer ba.mu.RUnlock()
 	return map[string]interface{}{
-		"global":       ba.globalStats.Copy(),
-		"peer_count":   len(ba.peerUsage),
-		"over_limit":   ba.globalStats.OverLimitCount,
+		"global":     ba.globalStats.Copy(),
+		"peer_count": len(ba.peerUsage),
+		"over_limit": ba.globalStats.OverLimitCount,
 	}
 }

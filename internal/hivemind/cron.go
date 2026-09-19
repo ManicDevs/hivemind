@@ -10,12 +10,12 @@ import (
 )
 
 type CronConfig struct {
-	Timezone           *time.Location
-	MaxConcurrentJobs  int
-	JobTimeout         time.Duration
-	EnablePersistence  bool
-	PersistencePath    string
-	EnableMetrics      bool
+	Timezone          *time.Location
+	MaxConcurrentJobs int
+	JobTimeout        time.Duration
+	EnablePersistence bool
+	PersistencePath   string
+	EnableMetrics     bool
 }
 
 func DefaultCronConfig() CronConfig {
@@ -28,44 +28,44 @@ func DefaultCronConfig() CronConfig {
 }
 
 type Job struct {
-	ID          string
-	Name        string
-	Schedule    string
-	Handler     func(ctx context.Context) error
-	Timeout     time.Duration
-	MaxRetries  int
-	RetryDelay  time.Duration
-	Enabled     bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	LastRun     *time.Time
-	NextRun     *time.Time
-	RunCount    int64
+	ID           string
+	Name         string
+	Schedule     string
+	Handler      func(ctx context.Context) error
+	Timeout      time.Duration
+	MaxRetries   int
+	RetryDelay   time.Duration
+	Enabled      bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	LastRun      *time.Time
+	NextRun      *time.Time
+	RunCount     int64
 	FailureCount int64
 }
 
 type Cron struct {
-	mu           sync.RWMutex
-	config       CronConfig
-	jobs         map[string]*Job
-	entries      map[string]*Entry
-	stopChan     chan struct{}
-	wg           sync.WaitGroup
-	running      bool
+	mu       sync.RWMutex
+	config   CronConfig
+	jobs     map[string]*Job
+	entries  map[string]*Entry
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	running  bool
 }
 
 type Entry struct {
-	Job       *Job
-	NextRun   time.Time
-	Timer     *time.Timer
-	Cancel    context.CancelFunc
+	Job     *Job
+	NextRun time.Time
+	Timer   *time.Timer
+	Cancel  context.CancelFunc
 }
 
 func NewCron(config CronConfig) *Cron {
 	return &Cron{
-		config:  config,
-		jobs:    make(map[string]*Job),
-		entries: make(map[string]*Entry),
+		config:   config,
+		jobs:     make(map[string]*Job),
+		entries:  make(map[string]*Entry),
 		stopChan: make(chan struct{}),
 	}
 }
@@ -185,9 +185,9 @@ func (c *Cron) scheduleJob(job *Job) {
 	job.NextRun = &nextRun
 
 	entry := &Entry{
-		Job:    job,
+		Job:     job,
 		NextRun: nextRun,
-		Cancel: cancel,
+		Cancel:  cancel,
 	}
 	c.entries[job.ID] = entry
 
@@ -271,10 +271,10 @@ func (c *Cron) GetStats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_jobs":     len(c.jobs),
-		"enabled_jobs":   enabled,
-		"disabled_jobs":  disabled,
-		"running":        c.running,
+		"total_jobs":    len(c.jobs),
+		"enabled_jobs":  enabled,
+		"disabled_jobs": disabled,
+		"running":       c.running,
 	}
 }
 

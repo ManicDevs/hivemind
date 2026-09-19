@@ -27,13 +27,13 @@ type PeerState struct {
 }
 
 type Partition struct {
-	ID          string
-	Members     []string
-	DetectedAt  time.Time
-	HealedAt    *time.Time
-	Size        int
-	Severity    float64
-	Healing     bool
+	ID         string
+	Members    []string
+	DetectedAt time.Time
+	HealedAt   *time.Time
+	Size       int
+	Severity   float64
+	Healing    bool
 }
 
 type PartitionDetector struct {
@@ -73,9 +73,9 @@ func (pd *PartitionDetector) RegisterPeer(peerID, address string, capabilities [
 		AddedAt:      time.Now(),
 	}
 	pd.peerStates[id] = PeerState{
-		PeerID:        id,
-		LastHeartbeat: time.Now(),
-		IsHealthy:     true,
+		PeerID:          id,
+		LastHeartbeat:   time.Now(),
+		IsHealthy:       true,
 		TotalHeartbeats: 1,
 	}
 }
@@ -152,12 +152,12 @@ func (pd *PartitionDetector) DetectPartitions() []Partition {
 	var newPartitions []Partition
 	if healthyRatio < pd.config.PartitionThreshold {
 		partition := Partition{
-			ID:          generatePartitionID(),
-			Members:     unhealthy,
-			DetectedAt:  time.Now(),
-			Size:        len(unhealthy),
-			Severity:    1.0 - healthyRatio,
-			Healing:     false,
+			ID:         generatePartitionID(),
+			Members:    unhealthy,
+			DetectedAt: time.Now(),
+			Size:       len(unhealthy),
+			Severity:   1.0 - healthyRatio,
+			Healing:    false,
 		}
 		newPartitions = append(newPartitions, partition)
 		pd.partitions = append(pd.partitions, partition)

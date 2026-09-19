@@ -14,23 +14,23 @@ var (
 // MeshConfig holds all mesh configuration
 type MeshConfig struct {
 	// Peer scoring
-	EnablePeerScoring     bool
-	ScoreUpdateInterval   time.Duration
-	ScoreDecayFactor      float64
-	MinPeerScore          float64
-	MaxPeerScore          float64
+	EnablePeerScoring   bool
+	ScoreUpdateInterval time.Duration
+	ScoreDecayFactor    float64
+	MinPeerScore        float64
+	MaxPeerScore        float64
 
 	// Adaptive fanout
-	EnableAdaptiveFanout  bool
-	MinFanout             int
-	MaxFanout             int
-	FanoutUpdateInterval  time.Duration
+	EnableAdaptiveFanout bool
+	MinFanout            int
+	MaxFanout            int
+	FanoutUpdateInterval time.Duration
 
 	// Partition detection
 	EnablePartitionDetection bool
 	PartitionCheckInterval   time.Duration
-	MinMeshSize             int
-	PartitionThreshold      float64
+	MinMeshSize              int
+	PartitionThreshold       float64
 
 	// Bandwidth accounting
 	EnableBandwidthAccounting bool
@@ -39,32 +39,32 @@ type MeshConfig struct {
 	TotalBandwidthLimit       int64
 
 	// Punch retry
-	PunchMaxRetries       int
-	PunchBaseBackoff      time.Duration
-	PunchMaxBackoff       time.Duration
+	PunchMaxRetries        int
+	PunchBaseBackoff       time.Duration
+	PunchMaxBackoff        time.Duration
 	PunchBackoffMultiplier float64
 
 	// Health
-	HealthCheckInterval   time.Duration
-	UnhealthyThreshold    int
+	HealthCheckInterval time.Duration
+	UnhealthyThreshold  int
 
 	// Discovery
-	DiscoveryInterval     time.Duration
-	StaleSocketAge        time.Duration
+	DiscoveryInterval time.Duration
+	StaleSocketAge    time.Duration
 }
 
 func DefaultMeshConfig() MeshConfig {
 	return MeshConfig{
-		EnablePeerScoring:        true,
-		ScoreUpdateInterval:      30 * time.Second,
-		ScoreDecayFactor:         0.95,
-		MinPeerScore:             0.1,
-		MaxPeerScore:             10.0,
+		EnablePeerScoring:   true,
+		ScoreUpdateInterval: 30 * time.Second,
+		ScoreDecayFactor:    0.95,
+		MinPeerScore:        0.1,
+		MaxPeerScore:        10.0,
 
-		EnableAdaptiveFanout:  true,
-		MinFanout:             3,
-		MaxFanout:             32,
-		FanoutUpdateInterval:  60 * time.Second,
+		EnableAdaptiveFanout: true,
+		MinFanout:            3,
+		MaxFanout:            32,
+		FanoutUpdateInterval: 60 * time.Second,
 
 		EnablePartitionDetection: true,
 		PartitionCheckInterval:   60 * time.Second,
@@ -76,37 +76,37 @@ func DefaultMeshConfig() MeshConfig {
 		MaxBandwidthPerPeer:       1024 * 1024,
 		TotalBandwidthLimit:       50 * 1024 * 1024,
 
-		PunchMaxRetries:         5,
-		PunchBaseBackoff:        2 * time.Second,
-		PunchMaxBackoff:         60 * time.Second,
-		PunchBackoffMultiplier:  2.0,
+		PunchMaxRetries:        5,
+		PunchBaseBackoff:       2 * time.Second,
+		PunchMaxBackoff:        60 * time.Second,
+		PunchBackoffMultiplier: 2.0,
 
-		HealthCheckInterval:  30 * time.Second,
-		UnhealthyThreshold:   3,
+		HealthCheckInterval: 30 * time.Second,
+		UnhealthyThreshold:  3,
 
-		DiscoveryInterval:  2 * time.Second,
-		StaleSocketAge:     5 * time.Second,
+		DiscoveryInterval: 2 * time.Second,
+		StaleSocketAge:    5 * time.Second,
 	}
 }
 
 type PeerScore struct {
-	mu              sync.RWMutex
-	PeerID          string
-	FirstSeen       time.Time
-	LastSeen        time.Time
-	Uptime          float64
-	Latency         float64
-	Reliability     float64
-	Bandwidth       float64
-	FramesSent      uint64
-	FramesReceived  uint64
-	FramesDropped   uint64
-	BytesSent       uint64
-	BytesReceived   uint64
-	Penalties       map[string]int
+	mu               sync.RWMutex
+	PeerID           string
+	FirstSeen        time.Time
+	LastSeen         time.Time
+	Uptime           float64
+	Latency          float64
+	Reliability      float64
+	Bandwidth        float64
+	FramesSent       uint64
+	FramesReceived   uint64
+	FramesDropped    uint64
+	BytesSent        uint64
+	BytesReceived    uint64
+	Penalties        map[string]int
 	ConsecutiveFails int
-	LastScore       float64
-	LastUpdate      time.Time
+	LastScore        float64
+	LastUpdate       time.Time
 }
 
 func (ps *PeerScore) Score() float64 {

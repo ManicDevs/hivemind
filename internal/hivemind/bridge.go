@@ -21,40 +21,40 @@ var (
 )
 
 type BridgeConfig struct {
-	LocalMeshName    string
-	RemoteMeshName   string
-	RemoteAddress    string
-	Capabilities     []Capability
-	AutoReconnect    bool
+	LocalMeshName     string
+	RemoteMeshName    string
+	RemoteAddress     string
+	Capabilities      []Capability
+	AutoReconnect     bool
 	ReconnectInterval time.Duration
-	MaxMessageSize   int
+	MaxMessageSize    int
 	HeartbeatInterval time.Duration
 	HandshakeTimeout  time.Duration
 }
 
 func DefaultBridgeConfig() BridgeConfig {
 	return BridgeConfig{
-		Capabilities:       []Capability{CapMeshJoin, CapFrameSend, CapFrameReceive},
-		AutoReconnect:      true,
-		ReconnectInterval:  30 * time.Second,
-		MaxMessageSize:     256 * 1024,
-		HeartbeatInterval:  10 * time.Second,
-		HandshakeTimeout:   10 * time.Second,
+		Capabilities:      []Capability{CapMeshJoin, CapFrameSend, CapFrameReceive},
+		AutoReconnect:     true,
+		ReconnectInterval: 30 * time.Second,
+		MaxMessageSize:    256 * 1024,
+		HeartbeatInterval: 10 * time.Second,
+		HandshakeTimeout:  10 * time.Second,
 	}
 }
 
 type Bridge struct {
-	config        BridgeConfig
-	localMesh     *Swarm
-	remoteConn    net.Conn
-	remotePubKey  ed25519.PublicKey
-	localPrivKey  ed25519.PrivateKey
-	localPubKey   ed25519.PublicKey
-	connected     bool
-	stopChan      chan struct{}
-	mu            sync.RWMutex
-	pendingCalls  map[string]chan *BridgeResponse
-	callID        uint64
+	config          BridgeConfig
+	localMesh       *Swarm
+	remoteConn      net.Conn
+	remotePubKey    ed25519.PublicKey
+	localPrivKey    ed25519.PrivateKey
+	localPubKey     ed25519.PublicKey
+	connected       bool
+	stopChan        chan struct{}
+	mu              sync.RWMutex
+	pendingCalls    map[string]chan *BridgeResponse
+	callID          uint64
 	heartbeatTicker *time.Ticker
 	reconnectTicker *time.Ticker
 }
@@ -71,8 +71,8 @@ type BridgeMessage struct {
 }
 
 type BridgeError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
@@ -138,11 +138,11 @@ func (b *Bridge) Connect(ctx context.Context) error {
 
 func (b *Bridge) handshake(ctx context.Context) error {
 	handshake := map[string]interface{}{
-		"type":        "handshake",
-		"mesh_name":   b.config.LocalMeshName,
-		"pub_key":     b.localPubKey,
+		"type":         "handshake",
+		"mesh_name":    b.config.LocalMeshName,
+		"pub_key":      b.localPubKey,
 		"capabilities": b.config.Capabilities,
-		"timestamp":   time.Now().Unix(),
+		"timestamp":    time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(handshake)
@@ -421,15 +421,15 @@ func (b *Bridge) GetLocalPubKey() ed25519.PublicKey {
 
 type BridgeManager struct {
 	mu       sync.RWMutex
-	config    BridgeConfig
-	bridges   map[string]*Bridge
-	mesh      *Swarm
-	stopChan  chan struct{}
+	config   BridgeConfig
+	bridges  map[string]*Bridge
+	mesh     *Swarm
+	stopChan chan struct{}
 }
 
 func NewBridgeManager(config BridgeConfig, mesh *Swarm) *BridgeManager {
 	return &BridgeManager{
-		config:  config,
+		config:   config,
 		mesh:     mesh,
 		bridges:  make(map[string]*Bridge),
 		stopChan: make(chan struct{}),

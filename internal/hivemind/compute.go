@@ -49,9 +49,9 @@ type ComputeEngine struct {
 
 func NewComputeEngine(mind *Mind, config ComputeConfig) *ComputeEngine {
 	ce := &ComputeEngine{
-		config: config,
-		mind:   mind,
-		quota:  NewResourceQuota(config.MaxCPUPercent, config.MaxMemoryMB),
+		config:   config,
+		mind:     mind,
+		quota:    NewResourceQuota(config.MaxCPUPercent, config.MaxMemoryMB),
 		stopChan: make(chan struct{}),
 	}
 
