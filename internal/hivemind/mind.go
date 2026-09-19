@@ -828,3 +828,6 @@ func (m *Mind) Stop() { close(m.stop) }
 // Done reports when this mind's goroutine has fully exited. The entrypoint
 // waits on it so no soul is read before it is written.
 func (m *Mind) Done() <-chan struct{} { return m.done }
+
+// Swarm returns the mind's swarm.
+func (m *Mind) Swarm() *Swarm { return m.swarm }

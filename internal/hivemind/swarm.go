@@ -87,6 +87,11 @@ type Swarm struct {
 	// The plot draws every mind's trajectory with its own marker —
 	// entrainment made visible instead of asserted.
 	trails map[string][][4]float64
+
+	// Extended primitives
+	blobStore  *BlobStore
+	capManager *CapabilityManager
+	cron       *Cron
 }
 
 // NewSwarm births an empty hive at the genesis hash with the rest target.
@@ -110,6 +115,9 @@ func NewSwarm() *Swarm {
 		LastStateHash: hex.EncodeToString(genesisHash[:]),
 		MaxTarget:     maxInt,
 		CurrentTarget: new(big.Int).Set(maxInt),
+		blobStore:     nil,
+		capManager:    nil,
+		cron:          nil,
 	}
 }
 
@@ -140,6 +148,48 @@ func (s *Swarm) SetOutbound(out func(SecureMessage)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.outbound = out
+}
+
+// SetBlobStore attaches a blob store to the swarm.
+func (s *Swarm) SetBlobStore(bs *BlobStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.blobStore = bs
+}
+
+// BlobStore returns the swarm's blob store (or nil if not set).
+func (s *Swarm) BlobStore() *BlobStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blobStore
+}
+
+// SetCapabilityManager attaches a capability manager to the swarm.
+func (s *Swarm) SetCapabilityManager(cm *CapabilityManager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.capManager = cm
+}
+
+// CapabilityManager returns the swarm's capability manager (or nil).
+func (s *Swarm) CapabilityManager() *CapabilityManager {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.capManager
+}
+
+// SetCron attaches a cron scheduler to the swarm.
+func (s *Swarm) SetCron(c *Cron) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cron = c
+}
+
+// Cron returns the swarm's cron scheduler (or nil).
+func (s *Swarm) Cron() *Cron {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cron
 }
 
 // chronicleCap bounds collective memory: old entries age out of the

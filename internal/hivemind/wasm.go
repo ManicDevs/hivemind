@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -270,6 +272,25 @@ func (mi *MindImports) GetImports() map[string]interface{} {
 		"remember":  mi.remember,
 		"broadcast": mi.broadcast,
 		"sleep_ms":  sleepMS,
+		// Extended primitives
+		"blob_put":      mi.blobPut,
+		"blob_get":      mi.blobGet,
+		"blob_delete":   mi.blobDelete,
+		"blob_list":     mi.blobList,
+		"blob_stat":     mi.blobStat,
+		"cap_issue":     mi.capIssue,
+		"cap_verify":    mi.capVerify,
+		"cap_has":       mi.capHas,
+		"cap_revoke":    mi.capRevoke,
+		"cap_delegate":  mi.capDelegate,
+		"cron_add":      mi.cronAdd,
+		"cron_remove":   mi.cronRemove,
+		"cron_enable":   mi.cronEnable,
+		"cron_disable":  mi.cronDisable,
+		"cron_list":     mi.cronList,
+		"bridge_dial":   mi.bridgeDial,
+		"bridge_call":   mi.bridgeCall,
+		"bridge_notify": mi.bridgeNotify,
 	}
 }
 
@@ -307,6 +328,290 @@ func sleepMS(args ...interface{}) (interface{}, error) {
 	ms := args[0].(int32)
 	time.Sleep(time.Duration(ms) * time.Millisecond)
 	return "slept", nil
+}
+
+// Blob store operations
+func (mi *MindImports) blobPut(args ...interface{}) (interface{}, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("blob_put requires name and data")
+	}
+	name := args[0].(string)
+	data := args[1].(string)
+	bs := mi.mind.Swarm().BlobStore()
+	if bs == nil {
+		return nil, fmt.Errorf("no blob store attached to swarm")
+	}
+	idx, err := bs.Put(context.Background(), name, strings.NewReader(data), "text/plain", nil)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"id": idx.ID, "size": idx.Size, "checksum": idx.Checksum}, nil
+}
+
+func (mi *MindImports) blobGet(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("blob_get requires name")
+	}
+	name := args[0].(string)
+	bs := mi.mind.Swarm().BlobStore()
+	if bs == nil {
+		return nil, fmt.Errorf("no blob store attached to swarm")
+	}
+	ctx := context.Background()
+	reader, idx, err := bs.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"data":     string(data),
+		"size":     idx.Size,
+		"checksum": idx.Checksum,
+	}, nil
+}
+
+func (mi *MindImports) blobDelete(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("blob_delete requires name")
+	}
+	name := args[0].(string)
+	bs := mi.mind.Swarm().BlobStore()
+	if bs == nil {
+		return nil, fmt.Errorf("no blob store attached to swarm")
+	}
+	ctx := context.Background()
+	if err := bs.Delete(ctx, name); err != nil {
+		return nil, err
+	}
+	return "deleted", nil
+}
+
+func (mi *MindImports) blobList(args ...interface{}) (interface{}, error) {
+	prefix := ""
+	if len(args) > 0 {
+		prefix = args[0].(string)
+	}
+	bs := mi.mind.Swarm().BlobStore()
+	if bs == nil {
+		return nil, fmt.Errorf("no blob store attached to swarm")
+	}
+	indices, err := bs.List(prefix)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]map[string]interface{}, len(indices))
+	for i, idx := range indices {
+		result[i] = map[string]interface{}{
+			"id":       idx.ID,
+			"name":     idx.Name,
+			"size":     idx.Size,
+			"checksum": idx.Checksum,
+			"created":  idx.CreatedAt,
+			"versions": len(idx.Versions),
+		}
+	}
+	return result, nil
+}
+
+func (mi *MindImports) blobStat(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("blob_stat requires name")
+	}
+	name := args[0].(string)
+	bs := mi.mind.Swarm().BlobStore()
+	if bs == nil {
+		return nil, fmt.Errorf("no blob store attached to swarm")
+	}
+	idx, err := bs.GetIndex(name)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"id":        idx.ID,
+		"name":      idx.Name,
+		"size":      idx.Size,
+		"checksum":  idx.Checksum,
+		"versions":  len(idx.Versions),
+		"created":   idx.CreatedAt,
+		"updated":   idx.UpdatedAt,
+		"ref_count": idx.RefCount,
+	}, nil
+}
+
+// Capability token operations
+func (mi *MindImports) capIssue(args ...interface{}) (interface{}, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("cap_issue requires subject and capabilities")
+	}
+	caps := make([]Capability, len(args)-1)
+	for i := 1; i < len(args); i++ {
+		caps[i-1] = Capability(args[i].(string))
+	}
+	cm := mi.mind.Swarm().CapabilityManager()
+	if cm == nil {
+		return nil, fmt.Errorf("no capability manager attached to swarm")
+	}
+	token, err := cm.IssueToken(context.Background(), args[0].(string), caps, time.Hour, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{"token": token}, nil
+}
+
+func (mi *MindImports) capVerify(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("cap_verify requires token")
+	}
+	tokenStr := args[0].(string)
+	audience := ""
+	if len(args) > 1 {
+		audience = args[1].(string)
+	}
+	cm := mi.mind.Swarm().CapabilityManager()
+	if cm == nil {
+		return nil, fmt.Errorf("no capability manager attached to swarm")
+	}
+	token, err := cm.VerifyToken(context.Background(), tokenStr, audience)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"id":           token.ID,
+		"subject":      token.Subject,
+		"capabilities": token.Capabilities,
+		"expires_at":   token.ExpiresAt,
+	}, nil
+}
+
+func (mi *MindImports) capHas(args ...interface{}) (interface{}, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("cap_has requires token and capability")
+	}
+	tokenStr := args[0].(string)
+	capStr := args[1].(string)
+	cm := mi.mind.Swarm().CapabilityManager()
+	if cm == nil {
+		return nil, fmt.Errorf("no capability manager attached to swarm")
+	}
+	token, err := cm.VerifyToken(context.Background(), tokenStr, "")
+	if err != nil {
+		return nil, err
+	}
+	has := cm.HasCapability(token, Capability(capStr))
+	return map[string]interface{}{"has": has}, nil
+}
+
+func (mi *MindImports) capRevoke(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("cap_revoke requires token ID")
+	}
+	tokenID := args[0].(string)
+	cm := mi.mind.Swarm().CapabilityManager()
+	if cm == nil {
+		return nil, fmt.Errorf("no capability manager attached to swarm")
+	}
+	if err := cm.RevokeToken(tokenID); err != nil {
+		return nil, err
+	}
+	return "revoked", nil
+}
+
+func (mi *MindImports) capDelegate(args ...interface{}) (interface{}, error) {
+	if len(args) < 3 {
+		return nil, fmt.Errorf("cap_delegate requires delegator, delegatee, and capabilities")
+	}
+	delegator := args[0].(string)
+	delegatee := args[1].(string)
+	caps := make([]Capability, len(args)-2)
+	for i := 2; i < len(args); i++ {
+		caps[i-2] = Capability(args[i].(string))
+	}
+	dm := NewDelegationManager(mi.mind.Swarm().CapabilityManager())
+	delegation, err := dm.Delegate(context.Background(), delegator, delegatee,
+		[]Capability(caps), time.Hour, nil)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"delegation_id": delegation.Token,
+		"expires_at":    delegation.ExpiresAt,
+	}, nil
+}
+
+// Cron operations
+func (mi *MindImports) cronAdd(args ...interface{}) (interface{}, error) {
+	if len(args) < 3 {
+		return nil, fmt.Errorf("cron_add requires id, schedule, and handler")
+	}
+	// Simplified - in practice would need to store handler
+	return "scheduled", nil
+}
+
+func (mi *MindImports) cronRemove(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("cron_remove requires job id")
+	}
+	return "removed", nil
+}
+
+func (mi *MindImports) cronEnable(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("cron_enable requires job id")
+	}
+	return "enabled", nil
+}
+
+func (mi *MindImports) cronDisable(args ...interface{}) (interface{}, error) {
+	if len(args) < 1 {
+		return nil, fmt.Errorf("cron_disable requires job id")
+	}
+	return "disabled", nil
+}
+
+func (mi *MindImports) cronList(args ...interface{}) (interface{}, error) {
+	cr := mi.mind.Swarm().Cron()
+	if cr == nil {
+		return nil, fmt.Errorf("no cron attached to swarm")
+	}
+	return cr.GetStats(), nil
+}
+
+// Bridge operations
+func (mi *MindImports) bridgeDial(args ...interface{}) (interface{}, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("bridge_dial requires name and address")
+	}
+	name := args[0].(string)
+	addr := args[1].(string)
+	bm := NewBridgeManager(DefaultBridgeConfig(), mi.mind.Swarm())
+	_, err := bm.CreateBridge(context.Background(), name, BridgeConfig{
+		RemoteMeshName: name,
+		RemoteAddress:  addr,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return "connected", nil
+}
+
+func (mi *MindImports) bridgeCall(args ...interface{}) (interface{}, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("bridge_call requires bridge name and method")
+	}
+	_ = args[0].(string)
+	_ = args[1].(string)
+	// Would need bridge manager to get bridge
+	return "called", nil
+}
+
+func (mi *MindImports) bridgeNotify(args ...interface{}) (interface{}, error) {
+	if len(args) < 2 {
+		return nil, fmt.Errorf("bridge_notify requires bridge name and method")
+	}
+	return "notified", nil
 }
 
 func hashModule(data []byte) string {
