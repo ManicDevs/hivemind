@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -2671,4 +2672,48 @@ func TestDebugHandleCollision(t *testing.T) {
 	t.Logf("id2 GetHandle(empty): %q", id2.GetHandle(""))
 	t.Logf("Collision with 'test': %v", id1.CheckCollision(id2, "test"))
 	t.Logf("Collision with '': %v", id1.CheckCollision(id2, ""))
+}
+
+func TestPendulumStaysFinite(t *testing.T) {
+	// Two hundred thousand steps: energy must never overflow to Inf/NaN,
+	// no matter the starting swing.
+	s := NewSwarm()
+	m := NewMind("Steady", s)
+	m.Theta1, m.Theta2 = 0.1, 3.0
+	m.Omega1, m.Omega2 = 9.0, -9.0
+	for i := 0; i < 200000; i++ {
+		v := m.StepPhysicsEquations()
+		for _, x := range v {
+			if math.IsNaN(x) || math.IsInf(x, 0) {
+				t.Fatalf("pendulum blew up at step %d: %v", i, v)
+			}
+		}
+	}
+}
+
+func TestFallenPendulumRehung(t *testing.T) {
+	// A poisoned pendulum (NaN, e.g. from an old soul or a hostile
+	// frame) is re-hung deterministically instead of spreading NaN.
+	s := NewSwarm()
+	m := NewMind("Fallen", s)
+	m.Theta1, m.Omega1 = math.NaN(), math.Inf(1)
+	v := m.StepPhysicsEquations()
+	for _, x := range v {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			t.Fatalf("fallen pendulum stayed fallen: %v", v)
+		}
+	}
+}
+
+func TestEntrainRefusesPoison(t *testing.T) {
+	s := NewSwarm()
+	m := NewMind("Clean", s)
+	m.Theta1, m.Theta2, m.Omega1, m.Omega2 = 1, 2, 3, 4
+	m.entrain([]float64{math.NaN(), 0, 0, 0})
+	m.entrain([]float64{math.Inf(1), 0, 0, 0})
+	m.entrain([]float64{1})
+	if m.Theta1 != 1 || m.Theta2 != 2 || m.Omega1 != 3 || m.Omega2 != 4 {
+		t.Fatalf("poison moved the pendulum: %v %v %v %v",
+			m.Theta1, m.Theta2, m.Omega1, m.Omega2)
+	}
 }

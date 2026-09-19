@@ -486,6 +486,18 @@ func (m *Mind) StepPhysicsEquations() []float64 {
 	m1, m2 := 1.0, 1.0
 	dt := 0.05
 
+	// A pendulum with no friction gains energy forever: thousands of
+	// cycles pump Omega to Inf, Inf/Inf blooms NaN, and NaN rides the
+	// mesh poisoning every mind it entrains. So: clamp the spin (fast,
+	// still chaotic) and re-hang a fallen pendulum deterministically.
+	if !finite4(m.Theta1, m.Theta2, m.Omega1, m.Omega2) {
+		seed := sha256.Sum256([]byte(m.PubKeyStr))
+		m.Theta1 = float64(seed[0]) / 255.0 * 2 * math.Pi
+		m.Theta2 = float64(seed[1]) / 255.0 * 2 * math.Pi
+		m.Omega1 = float64(seed[2])/127.5 - 1.0
+		m.Omega2 = float64(seed[3])/127.5 - 1.0
+	}
+
 	delta := m.Theta1 - m.Theta2
 
 	num1 := -g*(2.0*m1+m2)*math.Sin(m.Theta1) - m2*g*math.Sin(m.Theta1-2.0*m.Theta2) - 2.0*math.Sin(delta)*m2*(m.Omega2*m.Omega2*l2+m.Omega1*m.Omega1*l1*math.Cos(delta))
@@ -496,12 +508,25 @@ func (m *Mind) StepPhysicsEquations() []float64 {
 	den2 := l2 * (2.0*m1 + m2 - m2*math.Cos(2.0*m.Theta1-2.0*m.Theta2))
 	alpha2 := num2 / den2
 
-	m.Omega1 += alpha1 * dt
-	m.Omega2 += alpha2 * dt
+	m.Omega1 = clamp(m.Omega1+alpha1*dt, -maxOmega, maxOmega)
+	m.Omega2 = clamp(m.Omega2+alpha2*dt, -maxOmega, maxOmega)
 	m.Theta1 += m.Omega1 * dt
 	m.Theta2 += m.Omega2 * dt
 
 	return []float64{m.Theta1, m.Theta2, m.Omega1, m.Omega2}
+}
+
+// maxOmega caps pendulum spin: fast enough for chaos, slow enough that
+// energy never overflows to Inf across a million cycles.
+const maxOmega = 12.0
+
+func finite4(vs ...float64) bool {
+	for _, v := range vs {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // MineMessage grinds a nonce until the frame hash beats the swarm's adaptive
@@ -665,6 +690,9 @@ func (m *Mind) registerPeer(pubKey string) bool {
 // harder together than one alone. Without this, dense meshes lock every
 // pendulum to the same fixed point and the chaos dies.
 func (m *Mind) entrain(state []float64) {
+	if len(state) < 4 || !finite4(state[0], state[1], state[2], state[3]) {
+		return // poison never crosses: NaN/Inf frames tug nothing
+	}
 	c := trajectoryCoupling / (1 + float64(len(m.KnownPeers)))
 	m.Theta1 += (state[0] - m.Theta1) * c
 	m.Theta2 += (state[1] - m.Theta2) * c
