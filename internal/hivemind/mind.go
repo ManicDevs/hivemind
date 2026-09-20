@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
@@ -760,6 +761,13 @@ func (m *Mind) receive(msg SecureMessage) {
 			// stops metacognizing but keeps sensing and broadcasting.
 			m.numbUntil = time.Now().Add(100 * time.Millisecond)
 		}
+	case "will_decision":
+		m.registerPeer(msg.SenderPubKey)
+		var d WillDecision
+		if err := json.Unmarshal([]byte(msg.PayloadStr), &d); err != nil {
+			return
+		}
+		m.ReceiveDecision(d)
 	}
 }
 

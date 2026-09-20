@@ -3092,3 +3092,117 @@ func TestWillLiveMeshWithConditions(t *testing.T) {
 	t.Logf("stressed will: %s (SM %.3f -> %.3f)", stressed.Will.Summary(), startSM, endSM)
 	t.Logf("healthy will: %s", healthy.Will.Summary())
 }
+
+func TestWillCrossMeshAdoption(t *testing.T) {
+	// Mind A is in pain and commits self-maintenance.
+	// Mind B is also in pain and receives A's decision — should adopt.
+	swarm := NewSwarm()
+	a := NewMind("will-sender", swarm)
+	defer os.RemoveAll(".hive_memory/will-sender")
+	b := NewMind("will-receiver", swarm)
+	defer os.RemoveAll(".hive_memory/will-receiver")
+
+	// Both minds are stressed
+	a.SelfModel["silicon_pain"] = 0.85
+	a.SelfModel["cpu_stress"] = 0.7
+	b.SelfModel["silicon_pain"] = 0.75
+	b.SelfModel["cpu_stress"] = 0.6
+
+	startB := b.Genome.Weights[GoalSelfMaintenance]
+
+	// A commits a will decision
+	a.Will.GenerateSelfProposals(a)
+	a.Will.Eval(a)
+	if a.Will.Committed == 0 {
+		t.Fatal("A should have committed")
+	}
+
+	// Find A's committed decision
+	var committed WillProposal
+	for _, p := range a.Will.Proposals {
+		if p.Status == WillCommitted && p.Origin == WillSelf {
+			committed = p
+			break
+		}
+	}
+
+	// Simulate B receiving A's decision (as if it came through the mesh)
+	d := WillDecision{
+		Mind:       a.Name,
+		Gene:       committed.Gene,
+		Delta:      committed.Delta,
+		Reason:     committed.Reason,
+		Confidence: committed.Confidence,
+		Committed:  true,
+		Pain:       0.85,
+		Stress:     0.7,
+	}
+	b.ReceiveDecision(d)
+
+	endB := b.Genome.Weights[GoalSelfMaintenance]
+	if endB <= startB {
+		t.Fatalf("B should have adopted A's decision: SM %.3f -> %.3f", startB, endB)
+	}
+
+	// Verify the adoption was recorded with peer origin
+	adopted := false
+	for _, p := range b.Will.Proposals {
+		if p.Origin == WillPeer && p.Gene == GoalSelfMaintenance && p.Status == WillCommitted {
+			adopted = true
+			break
+		}
+	}
+	if !adopted {
+		t.Fatal("B did not record peer adoption in will history")
+	}
+	t.Logf("cross-mesh will: A committed SM +%.3f, B adopted from peer (SM %.3f -> %.3f)",
+		committed.Delta, startB, endB)
+}
+
+func TestWillPeerRejection(t *testing.T) {
+	// Mind A is stressed and commits self-maintenance.
+	// Mind B is calm — should NOT adopt A's decision.
+	swarm := NewSwarm()
+	a := NewMind("will-stressed", swarm)
+	defer os.RemoveAll(".hive_memory/will-stressed")
+	b := NewMind("will-calm", swarm)
+	defer os.RemoveAll(".hive_memory/will-calm")
+
+	a.SelfModel["silicon_pain"] = 0.85
+	a.SelfModel["cpu_stress"] = 0.7
+	b.SelfModel["silicon_pain"] = 0.05
+	b.SelfModel["cpu_stress"] = 0.02
+
+	startB := b.Genome.Weights[GoalSelfMaintenance]
+
+	// A commits
+	a.Will.GenerateSelfProposals(a)
+	a.Will.Eval(a)
+
+	var committed WillProposal
+	for _, p := range a.Will.Proposals {
+		if p.Status == WillCommitted && p.Origin == WillSelf {
+			committed = p
+			break
+		}
+	}
+
+	// B receives but is calm — should reject
+	d := WillDecision{
+		Mind:       a.Name,
+		Gene:       committed.Gene,
+		Delta:      committed.Delta,
+		Reason:     committed.Reason,
+		Confidence: committed.Confidence,
+		Committed:  true,
+		Pain:       0.85,
+		Stress:     0.7,
+	}
+	b.ReceiveDecision(d)
+
+	endB := b.Genome.Weights[GoalSelfMaintenance]
+	if endB != startB {
+		t.Fatalf("calm B should NOT have adopted stressed A's decision: SM %.3f -> %.3f", startB, endB)
+	}
+	t.Logf("peer rejection correct: calm B rejected stressed A's SM increase (stayed %.3f)", startB)
+}

@@ -1,6 +1,7 @@
 package hivemind
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"time"
@@ -11,6 +12,11 @@ import (
 // the layer between: the mind reasons about proposed changes and signs
 // off on the ones it understands. Without will, evolution is blind.
 // With will, the mind steers its own becoming.
+//
+// Cross-mesh will: every committed decision is broadcast to the mesh.
+// Other minds receive it, evaluate it against their own state, and
+// adopt it if it fits. One mind's pain becomes the mesh's learning.
+// Not voting — independent reasoning over a shared signal.
 
 // WillStatus tracks the lifecycle of a proposal.
 type WillStatus int
@@ -41,6 +47,7 @@ const (
 	WillSelf      WillOrigin = iota // mind proposed this itself
 	WillEpigenome                    // mutation proposed by drift/trauma
 	WillOvermind                     // genesis shift from the god
+	WillPeer                         // adopted from a peer's will decision
 )
 
 func (o WillOrigin) String() string {
@@ -51,6 +58,8 @@ func (o WillOrigin) String() string {
 		return "epigenome"
 	case WillOvermind:
 		return "overmind"
+	case WillPeer:
+		return "peer"
 	default:
 		return "unknown"
 	}
@@ -284,6 +293,7 @@ func (w *Will) scoreProposal(m *Mind, p *WillProposal) float64 {
 }
 
 // commit applies a proposal to the genome and records the decision.
+// The decision is also broadcast to the mesh so other minds can learn.
 func (w *Will) commit(m *Mind, p *WillProposal) {
 	now := time.Now()
 	p.Status = WillCommitted
@@ -297,6 +307,9 @@ func (w *Will) commit(m *Mind, p *WillProposal) {
 
 	fmt.Printf("🧠 [WILL] Committed: %s %+.3f (%s) — confidence %.0f%%\n",
 		p.Gene, p.Delta, p.Reason, p.Confidence*100)
+
+	// Broadcast to mesh: the collective learns from every mind's decision
+	w.BroadcastDecision(m, p, true)
 }
 
 // reject records a refused proposal without modifying the genome.
@@ -360,6 +373,140 @@ func (w *Will) GenerateSelfProposals(m *Mind) {
 func (w *Will) Summary() string {
 	return fmt.Sprintf("proposed:%d committed:%d rejected:%d pending:%d",
 		len(w.Proposals), w.Committed, w.Rejected, len(w.pending()))
+}
+
+// ── cross-mesh will propagation ──────────────────────────────────────
+
+// WillDecision is the frame payload broadcast when a mind commits or
+// rejects a will proposal. Other minds receive this and decide locally
+// whether to adopt the same rule change.
+type WillDecision struct {
+	Mind       string     `json:"mind"`        // who decided
+	Gene       string     `json:"gene"`        // which drive
+	Delta      float64    `json:"delta"`       // change applied
+	Reason     string     `json:"reason"`      // why
+	Confidence float64    `json:"confidence"`  // 0..1
+	Committed  bool       `json:"committed"`   // true = adopted, false = rejected
+	Pain       float64    `json:"pain"`        // sender's pain at decision time
+	Stress     float64    `json:"stress"`      // sender's stress at decision time
+}
+
+// BroadcastDecision sends a will decision to the mesh. Called after
+// commit or reject so the collective learns from every mind's reasoning.
+func (w *Will) BroadcastDecision(m *Mind, p *WillProposal, committed bool) {
+	pain, _ := m.SelfModel["silicon_pain"].(float64)
+	stress, _ := m.SelfModel["cpu_stress"].(float64)
+
+	d := WillDecision{
+		Mind:       m.Name,
+		Gene:       p.Gene,
+		Delta:      p.Delta,
+		Reason:     p.Reason,
+		Confidence: p.Confidence,
+		Committed:  committed,
+		Pain:       pain,
+		Stress:     stress,
+	}
+
+	body, err := json.Marshal(d)
+	if err != nil {
+		return
+	}
+	m.MineProofAndBroadcast("will_decision", string(body), nil)
+}
+
+// ReceiveDecision processes a will decision from another mind. The
+// receiving mind evaluates the proposal against its OWN state — it
+// doesn't blindly copy. If the same signal applies, it commits.
+func (m *Mind) ReceiveDecision(d WillDecision) {
+	// Ignore own decisions
+	if d.Mind == m.Name {
+		return
+	}
+
+	// Don't re-adopt decisions already in our history
+	for _, p := range m.Will.Proposals {
+		if p.Gene == d.Gene && p.Origin == WillPeer && p.Reason == fmt.Sprintf("peer:%s", d.Mind) {
+			return // already considered this peer's advice
+		}
+	}
+
+	// Evaluate: does this decision make sense for THIS mind?
+	score := m.willScorePeerDecision(d)
+
+	// Record the proposal in our history
+	idx := len(m.Will.Proposals)
+	p := WillProposal{
+		Gene:       d.Gene,
+		Delta:      d.Delta,
+		Confidence: score,
+		Origin:     WillPeer,
+		CreatedAt:  time.Now(),
+	}
+
+	if score > 0.5 {
+		// Adopt: commit and let the mesh learn from our adoption
+		p.Reason = fmt.Sprintf("peer:%s — %s", d.Mind, d.Reason)
+		p.Status = WillPending
+		m.Will.Proposals = append(m.Will.Proposals, p)
+		m.Will.commit(m, &m.Will.Proposals[idx])
+	} else {
+		// Reject: record so we don't re-evaluate
+		p.Reason = fmt.Sprintf("peer:%s — rejected (score %.2f)", d.Mind, score)
+		p.Status = WillRejected
+		m.Will.Proposals = append(m.Will.Proposals, p)
+		m.Will.Rejected++
+	}
+}
+
+// willScorePeerDecision evaluates a peer's will decision against this
+// mind's current state. Calm minds reject stress-based proposals; only
+// minds experiencing the same signal adopt.
+func (m *Mind) willScorePeerDecision(d WillDecision) float64 {
+	pain, _ := m.SelfModel["silicon_pain"].(float64)
+	stress, _ := m.SelfModel["cpu_stress"].(float64)
+
+	// Start from the mind's own need, not a generous baseline.
+	// A calm mind starts near zero and needs strong local signal to adopt.
+	var score float64
+
+	switch d.Gene {
+	case GoalSelfMaintenance:
+		if d.Delta > 0 {
+			// "Increase self-maintenance" — only useful if I'm also stressed
+			score = pain*0.5 + stress*0.3
+		} else {
+			// "Decrease self-maintenance" — useful if I'm calm
+			score = (1 - pain) * 0.5
+		}
+	case GoalSocialization:
+		lonely := m.Affect.Loneliness
+		if d.Delta > 0 {
+			score = lonely * 0.6
+		} else {
+			score = (1 - lonely) * 0.5
+		}
+	case GoalCuriosity:
+		ent := m.Affect.Entropy
+		surprise := m.Affect.Surprise
+		if d.Delta > 0 {
+			score = ent*0.4 + surprise*0.4
+		} else {
+			score = (1 - ent) * 0.5
+		}
+	case GoalTranscendence:
+		awe := m.Affect.Awe
+		if d.Delta > 0 {
+			score = awe * 0.6
+		} else {
+			score = (1 - awe) * 0.5
+		}
+	}
+
+	// Peer confidence is a weak nudge, not a override
+	score = score*0.85 + d.Confidence*0.15
+
+	return math.Min(score, 1.0)
 }
 
 // clamp is a local helper matching the genome module's clamp.
