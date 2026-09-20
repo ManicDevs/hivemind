@@ -149,7 +149,6 @@ func (pd *PartitionDetector) DetectPartitions() []Partition {
 		expectedSize = pd.config.MinMeshSize
 	}
 	healthyRatio := float64(len(healthy)) / float64(expectedSize)
-	var newPartitions []Partition
 	if healthyRatio < pd.config.PartitionThreshold {
 		partition := Partition{
 			ID:         generatePartitionID(),
@@ -159,7 +158,6 @@ func (pd *PartitionDetector) DetectPartitions() []Partition {
 			Severity:   1.0 - healthyRatio,
 			Healing:    false,
 		}
-		newPartitions = append(newPartitions, partition)
 		pd.partitions = append(pd.partitions, partition)
 	}
 	return pd.partitions

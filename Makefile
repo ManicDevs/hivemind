@@ -184,14 +184,12 @@ check: lint tidy
 # ── Testing ──
 test: check
 	@echo "🧪 Testing..."
-	@if go test ./... -race -count=1 2> /tmp/hivemind-test.log; then \
-		echo "✅ Tests passed (-race)"; \
-	elif grep -q "requires cgo" /tmp/hivemind-test.log; then \
-		echo "⚠️  No C compiler — race detector unavailable, running plain tests"; \
-		go test ./... -count=1 && echo "✅ Tests passed (plain)"; \
+	@if command -v gcc >/dev/null 2>&1; then \
+		echo "  (using -race)"; \
+		timeout 120 go test ./... -race -count=1 2>/tmp/hivemind-test.log && echo "✅ Tests passed (-race)" || (cat /tmp/hivemind-test.log; exit 1); \
 	else \
-		cat /tmp/hivemind-test.log; \
-		exit 1; \
+		echo "  ⚠️  No C compiler — running plain tests"; \
+		timeout 120 go test ./... -count=1 && echo "✅ Tests passed (plain)"; \
 	fi
 
 test-race: check

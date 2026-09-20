@@ -18,6 +18,8 @@ var (
 	ErrServiceUnavailable = errors.New("service unavailable")
 )
 
+type ctxKey string
+
 type RPCConfig struct {
 	DefaultTimeout     time.Duration
 	MaxConcurrentCalls int
@@ -119,7 +121,7 @@ func (s *RPCServer) Use(middleware Middleware) {
 	s.middleware = append(s.middleware, middleware)
 }
 
-func (s *RPCServer) HandleRequest(ctx context.Context, req *RPCRequest) *RPCResponse {
+func (s *RPCServer) HandleRequest(_ context.Context, req *RPCRequest) *RPCResponse {
 	if atomic.LoadInt64(&s.activeCalls) >= int64(s.config.MaxConcurrentCalls) {
 		return &RPCResponse{
 			ID: req.ID,
@@ -134,24 +136,24 @@ func (s *RPCServer) HandleRequest(ctx context.Context, req *RPCRequest) *RPCResp
 	defer atomic.AddInt64(&s.activeCalls, -1)
 	atomic.AddInt64(&s.totalCalls, 1)
 
-	baseCtx := context.Background()
+	ctx := context.Background()
 	var cancel context.CancelFunc
 	if req.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(baseCtx, time.Duration(req.Timeout)*time.Millisecond)
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(req.Timeout)*time.Millisecond)
 	} else {
-		ctx, cancel = context.WithTimeout(baseCtx, s.config.DefaultTimeout)
+		ctx, cancel = context.WithTimeout(ctx, s.config.DefaultTimeout)
 	}
 	defer cancel()
 
 	if req.Token != "" {
-		ctx = context.WithValue(ctx, "token", req.Token)
+		ctx = context.WithValue(ctx, ctxKey("token"), req.Token)
 	}
 
 	if req.TraceID != "" {
-		ctx = context.WithValue(ctx, "trace_id", req.TraceID)
+		ctx = context.WithValue(ctx, ctxKey("trace_id"), req.TraceID)
 	}
 	if req.SpanID != "" {
-		ctx = context.WithValue(ctx, "span_id", req.SpanID)
+		ctx = context.WithValue(ctx, ctxKey("span_id"), req.SpanID)
 	}
 
 	s.mu.RLock()

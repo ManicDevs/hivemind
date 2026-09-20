@@ -508,14 +508,3 @@ func (m *Mind) willScorePeerDecision(d WillDecision) float64 {
 
 	return math.Min(score, 1.0)
 }
-
-// clamp is a local helper matching the genome module's clamp.
-func clampF(v, lo, hi float64) float64 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}

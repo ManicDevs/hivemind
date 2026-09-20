@@ -36,15 +36,6 @@ type punchFrame struct {
 // bindPunchPort creates a bound-but-unconnected TCP socket for a future
 // simultaneous open, returning the fd to HOLD (not a connection: the
 // dial happens later, at the rendezvous instant).
-// simultaneousDial opens a TCP connection by simultaneous open: bind
-// localPort locally, connect to remoteHost:remotePort. Both ends must
-// call within the same window (see punchRendezvous): the SYNs have to be
-// in flight together, each one punching its own NAT on the way out while
-// the peer's SYN walks through the fresh mapping.
-func simultaneousDial(localPort int, remoteHost string, remotePort int) (net.Conn, error) {
-	return simultaneousDialAt(localPort, remoteHost, remotePort, time.Now())
-}
-
 // simultaneousDialAt is simultaneousDial with an agreed rendezvous
 // instant: binds immediately, then holds until `at` before connecting,
 // so both ends' SYNs overlap even across clock skew and scheduling
@@ -90,19 +81,6 @@ func (pm *PeerMesh) punchPut(peer string, p pendingPunch) {
 		pm.punchPending = make(map[string]pendingPunch)
 	}
 	pm.punchPending[peer] = p
-}
-
-func (pm *PeerMesh) punchGet(peer string) (pendingPunch, bool) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	p, ok := pm.punchPending[peer]
-	return p, ok
-}
-
-func (pm *PeerMesh) punchDel(peer string) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	delete(pm.punchPending, peer)
 }
 
 func punchEnabled() bool {

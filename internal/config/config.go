@@ -164,8 +164,6 @@ type Config struct {
 	} `mapstructure:"punch"`
 }
 
-var cfg *Config
-
 func Load(configPath string) (*Config, error) {
 	v := viper.New()
 	v.SetConfigName("hivemind")
@@ -204,7 +202,6 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("config validation error: %w", err)
 	}
 
-	cfg = &c
 	return &c, nil
 }
 

@@ -81,7 +81,6 @@ type RelayClient struct {
 	url              string
 	config           RelayConfig
 	httpClient       *http.Client
-	sequence         uint64
 	lastHealthCheck  time.Time
 	healthy          bool
 	consecutiveFails int
@@ -261,11 +260,10 @@ func (rc *RelayClient) verifyMessage(data string) (*RelayMessage, error) {
 
 	// Verify HMAC
 	if len(rc.config.HMACKey) > 0 && msg.HMAC != "" {
-		mac := hmac.New(sha256.New, rc.config.HMACKey)
 		msgCopy := msg
 		msgCopy.HMAC = ""
 		data, _ := json.Marshal(msgCopy)
-		mac = hmac.New(sha256.New, rc.config.HMACKey)
+		mac := hmac.New(sha256.New, rc.config.HMACKey)
 		mac.Write(data)
 		expected := hex.EncodeToString(mac.Sum(nil))
 		if !hmac.Equal([]byte(msg.HMAC), []byte(expected)) {
@@ -361,10 +359,8 @@ type MultiRelay struct {
 	current      int
 	sequence     uint64
 	pending      map[uint64]*PendingMessage
-	pendingMu    sync.Mutex
 	stopChan     chan struct{}
 	healthTicker *time.Ticker
-	failoverChan chan struct{}
 }
 
 type PendingMessage struct {
@@ -416,6 +412,7 @@ func (mr *MultiRelay) Post(ctx context.Context, msg *RelayMessage) error {
 
 	// Set sequence for ordering
 	msg.Sequence = atomic.AddUint64(&mr.sequence, 1)
+	msg.Timestamp = time.Now().Unix()
 	msg.Timestamp = time.Now().Unix()
 
 	// Try current client

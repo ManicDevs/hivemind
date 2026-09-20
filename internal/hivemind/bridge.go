@@ -53,8 +53,7 @@ type Bridge struct {
 	connected       bool
 	stopChan        chan struct{}
 	mu              sync.RWMutex
-	pendingCalls    map[string]chan *BridgeResponse
-	callID          uint64
+	pendingCalls map[string]chan *BridgeResponse
 	heartbeatTicker *time.Ticker
 	reconnectTicker *time.Ticker
 }

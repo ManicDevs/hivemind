@@ -1,16 +1,12 @@
 package persistence
 
 import (
-	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
-
-	"golang.org/x/crypto/argon2"
 
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 )
@@ -633,57 +629,4 @@ func (pm *PersistenceManager) DeleteWASMModule(name string) error {
 	}
 	pm.dirty = true
 	return nil
-}
-
-// =============================================================================
-// Key Derivation for Encryption
-// =============================================================================
-
-func deriveKey(passphrase string, salt []byte) ([]byte, error) {
-	key := argon2.IDKey([]byte(passphrase), salt, 1, 64*1024, 4, 32)
-	return key, nil
-}
-
-func encryptData(data []byte, passphrase string) ([]byte, error) {
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, err
-	}
-
-	key, err := deriveKey(passphrase, salt)
-	if err != nil {
-		return nil, err
-	}
-
-	// Simple XOR encryption for now (in production use AES-GCM)
-	encrypted := make([]byte, len(data))
-	for i := range data {
-		encrypted[i] = data[i] ^ key[i%len(key)]
-	}
-
-	result := make([]byte, len(salt)+len(encrypted))
-	copy(result[:len(salt)], salt)
-	copy(result[len(salt):], encrypted)
-	return result, nil
-}
-
-func decryptData(data []byte, passphrase string) ([]byte, error) {
-	if len(data) < 16 {
-		return nil, errors.New("data too short")
-	}
-
-	salt := data[:16]
-	encrypted := data[16:]
-
-	key, err := deriveKey(passphrase, salt)
-	if err != nil {
-		return nil, err
-	}
-
-	decrypted := make([]byte, len(encrypted))
-	for i := range encrypted {
-		decrypted[i] = encrypted[i] ^ key[i%len(key)]
-	}
-
-	return decrypted, nil
 }

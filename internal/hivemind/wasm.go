@@ -45,7 +45,6 @@ func DefaultWASMConfig() WASMConfig {
 }
 
 type compiledModule struct {
-	module   api.Module
 	compiled wazero.CompiledModule
 	data     []byte // raw bytes, kept so modules survive restarts
 }

@@ -68,12 +68,6 @@ func hourEpoch(t time.Time) int64 {
 	return int64(t.UTC().Sub(keyEpochAnchor).Hours())
 }
 
-// dayEpoch counts whole UTC days since the anchor: the TOTD root. One
-// root per day bounds every compromise to 24 hours of mesh thought.
-func dayEpoch(t time.Time) int64 {
-	return hourEpoch(t) / 24
-}
-
 // hourAAD binds a frame to its day and hour: replays from other hours
 // fail authentication even under a valid key. Time as tamper-evidence.
 func hourAAD(hour int64) string {
@@ -577,20 +571,10 @@ func (pm *PeerMesh) LinkedPeers() int {
 	return len(pm.conns)
 }
 
-// hasHistory reports whether a peer ever carried a decoded frame.
-// hasSuper reports whether a node sits in the supernode directory.
-// Locked readers for paths (tests, reporters) outside the serve loops.
 func (pm *PeerMesh) hasHistory(peer string) bool {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	return pm.history[peer]
-}
-
-func (pm *PeerMesh) hasSuper(node string) bool {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	_, ok := pm.supers[node]
-	return ok
 }
 
 // ── frame routing ──

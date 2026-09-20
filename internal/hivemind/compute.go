@@ -12,8 +12,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var tracer = otel.Tracer("hivemind/compute")
-
 type ComputeConfig struct {
 	MaxCPUPercent      float64
 	MaxMemoryMB        int
@@ -37,7 +35,6 @@ func DefaultComputeConfig() ComputeConfig {
 }
 
 type ComputeEngine struct {
-	mu           sync.RWMutex
 	config       ComputeConfig
 	mind         *Mind
 	quota        *ResourceQuota
@@ -53,10 +50,8 @@ func NewComputeEngine(mind *Mind, config ComputeConfig) *ComputeEngine {
 		mind:     mind,
 		quota:    NewResourceQuota(config.MaxCPUPercent, config.MaxMemoryMB),
 		stopChan: make(chan struct{}),
-	}
-
-	if config.EnableTracing {
-		ce.tracer = otel.Tracer("hivemind/compute")
+		// Fallback to a global/noop tracer if tracing is disabled to prevent nil panics
+		tracer:   otel.Tracer("hivemind/compute"), 
 	}
 
 	ce.checkpointer = NewCheckpointer(mind, config.CheckpointInterval)
@@ -131,11 +126,8 @@ type ResourceQuota struct {
 	mu           sync.Mutex
 	maxCPU       float64
 	maxMemory    int64
-	currentCPU   float64
-	currentMem   int64
 	availableCPU float64
 	availableMem int64
-	waiters      []chan struct{}
 }
 
 func NewResourceQuota(maxCPUPercent float64, maxMemoryMB int) *ResourceQuota {
@@ -170,10 +162,9 @@ func (rq *ResourceQuota) Release() {
 }
 
 type Checkpointer struct {
-	mind       *Mind
-	interval   int
-	cycleCount int
-	stopChan   chan struct{}
+	mind     *Mind
+	interval int
+	stopChan chan struct{}
 }
 
 func NewCheckpointer(mind *Mind, interval int) *Checkpointer {

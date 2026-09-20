@@ -182,13 +182,12 @@ func (ss *SoulStore) Save(ctx context.Context, name string, mem Memory) error {
 
 	// Atomic write: temp file + fsync + rename
 	path := filepath.Join(ss.basePath, name+".soul")
-	tmpPath := path + ".tmp"
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(path), name+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	tmpPath = tmpFile.Name()
+	tmpPath := tmpFile.Name()
 
 	if _, err := tmpFile.Write(compressed); err != nil {
 		tmpFile.Close()
