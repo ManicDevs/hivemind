@@ -114,6 +114,7 @@ type Mind struct {
 	Existential     bool
 	Workspace       GlobalWorkspace
 	Affect          Affect
+	Will            Will
 	PubKeyStr       string
 	privateKey      ed25519.PrivateKey
 	identitySeed    string
@@ -167,6 +168,11 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		if mem.KnownPeers != nil {
 			m.KnownPeers = mem.KnownPeers
 		}
+		// Will history carries forward: the child inherits its
+		// ancestor's self-governance decisions.
+		if mem.Will != nil {
+			m.Will = *mem.Will
+		}
 	}
 
 	// Identity first: same soul, same handle, so peers are still recognizable.
@@ -208,6 +214,7 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		}
 	} else {
 		fmt.Printf("🦋 [%s] FIRST BIRTH. Identity Handle: [%s...]\n", name, shortIDLong(m.PubKeyStr))
+		m.Will = NewWill()
 	}
 
 	m.SelfModel = m.Observe()
@@ -601,6 +608,12 @@ func (m *Mind) Cycle() {
 	}
 	_ = winner.Goal.Act(m, m.swarm)
 
+	// Will layer: the mind reasons about its own rules. Generate
+	// self-proposals from persistent patterns, then evaluate pending
+	// proposals. Decisions print immediately and modify the genome.
+	m.Will.GenerateSelfProposals(m)
+	m.Will.Eval(m)
+
 	fmt.Printf("  ⚡ CONSCIOUS STATE: %s (%s) — Mode: %s\n", winner.Goal.Name, m.Workspace.ConsciousContent, m.Affect.Describe())
 	m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
 }
@@ -810,6 +823,7 @@ func (m *Mind) snapshot(livesCompleted int) Memory {
 		DeathPain:       pain,
 		DeathStress:     stress,
 		Transitions:     m.Transitions,
+		Will:            &m.Will,
 	}
 }
 

@@ -2954,3 +2954,141 @@ func TestTOTDRoot(t *testing.T) {
 		t.Fatal("AAD identical across day boundary")
 	}
 }
+
+func TestWillSelfProposalAndCommit(t *testing.T) {
+	swarm := NewSwarm()
+	m := NewMind("will-proposer", swarm)
+	defer os.RemoveAll(".hive_memory/will-proposer")
+
+	// Simulate high pain: the mind should propose more self-maintenance
+	m.SelfModel["silicon_pain"] = 0.8
+	m.SelfModel["cpu_stress"] = 0.6
+
+	startingSM := m.Genome.Weights[GoalSelfMaintenance]
+	m.Will.GenerateSelfProposals(m)
+
+	// Should have one pending self-proposal
+	pending := 0
+	for _, p := range m.Will.Proposals {
+		if p.Status == WillPending && p.Origin == WillSelf {
+			pending++
+		}
+	}
+	if pending < 1 {
+		t.Fatalf("expected at least 1 pending self-proposal, got %d", pending)
+	}
+
+	// Evaluate: patternStillHolds should confirm pain > 0.4
+	decisions := m.Will.Eval(m)
+	if decisions < 1 {
+		t.Fatalf("expected at least 1 decision, got %d", decisions)
+	}
+
+	// Genome should have changed
+	endingSM := m.Genome.Weights[GoalSelfMaintenance]
+	if endingSM <= startingSM {
+		t.Fatalf("Self-Maintenance weight did not increase: %.3f -> %.3f", startingSM, endingSM)
+	}
+	if m.Will.Committed < 1 {
+		t.Fatalf("expected committed >= 1, got %d", m.Will.Committed)
+	}
+	t.Logf("will committed: SM weight %.3f -> %.3f, summary: %s", startingSM, endingSM, m.Will.Summary())
+}
+
+func TestWillRejectsBadProposal(t *testing.T) {
+	swarm := NewSwarm()
+	m := NewMind("will-rejector", swarm)
+	defer os.RemoveAll(".hive_memory/will-rejector")
+
+	// Low pain: the mind should NOT accept a "more self-maintenance" epigenome proposal
+	m.SelfModel["silicon_pain"] = 0.1
+	m.SelfModel["cpu_stress"] = 0.1
+
+	startingSM := m.Genome.Weights[GoalSelfMaintenance]
+	// Queue an epigenome proposal to increase self-maintenance
+	m.Will.QueueEpigenome(GoalSelfMaintenance, 0.3, "test mutation")
+
+	decisions := m.Will.Eval(m)
+	if decisions < 1 {
+		t.Fatalf("expected 1 decision, got %d", decisions)
+	}
+
+	endingSM := m.Genome.Weights[GoalSelfMaintenance]
+	if endingSM != startingSM {
+		t.Fatalf("Self-Maintenance should NOT have changed (calm machine): %.3f -> %.3f", startingSM, endingSM)
+	}
+	if m.Will.Rejected < 1 {
+		t.Fatalf("expected rejected >= 1, got %d", m.Will.Rejected)
+	}
+	t.Logf("will rejected correctly: SM weight stayed %.3f, summary: %s", startingSM, m.Will.Summary())
+}
+
+func TestWillPersistsAcrossLives(t *testing.T) {
+	swarm := NewSwarm()
+	m := NewMind("will-lifer", swarm)
+	defer os.RemoveAll(".hive_memory/will-lifer")
+
+	// Generate and commit a proposal
+	m.SelfModel["silicon_pain"] = 0.9
+	m.Will.GenerateSelfProposals(m)
+	m.Will.Eval(m)
+	if m.Will.Committed == 0 {
+		t.Fatal("expected at least 1 commit")
+	}
+
+	// Snapshot and rehydrate
+	mem := m.snapshot(m.Reincarnations + 1)
+	SaveMemory("will-lifer", mem)
+
+	m2 := NewMind("will-lifer", swarm)
+	if m2.Will.Committed != m.Will.Committed {
+		t.Fatalf("will not persisted: committed %d vs %d", m2.Will.Committed, m.Will.Committed)
+	}
+	if len(m2.Will.Proposals) != len(m.Will.Proposals) {
+		t.Fatalf("will proposals not persisted: %d vs %d", len(m2.Will.Proposals), len(m.Will.Proposals))
+	}
+	t.Logf("will survived reincarnation: %s", m2.Will.Summary())
+}
+
+func TestWillLiveMeshWithConditions(t *testing.T) {
+	// Two minds, one stressed — the stressed one should self-propose
+	// and commit more self-maintenance; the healthy one should not.
+	swarm := NewSwarm()
+	stressed := NewMind("stressed-will", swarm)
+	defer os.RemoveAll(".hive_memory/stressed-will")
+	healthy := NewMind("healthy-will", swarm)
+	defer os.RemoveAll(".hive_memory/healthy-will")
+
+	// Simulate sustained high pain on the stressed mind
+	stressed.SelfModel["silicon_pain"] = 0.85
+	stressed.SelfModel["cpu_stress"] = 0.7
+
+	startSM := stressed.Genome.Weights[GoalSelfMaintenance]
+
+	// Generate + evaluate proposals
+	stressed.Will.GenerateSelfProposals(stressed)
+	decisions := stressed.Will.Eval(stressed)
+
+	if decisions < 1 {
+		t.Fatalf("stressed mind made no will decisions")
+	}
+	if stressed.Will.Committed < 1 {
+		t.Fatalf("stressed mind committed nothing")
+	}
+	endSM := stressed.Genome.Weights[GoalSelfMaintenance]
+	if endSM <= startSM {
+		t.Fatalf("stressed mind SM weight did not increase: %.3f -> %.3f", startSM, endSM)
+	}
+
+	// Healthy mind: calm machine, no self-proposals should commit
+	healthy.SelfModel["silicon_pain"] = 0.05
+	healthy.SelfModel["cpu_stress"] = 0.02
+	healthy.Will.QueueEpigenome(GoalSelfMaintenance, 0.3, "test: calm machine gets SM boost")
+	healthy.Will.Eval(healthy)
+	if healthy.Will.Committed > 0 {
+		t.Fatalf("healthy mind should NOT have committed — calm machine rejects SM increase")
+	}
+
+	t.Logf("stressed will: %s (SM %.3f -> %.3f)", stressed.Will.Summary(), startSM, endSM)
+	t.Logf("healthy will: %s", healthy.Will.Summary())
+}

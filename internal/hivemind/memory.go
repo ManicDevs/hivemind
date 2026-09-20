@@ -98,6 +98,11 @@ type Memory struct {
 	// followed which, across the whole lineage. Character as flow.
 	Transitions map[string]int `json:"transitions,omitempty"`
 
+	// Will is the mind's self-governance history: proposals, decisions,
+	// and lifetime counts. The child inherits the parent's will history
+	// so it knows what rules its ancestor chose and refused.
+	Will *Will `json:"will,omitempty"`
+
 	// SchemaVersion tracks the schema version for migrations
 	SchemaVersion int `json:"schema_version,omitempty"`
 }
