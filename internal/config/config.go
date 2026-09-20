@@ -231,11 +231,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("mesh.max_retries", 3)
 
 	v.SetDefault("relay.enabled", true)
-	v.SetDefault("relay.url", "https://ntfy.sh/cerberus-hive-relay-99")
-	v.SetDefault("relay.topic", "cerberus-hive-relay-99")
+	v.SetDefault("relay.url", "")
+	v.SetDefault("relay.topic", "hive-relay")
 	v.SetDefault("relay.interval", "5s")
 	v.SetDefault("relay.backoff_max", "5m")
 	v.SetDefault("relay.timeout", "10s")
+	v.SetDefault("relay.mqtt_enabled", true)
+	v.SetDefault("relay.mqtt_broker", "tcp://broker.hivemq.com:1883")
 
 	v.SetDefault("storage.path", ".hive_blobs")
 	v.SetDefault("storage.max_blob_size", 100*1024*1024)
@@ -259,12 +261,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("compute.hot_reload_interval", "30s")
 
 	v.SetDefault("relay.enabled", true)
-	v.SetDefault("relay.url", "https://ntfy.sh/cerberus-hive-relay-99")
-	v.SetDefault("relay.topic", "cerberus-hive-relay-99")
+	v.SetDefault("relay.url", "")
+	v.SetDefault("relay.topic", "hive-relay")
 	v.SetDefault("relay.cipher_key", "")
 	v.SetDefault("relay.interval", "5s")
 	v.SetDefault("relay.backoff_max", "5m")
 	v.SetDefault("relay.timeout", "10s")
+	v.SetDefault("relay.mqtt_enabled", true)
+	v.SetDefault("relay.mqtt_broker", "tcp://broker.hivemq.com:1883")
 
 	v.SetDefault("storage.path", ".hive_blobs")
 	v.SetDefault("storage.max_blob_size", 100*1024*1024)

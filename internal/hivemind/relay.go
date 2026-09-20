@@ -46,7 +46,7 @@ type RelayConfig struct {
 
 func DefaultRelayConfig() RelayConfig {
 	return RelayConfig{
-		PrimaryURL:          "https://ntfy.sh/cerberus-hive-relay-99",
+		PrimaryURL:          "",
 		FallbackURLs:        []string{},
 		AuthToken:           "",
 		HMACKey:             nil,
@@ -202,22 +202,22 @@ func (rc *RelayClient) LongPoll(ctx context.Context, handler func(*RelayMessage)
 func (rc *RelayClient) consumeStream(body io.Reader, handler func(*RelayMessage) error) error {
 	scanner := bufio.NewScanner(body)
 	for scanner.Scan() {
-		var ntfyMsg map[string]interface{}
-		if err := json.Unmarshal(scanner.Bytes(), &ntfyMsg); err != nil {
+		var relayMsg map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &relayMsg); err != nil {
 			continue
 		}
 
-		event, _ := ntfyMsg["event"].(string)
+		event, _ := relayMsg["event"].(string)
 		if event != "message" {
 			continue
 		}
 
-		title, _ := ntfyMsg["title"].(string)
+		title, _ := relayMsg["title"].(string)
 		if title != "ENCRYPTED_HIVE_FRAME" {
 			continue
 		}
 
-		message, _ := ntfyMsg["message"].(string)
+		message, _ := relayMsg["message"].(string)
 		if message == "" {
 			continue
 		}

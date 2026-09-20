@@ -33,19 +33,13 @@ const (
 	cloudPublishInterval = 5 * time.Second
 	// streamLifetime caps one relay long-poll: silent death recycles.
 	streamLifetime = 5 * time.Minute
-
-	NtfyRelay = "https://ntfy.sh/cerberus-hive-relay-99"
 )
 
-// relayURL is where frames publish and poll. HIVEMIND_RELAY_URL points
-// it at a private ntfy server (or a local fake for proof) — same topic
-// paths, same tagged frames, zero code change. Default: the public
-// ntfy.sh topic, where encryption is the only privacy.
 func relayURL() string {
 	if u := strings.TrimSpace(os.Getenv("HIVEMIND_RELAY_URL")); u != "" {
 		return strings.TrimSuffix(u, "/")
 	}
-	return NtfyRelay
+	return ""
 }
 
 // cipherKey returns the AES-256 key for encrypting outbound frames:
@@ -841,7 +835,7 @@ func (pm *PeerMesh) ListenToCloudRelay() {
 
 		// One stream lives at most streamLifetime: a quietly dead
 		// connection (NAT timeout, silent topic) must never hold the
-		// listener hostage. Reconnect replays ntfy's recent cache, and
+		// listener hostage. Reconnect replays relay's recent cache, and
 		// the seen-set dedups anything already carried.
 		ctx, cancel := context.WithTimeout(pm.cloudCtx, streamLifetime)
 		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

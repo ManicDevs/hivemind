@@ -1541,7 +1541,7 @@ func TestRelayURLOverride(t *testing.T) {
 	}()
 
 	os.Unsetenv("HIVEMIND_RELAY_URL")
-	if relayURL() != NtfyRelay {
+	if relayURL() != "" {
 		t.Fatalf("default relay changed: %q", relayURL())
 	}
 	os.Setenv("HIVEMIND_RELAY_URL", "http://127.0.0.1:9999/topic/")

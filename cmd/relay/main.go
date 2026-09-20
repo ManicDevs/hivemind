@@ -15,13 +15,13 @@ import (
 )
 
 // ── hivemind relay: our own message bus ──────────────────────────────
-// Drop-in replacement for ntfy.sh: same API, zero limits, our hardware.
+// Our own message bus: same API as ntfy.sh, zero limits, our hardware.
 // POST a ciphertext blob, GET /json streams it to subscribers.
 // No auth, no quota, no third-party dependency.
 //
 // Optional MQTT bridge: when RELAY_MQTT is set, every message also
 // publishes to a public MQTT broker (no account, no daily quota).
-// This gives cross-WAN failover without relying on ntfy.sh.
+// This gives cross-WAN failover without any third-party relay.
 
 type message struct {
 	ID        string `json:"id"`
