@@ -258,6 +258,7 @@ pain: build
 prove: build
 	@mkdir -p $(LOG_DIR)
 	@PROOF=$(LOG_DIR)/proof-$$(date -u +%Y%m%dT%H%M%SZ).log; \
+	set -o pipefail; \
 	echo "===== PROOF RUN $$(date -u) · $$(git rev-parse --short HEAD 2>/dev/null || echo nogit) =====" | tee "$$PROOF"; \
 	./scripts/audit.sh 2>&1 | tee -a "$$PROOF" && \
 	timeout 120 ./scripts/timed_test.sh 2>&1 | tee -a "$$PROOF" && \

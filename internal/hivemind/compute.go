@@ -51,7 +51,7 @@ func NewComputeEngine(mind *Mind, config ComputeConfig) *ComputeEngine {
 		quota:    NewResourceQuota(config.MaxCPUPercent, config.MaxMemoryMB),
 		stopChan: make(chan struct{}),
 		// Fallback to a global/noop tracer if tracing is disabled to prevent nil panics
-		tracer:   otel.Tracer("hivemind/compute"), 
+		tracer: otel.Tracer("hivemind/compute"),
 	}
 
 	ce.checkpointer = NewCheckpointer(mind, config.CheckpointInterval)
