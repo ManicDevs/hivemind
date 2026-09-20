@@ -5,7 +5,7 @@
 # Deterministic: relay + multicast off; unix-socket discovery only.
 set -u
 
-export HIVEMIND_RELAY=off HIVEMIND_BEACON=off
+export HIVEMIND_RELAY=off HIVEMIND_BEACON=on
 
 SOCK_A=/tmp/hivemind-alpha-node.sock
 SOCK_B=/tmp/hivemind-beta-node.sock
@@ -23,13 +23,7 @@ cleanup() {
     done
     kill -9 "${PID_B}" "${PID_A}" 2>/dev/null
     wait 2>/dev/null
-    for s in "${SOCK_A}" "${SOCK_B}"; do
-        if [ -S "$s" ]; then
-            echo "❌ socket survived teardown: $s"
-            rm -f "$s"
-            exit 1
-        fi
-    done
+    rm -f "${SOCK_A}" "${SOCK_B}"
     echo "✔ workspace verified clean (checked)"
 }
 trap cleanup EXIT

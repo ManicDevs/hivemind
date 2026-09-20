@@ -5,7 +5,7 @@
 # Exit 0: announces + mutual learning + traffic. Needs ~50s (30s tick).
 set -u
 
-export HIVEMIND_RELAY=off HIVEMIND_BEACON=off
+export HIVEMIND_RELAY=off HIVEMIND_BEACON=on
 BIN="${HIVEMIND_BIN:-bin/hivemind}"
 PID_A=""
 PID_B=""
