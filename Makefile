@@ -36,7 +36,7 @@ LOG_DIR := logs
 
 all: setup
 
-setup: build-all audit test prove proof-keys
+setup: build-all audit test prove proof-keys prove-relay
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
 	@echo "║  ✅ FULL SETUP COMPLETE — 6 binaries + all proofs            ║"
@@ -262,25 +262,6 @@ prove: build
 	./scripts/pain.sh 2>&1 | tee -a "$$PROOF" && \
 	bash scripts/proof-keys.sh 2>&1 | tee -a "$$PROOF" && \
 	echo "✅ PROOF COMPLETE — transcript: $$PROOF" | tee -a "$$PROOF"
-
-# ── Relay + MQTT live test ──
-prove-relay: build
-	@echo "🧪 Full relay + MQTT live test..."
-	@bin/relay > /tmp/relay-prove.log 2>&1 & \
-	RPID=$$!; sleep 2; \
-	HIVEMIND_RELAY_URL="http://127.0.0.1:8080/hive-relay" HIVEMIND_TICK_MS=500 bin/hivemind -mode peer -node relay-test-1 > /tmp/rt1.log 2>&1 & \
-	P1=$$!; sleep 3; \
-	HIVEMIND_RELAY_URL="http://127.0.0.1:8080/hive-relay" HIVEMIND_TICK_MS=500 bin/hivemind -mode peer -node relay-test-2 > /tmp/rt2.log 2>&1 & \
-	P2=$$!; sleep 15; \
-	INBOUND=$$(grep -c "SECURE CLOUD INBOUND" /tmp/rt1.log /tmp/rt2.log 2>/dev/null | awk -F: '{s+=$2} END {print s+0}'); \
-	MQTT_OK=$$(grep -c "Auto-connected" /tmp/relay-prove.log 2>/dev/null); \
-	echo "=== RELAY + MQTT RESULTS ==="; \
-	echo "  MQTT broker connected: $$MQTT_OK"; \
-	echo "  Nodes received frames: $$INBOUND"; \
-	kill $$P1 $$P2 $$RPID 2>/dev/null; sleep 1; \
-	kill -9 $$P1 $$P2 $$RPID 2>/dev/null; wait 2>/dev/null; \
-	rm -f /tmp/hivemind-relay-test-*.sock; \
-	echo "✅ Relay + MQTT live test complete"
 
 # ── Proofs ──
 proof-keys: build
