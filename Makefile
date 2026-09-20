@@ -36,7 +36,11 @@ LOG_DIR := logs
 
 all: setup
 
-setup: build-all audit test prove proof-keys prove-relay
+setup: build-all
+	@echo "📦 Pulling latest changes..."
+	@git pull origin main 2>/dev/null || echo "⚠️  git pull skipped (not a git repo)"
+	@echo "🔧 Running full proof suite..."
+	@make audit && make test && make prove && make proof-keys && make prove-relay
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
 	@echo "║  ✅ FULL SETUP COMPLETE — 6 binaries + all proofs            ║"
@@ -257,7 +261,7 @@ prove: build
 	@PROOF=$(LOG_DIR)/proof-$$(date -u +%Y%m%dT%H%M%SZ).log; \
 	echo "===== PROOF RUN $$(date -u) · $$(git rev-parse --short HEAD 2>/dev/null || echo nogit) =====" | tee "$$PROOF"; \
 	./scripts/audit.sh 2>&1 | tee -a "$$PROOF" && \
-	./scripts/timed_test.sh 2>&1 | tee -a "$$PROOF" && \
+	timeout 120 ./scripts/timed_test.sh 2>&1 | tee -a "$$PROOF" && \
 	./scripts/verify-supermesh.sh 2>&1 | tee -a "$$PROOF" && \
 	./scripts/pain.sh 2>&1 | tee -a "$$PROOF" && \
 	bash scripts/proof-keys.sh 2>&1 | tee -a "$$PROOF" && \
