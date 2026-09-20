@@ -170,7 +170,7 @@ vet:
 	@echo "✅ Vet clean"
 
 staticcheck:
-	@which staticcheck >/dev/null 2>&1 && staticcheck ./... && echo "✅ staticcheck clean" || echo "⚠️  staticcheck not installed"
+	@/home/cerberus/go/bin/staticcheck ./... && echo "✅ staticcheck clean" || echo "⚠️  staticcheck failed (check Go version)"
 
 lint: fmt vet staticcheck
 
