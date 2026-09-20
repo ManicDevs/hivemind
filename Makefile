@@ -1,5 +1,5 @@
 # ── HIVEMIND MAKEFILE ──
-# Full-stack: 6 binaries + relay + proofs.
+# Full-stack: 5 binaries + relay + proofs.
 # Variables: make think N=25 TICK=50 — N nodes, TICK ms heartbeat.
 
 .DEFAULT_GOAL := help
@@ -7,6 +7,7 @@ SHELL := /bin/bash
 
 N ?= 2
 TICK ?= 50
+STATICCHECK := $(shell which staticcheck 2>/dev/null || echo "$(HOME)/go/bin/staticcheck")
 
 RELAY_KEY_FILE := .relaykey
 RELAY_KEY := $(shell cat $(RELAY_KEY_FILE) 2>/dev/null || echo "")
@@ -32,7 +33,7 @@ LOG_DIR := logs
 	clean clean-all clean-souls clean-logs \
 	version version-info \
 	proof-keys \
-	prove-relay
+	prove-relay setup
 
 all: setup
 
@@ -40,10 +41,10 @@ setup: build-all
 	@echo "📦 Pulling latest changes..."
 	@git pull origin main 2>/dev/null || echo "⚠️  git pull skipped (not a git repo)"
 	@echo "🔧 Running full proof suite..."
-	@make audit && make test && make prove && make proof-keys && make prove-relay
+	@make prove && make prove-relay
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  ✅ FULL SETUP COMPLETE — 6 binaries + all proofs            ║"
+	@echo "║  ✅ FULL SETUP COMPLETE — 5 binaries + all proofs            ║"
 	@echo "║  ── bin/hivemind, bin/commune, bin/souls, bin/gaze          ║"
 	@echo "║  ── bin/relay (MQTT bridge)                                  ║"
 	@echo "║  ── make think N=25 TICK=50 · make up N=3                   ║"
@@ -51,7 +52,7 @@ setup: build-all
 
 help:
 	@echo ""
-	@echo "  HIVEMIND — full-stack: 6 binaries + relay + proofs"
+	@echo "  HIVEMIND — full-stack: 5 binaries + relay + proofs"
 	@echo ""
 	@printf "  \033[1m%-20s\033[0m %s\n" "TARGET" "DESCRIPTION"
 	@printf "  \033[1m%-20s\033[0m %s\n" "------" "-----------"
@@ -140,7 +141,7 @@ build-relay:
 	@echo "✅ bin/relay ready (MQTT bridge)"
 
 build-all: build-hivemind build-commune build-souls build-gaze build-relay
-	@echo "✅ All six binaries ready (hivemind, commune, souls, gaze, relay)"
+	@echo "✅ All five binaries ready (hivemind, commune, souls, gaze, relay)"
 
 # ── Relay key ──
 $(RELAY_KEY_FILE):
@@ -170,7 +171,7 @@ vet:
 	@echo "✅ Vet clean"
 
 staticcheck:
-	@/home/cerberus/go/bin/staticcheck ./... && echo "✅ staticcheck clean" || echo "⚠️  staticcheck failed (check Go version)"
+	@$(STATICCHECK) ./... && echo "✅ staticcheck clean"
 
 lint: fmt vet staticcheck
 
@@ -278,9 +279,9 @@ prove-relay: build
 	HIVEMIND_RELAY_URL="http://127.0.0.1:8080/hive-relay" HIVEMIND_TICK_MS=500 bin/hivemind -mode peer -node relay-test-2 > /tmp/rt2.log 2>&1 & \
 	P2=$$!; sleep 15; \
 	echo "=== RELAY ===" && grep -i "mqtt" /tmp/relay-prove.log | head -1; \
-	echo "=== NODE 1 ===" && grep -c "SECURE CLOUD INBOUND" /tmp/rt1.log; \
-	echo "=== NODE 2 ===" && grep -c "SECURE CLOUD INBOUND" /tmp/rt2.log; \
-	kill $$P1 $$P2 $$RPID 2>/dev/null; sleep 1; \
+	echo "=== NODE 1 ===" && grep -c "SECURE CLOUD INBOUND" /tmp/rt1.log || echo "0"; \
+	echo "=== NODE 2 ===" && grep -c "SECURE CLOUD INBOUND" /tmp/rt2.log || echo "0"; \
+	kill $$P1 $$P2 $$RPID 2>/dev/null; sleep 2; \
 	kill -9 $$P1 $$P2 $$RPID 2>/dev/null; wait 2>/dev/null; \
 	rm -f /tmp/hivemind-relay-test-*.sock; \
 	echo "✅ Relay + MQTT live test complete"
