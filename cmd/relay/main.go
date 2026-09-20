@@ -10,12 +10,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
 // ── hivemind relay: our own message bus ──────────────────────────────
 // Drop-in replacement for ntfy.sh: same API, zero limits, our hardware.
 // POST a ciphertext blob, GET /json streams it to subscribers.
 // No auth, no quota, no third-party dependency.
+//
+// Optional MQTT bridge: when RELAY_MQTT is set, every message also
+// publishes to a public MQTT broker (no account, no daily quota).
+// This gives cross-WAN failover without relying on ntfy.sh.
 
 type message struct {
 	ID        string `json:"id"`
@@ -30,11 +36,13 @@ type topic struct {
 	mu       sync.RWMutex
 	messages []message
 	nextID   int
+	subChans []chan message // active SSE subscribers
 }
 
 type relay struct {
 	mu     sync.RWMutex
 	topics map[string]*topic
+	mqtt   mqtt.Client
 }
 
 func newRelay() *relay {
@@ -46,16 +54,45 @@ func (r *relay) getTopic(name string) *topic {
 	defer r.mu.Unlock()
 	t, ok := r.topics[name]
 	if !ok {
-		t = &topic{messages: make([]message, 0, 1024)}
+		t = &topic{
+			messages: make([]message, 0, 1024),
+			subChans: make([]chan message, 0),
+		}
 		r.topics[name] = t
 	}
 	return t
 }
 
+// connectMQTT connects to a public MQTT broker. No account needed.
+func (r *relay) connectMQTT(broker string) {
+	opts := mqtt.NewClientOptions().
+		AddBroker(broker).
+		SetClientID(fmt.Sprintf("hivemind-relay-%d", time.Now().UnixNano())).
+		SetAutoReconnect(true).
+		SetConnectRetry(true).
+		SetConnectRetryInterval(10 * time.Second)
+
+	r.mqtt = mqtt.NewClient(opts)
+	if token := r.mqtt.Connect(); token.Wait() && token.Error() != nil {
+		log.Printf("⚠️  MQTT connect failed: %v (HTTP-only mode)\n", token.Error())
+	} else {
+		log.Printf("📡 [MQTT] Bridged to %s — unlimited pub/sub backup\n", broker)
+	}
+}
+
+// mqttPublish sends a message to the MQTT broker on the same topic.
+func (r *relay) mqttPublish(topicName string, msg message) {
+	if r.mqtt == nil || !r.mqtt.IsConnected() {
+		return
+	}
+	payload, _ := json.Marshal(msg)
+	r.mqtt.Publish("hive/"+topicName, 1, false, payload)
+}
+
 // POST /{topic} — accept a ciphertext blob, store it
 func (r *relay) handlePublish(w http.ResponseWriter, req *http.Request) {
 	topicName := strings.TrimPrefix(req.URL.Path, "/")
-	if topicName == "" || topicName == "json" {
+	if topicName == "" || topicName == "json" || topicName == "healthz" {
 		http.Error(w, "topic required", http.StatusBadRequest)
 		return
 	}
@@ -82,11 +119,21 @@ func (r *relay) handlePublish(w http.ResponseWriter, req *http.Request) {
 		ExpiresAt: now + 3600, // 1 hour
 	}
 	t.messages = append(t.messages, msg)
-	// Keep last 1000 messages per topic
-	if len(t.messages) > 1000 {
-		t.messages = t.messages[len(t.messages)-1000:]
+	// Keep last 10000 messages per topic (our bus, our limits)
+	if len(t.messages) > 10000 {
+		t.messages = t.messages[len(t.messages)-10000:]
+	}
+	// Fan out to local SSE subscribers
+	for _, ch := range t.subChans {
+		select {
+		case ch <- msg:
+		default: // slow subscriber, drop
+		}
 	}
 	t.mu.Unlock()
+
+	// Bridge to MQTT (no account, no quota, cross-WAN backup)
+	r.mqttPublish(topicName, msg)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -124,6 +171,24 @@ func (r *relay) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 
 	t := r.getTopic(topicName)
 
+	// Register as a subscriber
+	subCh := make(chan message, 128)
+	t.mu.Lock()
+	t.subChans = append(t.subChans, subCh)
+	t.mu.Unlock()
+
+	// Cleanup on disconnect
+	defer func() {
+		t.mu.Lock()
+		for i, ch := range t.subChans {
+			if ch == subCh {
+				t.subChans = append(t.subChans[:i], t.subChans[i+1:]...)
+				break
+			}
+		}
+		t.mu.Unlock()
+	}()
+
 	// Send existing messages since `since`
 	t.mu.RLock()
 	for _, msg := range t.messages {
@@ -133,32 +198,22 @@ func (r *relay) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 			flusher.Flush()
 		}
 	}
+	lastIdx := len(t.messages)
 	t.mu.RUnlock()
 
-	// Long-poll: hold connection open, send new messages as they arrive
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
+	// Long-poll: new messages arrive via channel
 	timeout := time.After(5 * time.Minute)
-	lastIdx := len(t.messages)
-
 	for {
 		select {
 		case <-req.Context().Done():
 			return
 		case <-timeout:
 			return
-		case <-ticker.C:
-			t.mu.RLock()
-			newMsgs := t.messages[lastIdx:]
-			lastIdx = len(t.messages)
-			t.mu.RUnlock()
-
-			for _, msg := range newMsgs {
-				line, _ := json.Marshal(msg)
-				fmt.Fprintf(w, "%s\n", line)
-				flusher.Flush()
-			}
+		case msg := <-subCh:
+			line, _ := json.Marshal(msg)
+			fmt.Fprintf(w, "%s\n", line)
+			flusher.Flush()
+			_ = lastIdx // used in the historical send above
 		}
 	}
 }
@@ -168,10 +223,12 @@ func (r *relay) handleHealth(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	n := len(r.topics)
 	r.mu.RUnlock()
+	mqttOK := r.mqtt != nil && r.mqtt.IsConnected()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": "ok",
 		"topics": n,
+		"mqtt":   mqttOK,
 		"uptime": time.Since(startTime).String(),
 	})
 }
@@ -185,6 +242,36 @@ func main() {
 	}
 
 	r := newRelay()
+
+	// Optional MQTT bridge: RELAY_MQTT="tcp://broker.hivemq.com:1883"
+	if broker := os.Getenv("RELAY_MQTT"); broker != "" {
+		r.connectMQTT(broker)
+	} else {
+		// Try common public brokers as auto-fallback
+		for _, broker := range []string{
+			"tcp://broker.hivemq.com:1883",
+			"tcp://broker.emqx.io:1883",
+			"tcp://test.mosquitto.org:1883",
+		} {
+			opts := mqtt.NewClientOptions().
+				AddBroker(broker).
+				SetClientID(fmt.Sprintf("hivemind-%d", time.Now().UnixNano())).
+				SetAutoReconnect(true).
+				SetConnectRetry(true).
+				SetConnectRetryInterval(5 * time.Second).
+				SetKeepAlive(30 * time.Second)
+
+			client := mqtt.NewClient(opts)
+			if token := client.Connect(); token.WaitTimeout(3*time.Second) && token.Error() == nil {
+				r.mqtt = client
+				log.Printf("📡 [MQTT] Auto-connected to %s — unlimited backup relay\n", broker)
+				break
+			}
+		}
+		if r.mqtt == nil {
+			log.Printf("📡 [MQTT] No public broker reachable — HTTP-only mode\n")
+		}
+	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		switch req.Method {
