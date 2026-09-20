@@ -2,10 +2,9 @@
 # ── HIVEMIND TIMED EXPERIMENT ORCHESTRATOR ──
 # Runs a 10s symmetric two-peer experiment and asserts the mesh worked.
 # Exit 0: both sockets came up, links formed, frames flowed, clean teardown.
-# Deterministic: relay + multicast off; unix-socket discovery only.
 set -u
 
-export HIVEMIND_RELAY=off HIVEMIND_BEACON=on
+export HIVEMIND_RELAY=off HIVEMIND_BEACON=off
 
 SOCK_A=/tmp/hivemind-alpha-node.sock
 SOCK_B=/tmp/hivemind-beta-node.sock
@@ -24,14 +23,13 @@ cleanup() {
     kill -9 "${PID_B}" "${PID_A}" 2>/dev/null
     wait 2>/dev/null
     rm -f "${SOCK_A}" "${SOCK_B}"
-    echo "✔ workspace verified clean (checked)"
 }
 trap cleanup EXIT
 
 mkdir -p logs
 rm -f logs/peer-a.log logs/peer-b.log "${SOCK_A}" "${SOCK_B}"
 
-echo "🚀 [TIMED EXPERIMENT] Spawning symmetric 10-second two-peer mesh..."
+echo "🚀 [TIMED EXPERIMENT] Spawning symmetric two-peer mesh..."
 
 ${HIVEMIND_BIN:-bin/hivemind} -mode peer -node alpha-node > logs/peer-a.log 2>&1 &
 PID_A=$!
@@ -46,14 +44,29 @@ echo "✔ alpha-node socket present (after ${W} poll intervals)"
 
 ${HIVEMIND_BIN:-bin/hivemind} -mode peer -node beta-node > logs/peer-b.log 2>&1 &
 PID_B=$!
-echo "🧠 Sampling telemetry and mesh traffic over a 10s window..."
 
+echo "⏳ Waiting for peer link to form..."
+LINKED=0
+for _ in $(seq 1 120); do
+    if grep -q "linked" logs/peer-a.log logs/peer-b.log 2>/dev/null; then
+        LINKED=1
+        break
+    fi
+    if ! kill -0 "${PID_A}" 2>/dev/null || ! kill -0 "${PID_B}" 2>/dev/null; then
+        echo "❌ a node died before linking"
+        exit 1
+    fi
+    sleep 0.5
+done
+
+if [ "$LINKED" -eq 0 ]; then
+    echo "⚠️  no link after 60s — continuing anyway (mesh may use indirect paths)"
+fi
+
+echo "🧠 Sampling telemetry and mesh traffic over a 10s window..."
 sleep 10
 
 kill -TERM "${PID_B}" "${PID_A}" 2>/dev/null
-# Graceful shutdown persists souls (Transcend ×3 + overmind + diagnostics
-# dump): on a hot box that legitimately takes a while. 15s grace, then
-# escalate to SIGKILL to avoid hanging the proof suite.
 for _ in $(seq 1 60); do
     if ! kill -0 "${PID_A}" 2>/dev/null && ! kill -0 "${PID_B}" 2>/dev/null; then
         break
@@ -110,4 +123,4 @@ if [ "$MESH_FAILED" -ne 0 ]; then
     echo "❌ [EXPERIMENT FAILED] Mesh assertions did not pass."
     exit 1
 fi
-echo "✨ [EXPERIMENT COMPLETE] All assertions passed. Workspace verified clean."
+echo "✨ [EXPERIMENT COMPLETE] All assertions passed."
