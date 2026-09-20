@@ -88,7 +88,7 @@ addresses. Environment knobs (all optional):
 | `HIVEMIND_BEACON=off` | disable multicast discovery (static/unix only) |
 | `HIVEMIND_UNIX=off` | disable unix sockets (TCP mesh only) |
 | `HIVEMIND_RELAY=off` | disable the cloud relay (pure serverless) |
-| `HIVEMIND_RELAY_URL` | point the relay at a private/fake ntfy server (default: public topic) |
+| `HIVEMIND_RELAY_URL` | point the relay at our bin/relay endpoint (default: no cloud relay) |
 | `HIVEMIND_CIPHER_KEY` | 32-byte relay encryption key (default: machine-local build-time key, else static demo key — public broadcast, not private) |
 | `HIVEMIND_ADVERTISE` | `host:port` this node asserts as publicly dialable (default: none, honest silence) |
 | `HIVEMIND_DHT=off` | disable the Kademlia discovery layer |

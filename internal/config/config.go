@@ -304,11 +304,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("wasm.module_paths", []string{})
 
 	v.SetDefault("relay.enabled", true)
-	v.SetDefault("relay.url", "https://ntfy.sh/cerberus-hive-relay-99")
-	v.SetDefault("relay.topic", "cerberus-hive-relay-99")
+	v.SetDefault("relay.url", "")
+	v.SetDefault("relay.topic", "hive-relay")
 	v.SetDefault("relay.interval", "5s")
 	v.SetDefault("relay.backoff_max", "5m")
 	v.SetDefault("relay.timeout", "10s")
+	v.SetDefault("relay.mqtt_enabled", true)
+	v.SetDefault("relay.mqtt_broker", "tcp://broker.hivemq.com:1883")
 
 	v.SetDefault("cron.enabled", true)
 	v.SetDefault("cron.timezone", "UTC")

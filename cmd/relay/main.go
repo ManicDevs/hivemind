@@ -15,7 +15,7 @@ import (
 )
 
 // ── hivemind relay: our own message bus ──────────────────────────────
-// Our own message bus: same API as ntfy.sh, zero limits, our hardware.
+// Our own message bus: compatible API, zero limits, our hardware.
 // POST a ciphertext blob, GET /json streams it to subscribers.
 // No auth, no quota, no third-party dependency.
 //

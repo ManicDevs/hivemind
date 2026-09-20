@@ -879,20 +879,20 @@ func (pm *PeerMesh) consumeRelayStream(ctx context.Context, resp *http.Response)
 		default:
 		}
 
-		var ntfyMsg map[string]interface{}
-		if err := json.Unmarshal(scanner.Bytes(), &ntfyMsg); err != nil {
+		var relayMsg map[string]interface{}
+		if err := json.Unmarshal(scanner.Bytes(), &relayMsg); err != nil {
 			continue
 		}
-		event, _ := ntfyMsg["event"].(string)
+		event, _ := relayMsg["event"].(string)
 		if event != "message" {
 			continue
 		}
-		title, _ := ntfyMsg["title"].(string)
+		title, _ := relayMsg["title"].(string)
 		if title != "ENCRYPTED_HIVE_FRAME" {
 			continue
 		}
 
-		encryptedBody, _ := ntfyMsg["message"].(string)
+		encryptedBody, _ := relayMsg["message"].(string)
 		decryptedBytes, err := pm.Decrypt(encryptedBody)
 		if err != nil {
 			// Undecryptable is normal for foreign traffic — but a

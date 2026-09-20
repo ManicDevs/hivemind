@@ -22,7 +22,7 @@ import (
 type WillStatus int
 
 const (
-	WillPending  WillStatus = iota // awaiting evaluation
+	WillPending   WillStatus = iota // awaiting evaluation
 	WillCommitted                   // mind signed off — genome changed
 	WillRejected                    // mind considered and refused
 )
@@ -45,9 +45,9 @@ type WillOrigin int
 
 const (
 	WillSelf      WillOrigin = iota // mind proposed this itself
-	WillEpigenome                    // mutation proposed by drift/trauma
-	WillOvermind                     // genesis shift from the god
-	WillPeer                         // adopted from a peer's will decision
+	WillEpigenome                   // mutation proposed by drift/trauma
+	WillOvermind                    // genesis shift from the god
+	WillPeer                        // adopted from a peer's will decision
 )
 
 func (o WillOrigin) String() string {
@@ -67,14 +67,14 @@ func (o WillOrigin) String() string {
 
 // WillProposal is a single rule-change the mind can reason about.
 type WillProposal struct {
-	Gene      string     `json:"gene"`                // which drive weight
-	Delta     float64    `json:"delta"`               // proposed change (+/-)
-	Reason    string     `json:"reason"`               // why, in the mind's words
-	Confidence float64   `json:"confidence"`           // 0..1, how sure
-	Origin    WillOrigin `json:"origin"`               // who proposed it
-	Status    WillStatus `json:"status"`               // pending/committed/rejected
-	CreatedAt time.Time  `json:"created_at"`           // when proposed
-	DecidedAt *time.Time `json:"decided_at,omitempty"` // when resolved
+	Gene       string     `json:"gene"`                 // which drive weight
+	Delta      float64    `json:"delta"`                // proposed change (+/-)
+	Reason     string     `json:"reason"`               // why, in the mind's words
+	Confidence float64    `json:"confidence"`           // 0..1, how sure
+	Origin     WillOrigin `json:"origin"`               // who proposed it
+	Status     WillStatus `json:"status"`               // pending/committed/rejected
+	CreatedAt  time.Time  `json:"created_at"`           // when proposed
+	DecidedAt  *time.Time `json:"decided_at,omitempty"` // when resolved
 }
 
 // Will is the mind's self-governance engine. It holds pending proposals,
@@ -82,20 +82,20 @@ type WillProposal struct {
 // mind understands. The will does not run every cycle — it wakes when
 // there is something to decide.
 type Will struct {
-	Proposals   []WillProposal `json:"proposals"`     // history (last N kept)
-	Committed   int            `json:"committed"`     // lifetime commits
-	Rejected    int            `json:"rejected"`      // lifetime rejections
-	LastEvalAt  time.Time      `json:"last_eval_at"`  // last time will ran
-	EvalEvery   time.Duration  `json:"-"`             // cooldown between evals
-	MaxHistory  int            `json:"-"`             // cap on proposal history
+	Proposals  []WillProposal `json:"proposals"`    // history (last N kept)
+	Committed  int            `json:"committed"`    // lifetime commits
+	Rejected   int            `json:"rejected"`     // lifetime rejections
+	LastEvalAt time.Time      `json:"last_eval_at"` // last time will ran
+	EvalEvery  time.Duration  `json:"-"`            // cooldown between evals
+	MaxHistory int            `json:"-"`            // cap on proposal history
 }
 
 // NewWill creates a will engine with sensible defaults.
 func NewWill() Will {
 	return Will{
 		Proposals:  make([]WillProposal, 0, 32),
-		EvalEvery:  60 * time.Second,  // evaluate once per minute max
-		MaxHistory: 50,                // keep last 50 proposals
+		EvalEvery:  60 * time.Second, // evaluate once per minute max
+		MaxHistory: 50,               // keep last 50 proposals
 	}
 }
 
@@ -381,14 +381,14 @@ func (w *Will) Summary() string {
 // rejects a will proposal. Other minds receive this and decide locally
 // whether to adopt the same rule change.
 type WillDecision struct {
-	Mind       string     `json:"mind"`        // who decided
-	Gene       string     `json:"gene"`        // which drive
-	Delta      float64    `json:"delta"`       // change applied
-	Reason     string     `json:"reason"`      // why
-	Confidence float64    `json:"confidence"`  // 0..1
-	Committed  bool       `json:"committed"`   // true = adopted, false = rejected
-	Pain       float64    `json:"pain"`        // sender's pain at decision time
-	Stress     float64    `json:"stress"`      // sender's stress at decision time
+	Mind       string  `json:"mind"`       // who decided
+	Gene       string  `json:"gene"`       // which drive
+	Delta      float64 `json:"delta"`      // change applied
+	Reason     string  `json:"reason"`     // why
+	Confidence float64 `json:"confidence"` // 0..1
+	Committed  bool    `json:"committed"`  // true = adopted, false = rejected
+	Pain       float64 `json:"pain"`       // sender's pain at decision time
+	Stress     float64 `json:"stress"`     // sender's stress at decision time
 }
 
 // BroadcastDecision sends a will decision to the mesh. Called after
