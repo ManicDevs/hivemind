@@ -391,6 +391,7 @@ func (pm *PeerMesh) snoopLoop(inbox chan SecureMessage) {
 					continue
 				}
 				pm.noteSuper(a.Node, a.Addr, a.Score, "mesh")
+				fmt.Printf("📎 [PEER MESH] Super %q learned (capability %.2f via mesh announce).\n", a.Node, a.Score)
 				pm.setSuperID(a.Node, dhtIDFromPubKey(msg.SenderPubKey).hex())
 				if a.DHT > 0 {
 					pm.dhtPingHost(a.Addr, a.DHT)
