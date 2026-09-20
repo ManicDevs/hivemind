@@ -72,13 +72,13 @@
   <line x1="300" y1="200" x2="345" y2="200" class="wire"/>
   <text x="298" y="220" class="lbl">tcp</text>
 
-  <!-- ntfy relay -->
+  <!-- our relay + MQTT -->
   <g>
     <rect x="30" y="330" width="900" height="110" class="relay"/>
-    <text x="45" y="358" class="title">ntfy.sh public relay — bulletin board, not a server</text>
+    <text x="45" y="358" class="title">hivemind relay (bin/relay) — our bus, zero limits, our hardware</text>
     <text x="45" y="382" class="body">POST AES-256-GCM frames (two-tier keys: daily TOTD root → hourly HMAC leaves)</text>
     <text x="45" y="404" class="body">day+hour auth tags kill cross-era replays · yesterday accepted thru boundary · backoff + key warnings</text>
-    <text x="45" y="424" class="lbl">https://ntfy.sh/cerberus-hive-relay-99 — anyone can read · only key-holders understand</text>
+    <text x="45" y="424" class="lbl">HIVEMIND_RELAY_URL=http://your-ip:8080/hive-relay — our bus, MQTT bridge auto-on</text>
   </g>
   <line x1="165" y1="280" x2="165" y2="330" class="wire2"/>
   <line x1="480" y1="280" x2="480" y2="330" class="wire2"/>

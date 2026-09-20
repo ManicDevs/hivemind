@@ -131,10 +131,13 @@ Transports, one handshake, zero masters:
   signed hello + capability announce on every link-up; relayed frames
   never echo; async dials so one slow peer never stalls discovery.
 - **Cloud relay** (optional, `HIVEMIND_RELAY=off` removes it,
-  `HIVEMIND_RELAY_URL` repoints it): paced latest-only publisher +
+  `HIVEMIND_RELAY_URL` points it): paced latest-only publisher +
   long-poll listener with 5-minute stream rotation, AES-256-GCM under
   two-tier ratchet keys — daily TOTD root, hourly HMAC leaves
   (env override, static fallback), day+hour-bound auth tags, dual-hour acceptance, undecryptable counter.
+  Our relay is `bin/relay` (single Go binary, POST/GET `/json`, zero limits, no third party).
+  Every message **also bridges to MQTT** (HiveMQ public broker, no account, no daily quota)
+  as automatic cross-WAN backup. ntfy.sh removed entirely.
 - **DHT + NAT**: Kademlia-lite discovery bootstrapped from the mesh,
   STUN reflexive addresses (per-socket truth), TCP simultaneous-open
   rendezvous behind `HIVEMIND_PUNCH=auto`, closest-first retention.

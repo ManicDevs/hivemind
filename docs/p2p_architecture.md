@@ -158,32 +158,41 @@ taking the process down with it.
 
 ---
 
-## 6. The Cloud Relay (WAN Transport, Experimental)
+## 6. The Cloud Relay (WAN Transport)
 
 For nodes beyond one machine, a paced publisher ferries the latest local
 frame every 5s (latest-only queue: bursts collapse, nothing blocks the
-conscious loop) to a public ntfy topic as AES-256-GCM ciphertext, tagged
-`ENCRYPTED_HIVE_FRAME`. Every node simultaneously long-polls the topic,
-decrypts, verifies, and ingests inbound frames as `Relayed`.
+conscious loop) to **our relay** (`bin/relay`) as AES-256-GCM ciphertext,
+tagged `ENCRYPTED_HIVE_FRAME`. Every node simultaneously long-polls the
+relay, decrypts, verifies, and ingests inbound frames as `Relayed`.
+
+Our relay is a single Go binary (`bin/relay`): POST a ciphertext blob,
+GET `/json` streams it back. No auth, no quota, no third party — our
+bus, our hardware. Set `HIVEMIND_RELAY_URL=http://your-ip:8080/hive-relay`.
+
+Every message **also bridges to MQTT** (HiveMQ public broker, no account,
+no daily quota) automatically. This is our cross-WAN backup: when our
+relay is up, frames go HTTP→MQTT. When our relay is down, MQTT carries
+frames directly. No ntfy.sh, no quota, no 429.
 
 Confidentiality is explicit about its limits, best source first:
 `HIVEMIND_CIPHER_KEY` (operator-supplied, timeless) beats the hourly
 machine-bound ratchet, which beats the committed static demo key. The
-ratchet: `key(h) = SHA256^h(HMAC(seed, hardware + install-id))` counted
-in UTC hours from 2026 — same seed, same machine, same hour derives
-identically everywhere with zero distribution; each step is one-way, so
-a compromised present reveals nothing past. New hours, new keys,
-automatically; the last two hours stay accepted through boundaries and
-skew. The hardware mix is CPU model + RAM + machine-id (never live
+ratchet: `key(h) = HMAC(dayRoot, hour)` where `dayRoot = SHA256^day(HMAC(seed, hardware + install-id))`
+counted in UTC hours from 2026 — same seed, same machine, same hour
+derives identically everywhere with zero distribution; each step is
+one-way, so a compromised present reveals nothing past. New hours, new
+keys, automatically; the last two hours stay accepted through boundaries
+and skew. The hardware mix is CPU model + RAM + machine-id (never live
 sensor values — their volatility would deafen runs minutes apart), and a
 stolen seed alone decrypts nothing off its home hardware. Every frame is
-additionally bound to its hour as AES-GCM associated data, so replays
-from other hours fail authentication outright. Frames under the static
-fallback are **signed-and-public with obfuscation only**, warned about
-exactly once, and undecryptable arrivals are counted with a once-a-minute
-key-mismatch hint (never the blob). `make rotate-keys` mints a fresh
-machine seed (rebuild all nodes after). All relay loops are
-context-canceled on shutdown; nothing leaks goroutines.
+additionally bound to its day+hour as AES-GCM associated data, so
+replays from other eras fail authentication outright. Frames under the
+static fallback are **signed-and-public with obfuscation only**, warned
+about exactly once, and undecryptable arrivals are counted with a
+once-a-minute key-mismatch hint (never the blob). `make rotate-keys`
+mints a fresh machine seed (rebuild all nodes after). All relay loops
+are context-canceled on shutdown; nothing leaks goroutines.
 `HIVEMIND_RELAY=off` removes the relay entirely — the mesh is fully
 serverless without it (unix + TCP + multicast need no third party).
 Each long-poll stream lives at most 5 minutes, then reconnects: a
