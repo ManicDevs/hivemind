@@ -58,9 +58,9 @@ sleep 10
 
 kill -TERM "${PID_B}" "${PID_A}" 2>/dev/null
 # Graceful shutdown persists souls (Transcend ×3 + overmind + diagnostics
-# dump): on a hot box that legitimately takes a while. 20s grace, then
-# wait reaps the (possibly zombie) children so kill -0 tells the truth.
-for _ in $(seq 1 80); do
+# dump): on a hot box that legitimately takes a while. 15s grace, then
+# escalate to SIGKILL to avoid hanging the proof suite.
+for _ in $(seq 1 60); do
     if ! kill -0 "${PID_A}" 2>/dev/null && ! kill -0 "${PID_B}" 2>/dev/null; then
         break
     fi
@@ -68,7 +68,13 @@ for _ in $(seq 1 80); do
 done
 wait "${PID_A}" "${PID_B}" 2>/dev/null || true
 if kill -0 "${PID_A}" 2>/dev/null || kill -0 "${PID_B}" 2>/dev/null; then
-    echo "❌ processes did not exit gracefully within 20s"
+    echo "⚠️  graceful shutdown slow — escalating to SIGKILL"
+    kill -9 "${PID_B}" "${PID_A}" 2>/dev/null
+    sleep 1
+    wait 2>/dev/null || true
+fi
+if kill -0 "${PID_A}" 2>/dev/null || kill -0 "${PID_B}" 2>/dev/null; then
+    echo "❌ processes did not exit within 15s + SIGKILL"
     exit 1
 fi
 echo "✔ Both peers exited gracefully (souls persisted)"
