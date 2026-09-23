@@ -1,9 +1,9 @@
-// Command world is the pure-Go orchestration core. It raises the local
-// dev topology (1 continent × 4 tiers by default) as native child
-// processes, polls every gaze's /state concurrently over a pooled HTTP
-// client, and persists world.svg + REPORT.md — zero bash, zero curl,
-// zero python. A signal tears the tree down atomically and sweeps
-// socket locks before exit.
+// Command world is the pure-Go orchestration core. It raises the full
+// 7-continent × 4-tier topology as native child processes over real
+// per-continent loopback subnets, polls every gaze's /state concurrently
+// over a pooled HTTP client, and persists world.svg + REPORT.md — zero
+// bash, zero curl, zero python. A signal tears the tree down atomically
+// and sweeps socket locks before exit.
 package main
 
 import (
@@ -34,8 +34,8 @@ import (
 // Continents in canonical order; ContinentSubnet gives each one a real
 // loopback /24, so the mesh dials distinct IPs exactly as it would over
 // the planet rather than pretending a single host is a single peer.
-// Local default: EU only, 4 tiers (master/controller/superpeer/edge).
-// Full 7 needs WORLD_ALLOW_WIDE=1 on servers.
+// Local default: all 7 continents, 4 tiers each (master/controller/
+// superpeer/edge) — real TCP on per-continent loopback /24s.
 var (
 	allContinents = []string{"eu", "na", "as", "sa", "af", "oc", "an"}
 	Continents    = loadContinents()
@@ -50,7 +50,7 @@ var (
 )
 
 func loadContinents() []string {
-	n := 1
+	n := len(allContinents)
 	if v := os.Getenv("WORLD_CONTINENTS"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil {
 			n = parsed
@@ -62,16 +62,12 @@ func loadContinents() []string {
 	if n > len(allContinents) {
 		n = len(allContinents)
 	}
-	if n > 1 && os.Getenv("WORLD_ALLOW_WIDE") != "1" {
-		log.Printf("world: WORLD_CONTINENTS=%d clamped to 1 (single-box dev); set WORLD_ALLOW_WIDE=1 only on physical servers", n)
-		n = 1
-	}
 	return allContinents[:n]
 }
 
 // Cities is the native topology table: real city clusters per continent.
 // Each active continent runs 4 tiers: master, controller, superpeer, edge
-// (city[0..3]); only 1 continent runs locally unless wide mode is enabled.
+// (city[0..3]); all 7 continents run by default.
 var Cities = map[string][]string{
 	"eu": {"rotterdam", "london", "frankfurt", "paris", "amsterdam", "berlin"},
 	"na": {"new-york", "chicago", "san-francisco", "toronto", "dallas", "seattle"},
@@ -79,7 +75,7 @@ var Cities = map[string][]string{
 	"sa": {"sao-paulo", "buenos-aires", "lima", "bogota"},
 	"af": {"johannesburg", "lagos", "cairo", "nairobi"},
 	"oc": {"sydney", "auckland", "melbourne", "brisbane"},
-	"an": {"mcmurdo", "amundsen-scott"},
+	"an": {"mcmurdo", "amundsen-scott", "vostok", "casey", "palmer", "rothera"},
 }
 
 const (
@@ -108,13 +104,13 @@ func main() {
 		reportDir  = flag.String("out", "world-report", "directory for world.svg + REPORT.md")
 		gazePort   = flag.Int("gaze-port", 8090, "HTTP port for every gaze (per-continent IP) and the front dash")
 		basePort   = flag.Int("base-port", 20000, "base TCP port for the mesh")
-		tickMS     = flag.Int("tick", 500, "mind heartbeat in ms (local default slower to stay light)")
+		tickMS     = flag.Int("tick", 1000, "mind heartbeat in ms (slower under 7×4 load)")
 		stagger    = flag.Duration("stagger", 180*time.Millisecond, "delay between node spawns")
 		settle     = flag.Duration("settle", 8*time.Second, "wait after spawn before polling")
 		reportLoop = flag.Duration("report-every", 10*time.Second, "interval to refresh the report")
 		memFlag    = flag.String("mem", "24GiB", "soft memory ceiling for this orchestrator (e.g. 16GiB)")
-		maxLoad1   = flag.Float64("max-load1", 8.0, "failsafe: 1m load average ceiling")
-		maxLoad5   = flag.Float64("max-load5", 6.0, "failsafe: 5m load average ceiling")
+		maxLoad1   = flag.Float64("max-load1", 20.0, "failsafe: 1m load average ceiling")
+		maxLoad5   = flag.Float64("max-load5", 16.0, "failsafe: 5m load average ceiling")
 		maxMem     = flag.Float64("max-mem", 0.85, "failsafe: RAM used fraction ceiling (0.85 = 85%)")
 		maxFD      = flag.Float64("max-fd", 0.75, "failsafe: fd usage fraction of ulimit ceiling")
 	)
@@ -294,10 +290,10 @@ func (w *world) failsafeMonitor(ctx context.Context) {
 	maxMemUse := w.cfg.maxMem
 	maxFDUse := w.cfg.maxFD
 	if maxLoad1 <= 0 {
-		maxLoad1 = 8.0
+		maxLoad1 = 20.0
 	}
 	if maxLoad5 <= 0 {
-		maxLoad5 = 6.0
+		maxLoad5 = 16.0
 	}
 	if maxMemUse <= 0 {
 		maxMemUse = 0.85

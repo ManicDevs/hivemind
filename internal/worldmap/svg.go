@@ -51,9 +51,13 @@ var CityLL = map[string]geoLL{
 	"auckland":  {174.76, -36.85},
 	"melbourne": {144.96, -37.81},
 	"brisbane":  {153.03, -27.47},
-	// AN
+	// AN — real research stations
 	"mcmurdo":        {166.67, -77.85},
 	"amundsen-scott": {0.0, -90.0},
+	"vostok":         {106.80, -78.46},
+	"casey":          {110.53, -66.28},
+	"palmer":         {-64.05, -64.77},
+	"rothera":        {-68.13, -67.57},
 }
 
 // contFallback is the representative anchor used when a node's city
