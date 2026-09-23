@@ -77,13 +77,15 @@ type Config struct {
 	} `mapstructure:"wasm"`
 
 	Relay struct {
-		Enabled    bool          `mapstructure:"enabled"`
-		URL        string        `mapstructure:"url"`
-		Topic      string        `mapstructure:"topic"`
-		CipherKey  string        `mapstructure:"cipher_key"`
-		Interval   time.Duration `mapstructure:"interval"`
-		BackoffMax time.Duration `mapstructure:"backoff_max"`
-		Timeout    time.Duration `mapstructure:"timeout"`
+		Enabled     bool          `mapstructure:"enabled"`
+		URL         string        `mapstructure:"url"`
+		Topic       string        `mapstructure:"topic"`
+		CipherKey   string        `mapstructure:"cipher_key"`
+		Interval    time.Duration `mapstructure:"interval"`
+		BackoffMax  time.Duration `mapstructure:"backoff_max"`
+		Timeout     time.Duration `mapstructure:"timeout"`
+		MQTTEnabled bool          `mapstructure:"mqtt_enabled"`
+		MQTTBroker  string        `mapstructure:"mqtt_broker"`
 	} `mapstructure:"relay"`
 
 	Cron struct {
@@ -233,39 +235,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("relay.interval", "5s")
 	v.SetDefault("relay.backoff_max", "5m")
 	v.SetDefault("relay.timeout", "10s")
+	// Primary MQTT bridge: NODE_2 HiveMQ Sandbox (TCP=1883).
+	// Full matrix NODE_1..NODE_8 lives in internal/infra (hostnames only).
 	v.SetDefault("relay.mqtt_enabled", true)
-	v.SetDefault("relay.mqtt_broker", "tcp://broker.hivemq.com:1883")
-
-	v.SetDefault("storage.path", ".hive_blobs")
-	v.SetDefault("storage.max_blob_size", 100*1024*1024)
-	v.SetDefault("storage.max_total_size", 10*1024*1024*1024)
-	v.SetDefault("storage.compression", "zstd")
-	v.SetDefault("storage.compression_level", 3)
-	v.SetDefault("storage.enable_dedup", true)
-	v.SetDefault("storage.enable_versioning", true)
-	v.SetDefault("storage.max_versions", 10)
-	v.SetDefault("storage.gc_interval", "1h")
-	v.SetDefault("storage.max_age", "720h")
-	v.SetDefault("storage.enable_sync", true)
-	v.SetDefault("storage.sync_interval", "5m")
-
-	v.SetDefault("compute.max_cpu_percent", 50.0)
-	v.SetDefault("compute.max_memory_mb", 512)
-	v.SetDefault("compute.tick_timeout", "2s")
-	v.SetDefault("compute.checkpoint_interval", 100)
-	v.SetDefault("compute.enable_tracing", true)
-	v.SetDefault("compute.enable_hot_reload", false)
-	v.SetDefault("compute.hot_reload_interval", "30s")
-
-	v.SetDefault("relay.enabled", true)
-	v.SetDefault("relay.url", "")
-	v.SetDefault("relay.topic", "hive-relay")
-	v.SetDefault("relay.cipher_key", "")
-	v.SetDefault("relay.interval", "5s")
-	v.SetDefault("relay.backoff_max", "5m")
-	v.SetDefault("relay.timeout", "10s")
-	v.SetDefault("relay.mqtt_enabled", true)
-	v.SetDefault("relay.mqtt_broker", "tcp://broker.hivemq.com:1883")
+	v.SetDefault("relay.mqtt_broker", "broker.hivemq.com")
 
 	v.SetDefault("storage.path", ".hive_blobs")
 	v.SetDefault("storage.max_blob_size", 100*1024*1024)
@@ -299,15 +272,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("wasm.allow_filesystem", false)
 	v.SetDefault("wasm.module_cache_size", 50)
 	v.SetDefault("wasm.module_paths", []string{})
-
-	v.SetDefault("relay.enabled", true)
-	v.SetDefault("relay.url", "")
-	v.SetDefault("relay.topic", "hive-relay")
-	v.SetDefault("relay.interval", "5s")
-	v.SetDefault("relay.backoff_max", "5m")
-	v.SetDefault("relay.timeout", "10s")
-	v.SetDefault("relay.mqtt_enabled", true)
-	v.SetDefault("relay.mqtt_broker", "tcp://broker.hivemq.com:1883")
 
 	v.SetDefault("cron.enabled", true)
 	v.SetDefault("cron.timezone", "UTC")

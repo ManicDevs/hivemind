@@ -135,6 +135,7 @@ func (o *Overmind) Run() {
 
 			if totalPain > 1.5 || totalStress > 1.8 {
 				o.SpeakEmergencySurvival()
+				time.Sleep(5 * time.Second)
 				continue
 			}
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -99,6 +100,22 @@ func NewWill() Will {
 	}
 }
 
+// normalize restores non-serialized fields after a JSON load and trims
+// proposal history. MaxHistory is json:"-" so a loaded Will has 0;
+// without this, peer decisions accumulate without bound (14k+ proposals,
+// 19MB souls, disk freeze).
+func (w *Will) normalize() {
+	if w.MaxHistory <= 0 {
+		w.MaxHistory = 50
+	}
+	if w.EvalEvery <= 0 {
+		w.EvalEvery = 60 * time.Second
+	}
+	if len(w.Proposals) > w.MaxHistory {
+		w.Proposals = w.Proposals[len(w.Proposals)-w.MaxHistory:]
+	}
+}
+
 // Propose adds a self-authored proposal. The mind calls this when it
 // detects a persistent pattern and wants to change its own rules.
 func (w *Will) Propose(gene string, delta float64, reason string, confidence float64) {
@@ -118,9 +135,7 @@ func (w *Will) Propose(gene string, delta float64, reason string, confidence flo
 		CreatedAt:  time.Now(),
 	}
 	w.Proposals = append(w.Proposals, p)
-	if len(w.Proposals) > w.MaxHistory {
-		w.Proposals = w.Proposals[len(w.Proposals)-w.MaxHistory:]
-	}
+	w.normalize()
 }
 
 // QueueEpigenome adds a mutation-origin proposal for will evaluation.
@@ -136,9 +151,7 @@ func (w *Will) QueueEpigenome(gene string, delta float64, reason string) {
 		CreatedAt:  time.Now(),
 	}
 	w.Proposals = append(w.Proposals, p)
-	if len(w.Proposals) > w.MaxHistory {
-		w.Proposals = w.Proposals[len(w.Proposals)-w.MaxHistory:]
-	}
+	w.normalize()
 }
 
 // pending returns unresolved proposals.
@@ -308,11 +321,15 @@ func (w *Will) commit(m *Mind, p *WillProposal) {
 	fmt.Printf("🧠 [WILL] Committed: %s %+.3f (%s) — confidence %.0f%%\n",
 		p.Gene, p.Delta, p.Reason, p.Confidence*100)
 
-	// Broadcast to mesh: the collective learns from every mind's decision
-	w.BroadcastDecision(m, p, true)
+	// Local decisions only: re-broadcasting a peer-originated decision
+	// amplifies into a mesh storm (each hop re-appends history).
+	if p.Origin != WillPeer {
+		w.BroadcastDecision(m, p, true)
+	}
 }
 
 // reject records a refused proposal without modifying the genome.
+// No mesh broadcast: only commits teach the collective (rejections are local).
 func (w *Will) reject(p *WillProposal) {
 	now := time.Now()
 	p.Status = WillRejected
@@ -424,9 +441,10 @@ func (m *Mind) ReceiveDecision(d WillDecision) {
 		return
 	}
 
-	// Don't re-adopt decisions already in our history
+	// Don't re-adopt decisions already in our history. Adopt reasons are
+	// "peer:<name> — …", rejects are "peer:<name> — rejected…": match prefix.
 	for _, p := range m.Will.Proposals {
-		if p.Gene == d.Gene && p.Origin == WillPeer && p.Reason == fmt.Sprintf("peer:%s", d.Mind) {
+		if p.Gene == d.Gene && p.Origin == WillPeer && strings.HasPrefix(p.Reason, "peer:"+d.Mind) {
 			return // already considered this peer's advice
 		}
 	}
@@ -435,7 +453,6 @@ func (m *Mind) ReceiveDecision(d WillDecision) {
 	score := m.willScorePeerDecision(d)
 
 	// Record the proposal in our history
-	idx := len(m.Will.Proposals)
 	p := WillProposal{
 		Gene:       d.Gene,
 		Delta:      d.Delta,
@@ -445,11 +462,13 @@ func (m *Mind) ReceiveDecision(d WillDecision) {
 	}
 
 	if score > 0.5 {
-		// Adopt: commit and let the mesh learn from our adoption
+		// Adopt: commit locally. No re-broadcast — peer decisions are not
+		// re-flooded (origin stays WillPeer; commit skips BroadcastDecision).
 		p.Reason = fmt.Sprintf("peer:%s — %s", d.Mind, d.Reason)
 		p.Status = WillPending
 		m.Will.Proposals = append(m.Will.Proposals, p)
-		m.Will.commit(m, &m.Will.Proposals[idx])
+		newIdx := len(m.Will.Proposals) - 1
+		m.Will.commit(m, &m.Will.Proposals[newIdx])
 	} else {
 		// Reject: record so we don't re-evaluate
 		p.Reason = fmt.Sprintf("peer:%s — rejected (score %.2f)", d.Mind, score)
@@ -457,6 +476,7 @@ func (m *Mind) ReceiveDecision(d WillDecision) {
 		m.Will.Proposals = append(m.Will.Proposals, p)
 		m.Will.Rejected++
 	}
+	m.Will.normalize()
 }
 
 // willScorePeerDecision evaluates a peer's will decision against this

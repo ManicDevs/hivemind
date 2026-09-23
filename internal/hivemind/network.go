@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -183,6 +184,25 @@ func machineFingerprint() string {
 // compileRelayKey holds 64 hex chars injected at build time. Plain
 // `go build` leaves it empty, which selects the static demo key above.
 var compileRelayKey string
+
+// CurrentHourKeyHex exposes this hour's rolling leaf for observability:
+// gaze renders it so the hourly rotation is visible, never assumed.
+func CurrentHourKeyHex() string {
+	if k, ok := hourKey(0); ok {
+		return hex.EncodeToString(k)
+	}
+	return ""
+}
+
+// CurrentDayRootHex exposes today's TOTD root so the day boundary is
+// visibly real, not asserted. Empty when the seed is unset.
+func CurrentDayRootHex() string {
+	day := hourEpoch(time.Now()) / 24
+	if k, ok := dayKey(compileRelayKey, machineFingerprint(), machineSecret(), day); ok {
+		return hex.EncodeToString(k)
+	}
+	return ""
+}
 
 var relayWarnOnce sync.Once
 
@@ -569,6 +589,33 @@ func (pm *PeerMesh) LinkedPeers() int {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	return len(pm.conns)
+}
+
+// PubKey returns this node's public identity, so a watcher can Join the
+// same swarm and witness the frames it orchestrates.
+func (pm *PeerMesh) PubKey() string {
+	return pm.pub
+}
+
+// LinkedPeerNames lists the live-linked peer node names, so a watcher or
+// dashboard can draw the actual topology instead of a guessed one.
+func (pm *PeerMesh) LinkedPeerNames() []string {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	out := make([]string, 0, len(pm.conns))
+	for name := range pm.conns {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CommandMineAndBroadcast mines and broadcasts one signed, PoW-verified
+// frame as this node's own identity — anyone, master or peer, is a full
+// entry into the mesh. Returns acceptance (rejection is silent by design).
+func (pm *PeerMesh) CommandMineAndBroadcast(kind, payload string, state []float64) bool {
+	msg := MineMessage(pm.swarm, pm.priv, pm.pub, kind, payload, state)
+	return pm.swarm.Broadcast(msg)
 }
 
 func (pm *PeerMesh) hasHistory(peer string) bool {

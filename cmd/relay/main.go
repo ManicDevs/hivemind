@@ -12,6 +12,8 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/infra"
 )
 
 // ── hivemind relay: our own message bus ──────────────────────────────
@@ -63,7 +65,8 @@ func (r *relay) getTopic(name string) *topic {
 	return t
 }
 
-// connectMQTT connects to a public MQTT broker. No account needed.
+// connectMQTT connects to a public MQTT broker. No account needed
+// unless the endpoint matrix supplies credentials (e.g. FreeMQTT).
 func (r *relay) connectMQTT(broker string) {
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
@@ -71,6 +74,13 @@ func (r *relay) connectMQTT(broker string) {
 		SetAutoReconnect(true).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(10 * time.Second)
+
+	if ep, ok := infra.Lookup(broker); ok {
+		if ep.Username != "" {
+			opts.SetUsername(ep.Username)
+			opts.SetPassword(ep.Password)
+		}
+	}
 
 	r.mqtt = mqtt.NewClient(opts)
 	if token := r.mqtt.Connect(); token.Wait() && token.Error() != nil {
@@ -243,16 +253,24 @@ func main() {
 
 	r := newRelay()
 
-	// Optional MQTT bridge: RELAY_MQTT="tcp://broker.hivemq.com:1883"
+	// Optional MQTT bridge: RELAY_MQTT="broker.hivemq.com" (hostname only)
 	if broker := os.Getenv("RELAY_MQTT"); broker != "" {
+		if ep, ok := infra.Lookup(infra.NormalizeHost(broker)); ok {
+			if ep.TCPPort > 0 {
+				broker = "tcp://" + ep.Host + ":" + strconv.Itoa(ep.TCPPort)
+			} else {
+				broker = ep.Host
+			}
+		}
 		r.connectMQTT(broker)
 	} else {
-		// Try common public brokers as auto-fallback
-		for _, broker := range []string{
-			"tcp://broker.hivemq.com:1883",
-			"tcp://broker.emqx.io:1883",
-			"tcp://test.mosquitto.org:1883",
-		} {
+		// Auto-fallback: walk preferred TARGET INFRASTRUCTURE DATA MATRIX
+		// entries (Prefer=true skips hosts that time out from this network).
+		for _, ep := range infra.Preferred() {
+			if ep.TCPPort <= 0 {
+				continue
+			}
+			broker := "tcp://" + ep.Host + ":" + strconv.Itoa(ep.TCPPort)
 			opts := mqtt.NewClientOptions().
 				AddBroker(broker).
 				SetClientID(fmt.Sprintf("hivemind-%d", time.Now().UnixNano())).
@@ -260,11 +278,15 @@ func main() {
 				SetConnectRetry(true).
 				SetConnectRetryInterval(5 * time.Second).
 				SetKeepAlive(30 * time.Second)
+			if ep.Username != "" {
+				opts.SetUsername(ep.Username)
+				opts.SetPassword(ep.Password)
+			}
 
 			client := mqtt.NewClient(opts)
 			if token := client.Connect(); token.WaitTimeout(3*time.Second) && token.Error() == nil {
 				r.mqtt = client
-				log.Printf("📡 [MQTT] Auto-connected to %s — unlimited backup relay\n", broker)
+				log.Printf("📡 [MQTT] Auto-connected to %s (%s) — unlimited backup relay\n", ep.Name, broker)
 				break
 			}
 		}

@@ -2,7 +2,14 @@
 /dist/
 /logs/
 .hive_memory/
+.hive_memory_*/
+hive_archive*/
 .relaykey
 *.log
+*.tmp
 server.log
 client.log
+
+# world snapshots: the SVG/md are the art; the raw JSON is temp
+world-report/*.json
+world-report/logs/

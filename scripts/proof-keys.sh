@@ -103,18 +103,19 @@ sleep 1
 rm -rf .hive_memory/proof-rl .hive_memory/proof-rr
 rm -f /tmp/hivemind-proof-rl.sock /tmp/hivemind-proof-rr.sock
 
-HIVEMIND_TICK_MS=500 HIVEMIND_RELAY=on HIVEMIND_BEACON=off HIVEMIND_DHT=off \
+HIVEMIND_TICK_MS=500 HIVEMIND_RELAY=on HIVEMIND_UNIX=off HIVEMIND_BEACON=off HIVEMIND_DHT=off HIVEMIND_SUPER=off \
     HIVEMIND_RELAY_URL="http://127.0.0.1:8080/hive-relay" \
+    HIVEMIND_CIPHER_KEY="ab94f253510372b0cee7c871ba7c5d3fea4b20caeb0d271de02860f739d3e5c1" \
     "$BIN" -mode peer -node proof-rl > /tmp/proof-rl.log 2>&1 &
 PID_L=$!
 sleep 3
 
-HIVEMIND_TICK_MS=500 HIVEMIND_RELAY=on HIVEMIND_BEACON=off HIVEMIND_DHT=off \
+HIVEMIND_TICK_MS=500 HIVEMIND_RELAY=on HIVEMIND_UNIX=off HIVEMIND_BEACON=off HIVEMIND_DHT=off HIVEMIND_SUPER=off \
     HIVEMIND_RELAY_URL="http://127.0.0.1:8080/hive-relay" \
     HIVEMIND_CIPHER_KEY="ab94f253510372b0cee7c871ba7c5d3fea4b20caeb0d271de02860f739d3e5c1" \
     "$BIN" -mode peer -node proof-rr > /tmp/proof-rr.log 2>&1 &
 PID_R=$!
-sleep 15
+sleep 18
 
 # Check relay activity — publish success is silent, only failures log.
 # We check for SECURE CLOUD INBOUND (received) and relay error attempts.

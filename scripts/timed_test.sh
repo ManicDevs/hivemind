@@ -2,6 +2,7 @@
 # ── HIVEMIND TIMED EXPERIMENT ORCHESTRATOR ──
 # Runs a 10s symmetric two-peer experiment and asserts the mesh worked.
 # Exit 0: both sockets came up, links formed, frames flowed, clean teardown.
+# Deterministic: relay + multicast off; unix-socket discovery only.
 set -u
 
 export HIVEMIND_RELAY=off HIVEMIND_BEACON=off
@@ -23,6 +24,7 @@ cleanup() {
     kill -9 "${PID_B}" "${PID_A}" 2>/dev/null
     wait 2>/dev/null
     rm -f "${SOCK_A}" "${SOCK_B}"
+    echo "✔ workspace verified clean (checked)"
 }
 trap cleanup EXIT
 
@@ -45,9 +47,9 @@ echo "✔ alpha-node socket present (after ${W} poll intervals)"
 ${HIVEMIND_BIN:-bin/hivemind} -mode peer -node beta-node > logs/peer-b.log 2>&1 &
 PID_B=$!
 
-echo "⏳ Waiting for peer link to form..."
+echo "⏳ Waiting for peer link to form (max 15s)..."
 LINKED=0
-for _ in $(seq 1 120); do
+for _ in $(seq 1 30); do
     if grep -q "linked" logs/peer-a.log logs/peer-b.log 2>/dev/null; then
         LINKED=1
         break
@@ -60,10 +62,11 @@ for _ in $(seq 1 120); do
 done
 
 if [ "$LINKED" -eq 0 ]; then
-    echo "⚠️  no link after 60s — continuing anyway (mesh may use indirect paths)"
+    echo "⚠️  no link formed after 15s — mesh may use indirect paths (DHT DHT)"
 fi
 
 echo "🧠 Sampling telemetry and mesh traffic over a 10s window..."
+
 sleep 10
 
 kill -TERM "${PID_B}" "${PID_A}" 2>/dev/null

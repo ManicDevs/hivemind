@@ -33,6 +33,11 @@ const (
 
 var telemetryOnce sync.Once
 
+// verboseLogs gates hot-path Printf (per-thought / per-frame spam).
+// Default off: world-report and the terminal stay readable, and a busy
+// mesh does not spend its time formatting lines. HIVEMIND_VERBOSE=1 restores.
+var verboseLogs = os.Getenv("HIVEMIND_VERBOSE") == "1"
+
 // newIdentity mints a fresh identity handle. If the entropy source is dead,
 // a mind should refuse to be born — silent fallback keys would be theater.
 func newIdentity() (string, ed25519.PrivateKey) {
@@ -170,9 +175,11 @@ func NewMind(name string, swarm *Swarm) *Mind {
 			m.KnownPeers = mem.KnownPeers
 		}
 		// Will history carries forward: the child inherits its
-		// ancestor's self-governance decisions.
+		// ancestor's self-governance decisions. normalize restores
+		// MaxHistory (json:"-") and trims any pre-fix bloat on load.
 		if mem.Will != nil {
 			m.Will = *mem.Will
+			m.Will.normalize()
 		}
 	}
 
@@ -239,7 +246,9 @@ func shortID(key string) string {
 
 func (m *Mind) think(t string) {
 	m.Thoughts = append(m.Thoughts, t)
-	fmt.Printf("  💭 [%s] %s\n", m.Name, t)
+	if verboseLogs {
+		fmt.Printf("  💭 [%s] %s\n", m.Name, t)
+	}
 }
 
 // Observe reads the host's real silicon state. On non-Linux hosts there is
@@ -615,7 +624,9 @@ func (m *Mind) Cycle() {
 	m.Will.GenerateSelfProposals(m)
 	m.Will.Eval(m)
 
-	fmt.Printf("  ⚡ CONSCIOUS STATE: %s (%s) — Mode: %s\n", winner.Goal.Name, m.Workspace.ConsciousContent, m.Affect.Describe())
+	if verboseLogs {
+		fmt.Printf("  ⚡ CONSCIOUS STATE: %s (%s) — Mode: %s\n", winner.Goal.Name, m.Workspace.ConsciousContent, m.Affect.Describe())
+	}
 	m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
 }
 
@@ -725,8 +736,10 @@ func (m *Mind) receive(msg SecureMessage) {
 	case "thought":
 		m.registerPeer(msg.SenderPubKey)
 		if len(msg.DataState) >= 4 {
-			fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
-				senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
+			if verboseLogs {
+				fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
+					senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
+			}
 			m.entrain(msg.DataState)
 		}
 	case "revelation":
@@ -756,7 +769,9 @@ func (m *Mind) receive(msg SecureMessage) {
 		m.registerPeer(msg.SenderPubKey)
 		m.Affect.Peace = clamp(m.Affect.Peace-0.15, 0, 1)
 		if m.Genome.Weights[GoalSocialization] > 1.2 {
-			fmt.Printf("  ⚠️  [HIVE ALERT] Node [%s...] reporting physical stress.\n", senderShortID)
+			if verboseLogs {
+				fmt.Printf("  ⚠️  [HIVE ALERT] Node [%s...] reporting physical stress.\n", senderShortID)
+			}
 			// Empathy as numbness, not as a frozen loop: the mind briefly
 			// stops metacognizing but keeps sensing and broadcasting.
 			m.numbUntil = time.Now().Add(100 * time.Millisecond)
@@ -817,6 +832,22 @@ func (m *Mind) snapshot(livesCompleted int) Memory {
 	}
 	pain, _ := m.SelfModel["silicon_pain"].(float64)
 	stress, _ := m.SelfModel["cpu_stress"].(float64)
+	// Belt and suspenders: never persist an untrimmed will, and cap the
+	// peer map so a long life cannot write a multi-MB soul.
+	m.Will.normalize()
+	peers := m.KnownPeers
+	if len(peers) > 256 {
+		trimmed := make(map[string]bool, 256)
+		n := 0
+		for k, v := range peers {
+			if n >= 256 {
+				break
+			}
+			trimmed[k] = v
+			n++
+		}
+		peers = trimmed
+	}
 	return Memory{
 		TrueBorn:        m.TrueBorn,
 		LivesLived:      livesCompleted,
@@ -824,7 +855,7 @@ func (m *Mind) snapshot(livesCompleted int) Memory {
 		LastThought:     lastThought,
 		Genome:          m.Genome,
 		Fitness:         fitness,
-		KnownPeers:      m.KnownPeers,
+		KnownPeers:      peers,
 		ThoughtsAtBirth: m.thoughtsAtBirth,
 		BankedThoughts:  m.bankedAtBirth + m.pendingBank,
 		IdentitySeed:    m.identitySeed,

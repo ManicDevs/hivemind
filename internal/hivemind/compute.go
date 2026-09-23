@@ -27,8 +27,8 @@ func DefaultComputeConfig() ComputeConfig {
 		MaxCPUPercent:      50.0,
 		MaxMemoryMB:        512,
 		TickTimeout:        2 * time.Second,
-		CheckpointInterval: 100,
-		EnableTracing:      true,
+		CheckpointInterval: 300,
+		EnableTracing:      false,
 		EnableHotReload:    false,
 		HotReloadInterval:  30 * time.Second,
 	}

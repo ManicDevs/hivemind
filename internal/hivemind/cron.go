@@ -235,7 +235,7 @@ func (c *Cron) runJob(job *Job, cancel context.CancelFunc) {
 }
 
 func (c *Cron) nextRun(schedule string) time.Time {
-	return time.Now().Add(time.Minute)
+	return time.Now().Add(5 * time.Minute)
 }
 
 func (c *Cron) GetJob(id string) (*Job, bool) {

@@ -1,6 +1,7 @@
 // Command gaze is a window into the living mesh: nodes, minds, pain
 // bars, last thoughts, hall of fame — refreshed every second from souls
-// on disk. Read-only; it never touches a living mind.
+// on disk. Read-only; it never touches a living mind. With -serve it
+// becomes a live observer inside the mesh, serving an SVG topology page.
 package main
 
 import (
@@ -12,14 +13,24 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 )
+
+// soulMem is the lean projection the dashboard needs. Loading full hm.Memory
+// pulls multi-MB Will/Thoughts blobs off disk every refresh — 162 souls ×
+// 18MB is what froze the box. Unknown JSON keys (will, thoughts, peers) are
+// skipped by the decoder without retaining them.
+type soulMem struct {
+	LivesLived  int     `json:"lives_lived"`
+	Fitness     float64 `json:"fitness"`
+	LastThought string  `json:"last_thought"`
+	DeathPain   float64 `json:"death_pain"`
+	Epitaph     string  `json:"epitaph"`
+}
 
 type soul struct {
 	node string
 	name string
-	mem  hm.Memory
+	mem  soulMem
 }
 
 func loadSouls() []soul {
@@ -35,7 +46,7 @@ func loadSouls() []soul {
 		if err != nil {
 			continue
 		}
-		var mem hm.Memory
+		var mem soulMem
 		if err := json.Unmarshal(raw, &mem); err != nil {
 			continue
 		}
@@ -62,7 +73,17 @@ func bar(v float64, width int) string {
 func main() {
 	every := flag.Duration("every", time.Second, "refresh interval")
 	forFlag := flag.Duration("for", 0, "stop after this long (0 = until Ctrl+C)")
+	serveFlag := flag.String("serve", "", "serve live SVG topology over HTTP at this addr (e.g. :8090)")
+	watchFlag := flag.String("watch", "", "continent/node-name filter (e.g. eu, as) when serving")
 	flag.Parse()
+
+	if *serveFlag != "" {
+		if err := serve(*serveFlag, *watchFlag); err != nil {
+			fmt.Fprintf(os.Stderr, "gaze: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	start := time.Now()
 	for {

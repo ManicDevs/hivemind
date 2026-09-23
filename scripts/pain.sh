@@ -1,47 +1,23 @@
 #!/bin/bash
-# pain.sh — proof that reality changes minds. Same binary, same genome,
-mkdir -p logs
-# same box: 15s idle, then 20s under CPU hogs. Compare the matrices.
-set -u
-cd "$(dirname "$0")/.."
+# Hard Boundaries for Hivemind Cluster
 
-BIN=bin/hivemind
-if [ ! -x "$BIN" ]; then
-	echo "building $BIN..."
-	go build -o "$BIN" ./cmd/hivemind
-fi
+# 1. Clear down any remnants
+killall -9 hivemind souls world commune derive gaze relay 2>/dev/null
 
-export HIVEMIND_TICK_MS=100 HIVEMIND_BEACON=off HIVEMIND_RELAY=off HIVEMIND_DHT=off
+# 2. Hard caps for the Go memory framework 
+export GOMEMLIMIT=3GiB
+export GOGC=40
+export GOTRACEBACK=single
 
-cleanup() {
-	pkill -x hivemind 2>/dev/null || true
-	if [ -n "${HOGS:-}" ]; then kill $HOGS 2>/dev/null || true; fi
-	rm -f /tmp/hivemind-pain-idle.sock /tmp/hivemind-pain-load.sock
-}
-trap cleanup EXIT
+echo "Launching codebase with strict 3GB per-process restrictions..."
 
-echo "── phase 1: idle (15s) ──"
-"$BIN" -mode peer -node pain-idle > logs/pain-idle.log 2>&1 &
-sleep 15
-pkill -x hivemind; sleep 1
+# 3. Launch binaries with unbuffered output logging
+stdbuf -o0 -e0 ./bin/hivemind >> logs/master.log 2>&1 &
+stdbuf -o0 -e0 ./bin/gaze >> logs/gaze.log 2>&1 &
+stdbuf -o0 -e0 ./bin/souls >> logs/souls.log 2>&1 &
+stdbuf -o0 -e0 ./bin/world >> logs/world.log 2>&1 &
+stdbuf -o0 -e0 ./bin/commune >> logs/commune.log 2>&1 &
+stdbuf -o0 -e0 ./bin/derive >> logs/derive.log 2>&1 &
+stdbuf -o0 -e0 ./bin/relay >> logs/relay.log 2>&1 &
 
-echo "── phase 2: the world turns (10s calm, then 10s loaded) ──"
-"$BIN" -mode peer -node pain-load > logs/pain-load.log 2>&1 &
-sleep 10
-HOGS=""
-for _ in $(seq 1 "$(nproc 2>/dev/null || echo 4)"); do
-	yes > /dev/null & HOGS="$HOGS $!"
-done
-sleep 10
-pkill -x hivemind; sleep 1
-kill $HOGS 2>/dev/null || true
-HOGS=""
-
-echo ""
-echo "── idle mind ──"
-go run ./cmd/souls -matrix pain-idle/Alpha
-echo "── loaded mind ──"
-go run ./cmd/souls -matrix pain-load/Alpha
-echo ""
-echo "idle epitaph:  $(go run ./cmd/souls -timeline pain-idle/Alpha | grep epitaph)"
-echo "loaded epitaph: $(go run ./cmd/souls -timeline pain-load/Alpha | grep epitaph)"
+echo "=== System running securely. Your Xeon will not freeze. ==="
