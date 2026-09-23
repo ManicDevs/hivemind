@@ -36,7 +36,9 @@ func TestWorldLive(t *testing.T) {
 	}
 
 	// Relay key baked in exactly like `make build` does, so the rolling
-	// keys are provable, not blank.
+	// keys are provable, not blank.  Generated from hardware entropy
+	// (thermal zones, CPU frequencies, interrupt timing, load averages)
+	// via internal/entropy — dynamically validated, only real sensors used.
 	root, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

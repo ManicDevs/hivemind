@@ -1,8 +1,9 @@
-// Command world is the pure-Go orchestration core. It raises the whole
-// seven-continent topology as native child processes, polls every gaze's
-// /state concurrently over a pooled HTTP client, and persists world.svg +
-// REPORT.md — zero bash, zero curl, zero python. A signal tears the tree
-// down atomically and sweeps socket locks before exit.
+// Command world is the pure-Go orchestration core. It raises the local
+// dev topology (1 continent × 4 tiers by default) as native child
+// processes, polls every gaze's /state concurrently over a pooled HTTP
+// client, and persists world.svg + REPORT.md — zero bash, zero curl,
+// zero python. A signal tears the tree down atomically and sweeps
+// socket locks before exit.
 package main
 
 import (
@@ -33,7 +34,8 @@ import (
 // Continents in canonical order; ContinentSubnet gives each one a real
 // loopback /24, so the mesh dials distinct IPs exactly as it would over
 // the planet rather than pretending a single host is a single peer.
-// Local default: first 2 only. Full 7 needs WORLD_ALLOW_WIDE=1 on servers.
+// Local default: EU only, 4 tiers (master/controller/superpeer/edge).
+// Full 7 needs WORLD_ALLOW_WIDE=1 on servers.
 var (
 	allContinents = []string{"eu", "na", "as", "sa", "af", "oc", "an"}
 	Continents    = loadContinents()
@@ -41,10 +43,14 @@ var (
 	ContinentSubnet = map[string]int{
 		"eu": 1, "na": 2, "as": 3, "sa": 4, "af": 5, "oc": 6, "an": 7,
 	}
+
+	// roles are the 4 tiers every active continent runs: master (tier 1),
+	// controller (tier 2), superpeer (tier 3), edge (tier 4).
+	roles = []string{"master", "controller", "superpeer", "edge"}
 )
 
 func loadContinents() []string {
-	n := 2
+	n := 1
 	if v := os.Getenv("WORLD_CONTINENTS"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil {
 			n = parsed
@@ -56,16 +62,16 @@ func loadContinents() []string {
 	if n > len(allContinents) {
 		n = len(allContinents)
 	}
-	if n > 2 && os.Getenv("WORLD_ALLOW_WIDE") != "1" {
-		log.Printf("world: WORLD_CONTINENTS=%d clamped to 2 (single-box); set WORLD_ALLOW_WIDE=1 only on physical servers", n)
-		n = 2
+	if n > 1 && os.Getenv("WORLD_ALLOW_WIDE") != "1" {
+		log.Printf("world: WORLD_CONTINENTS=%d clamped to 1 (single-box dev); set WORLD_ALLOW_WIDE=1 only on physical servers", n)
+		n = 1
 	}
 	return allContinents[:n]
 }
 
 // Cities is the native topology table: real city clusters per continent.
-// Each active continent runs city[0]=master, city[1]=peer (2 nodes);
-// only 2 continents run locally unless wide mode is enabled.
+// Each active continent runs 4 tiers: master, controller, superpeer, edge
+// (city[0..3]); only 1 continent runs locally unless wide mode is enabled.
 var Cities = map[string][]string{
 	"eu": {"rotterdam", "london", "frankfurt", "paris", "amsterdam", "berlin"},
 	"na": {"new-york", "chicago", "san-francisco", "toronto", "dallas", "seattle"},
@@ -388,14 +394,14 @@ func readFDUsedFraction() float64 {
 	return float64(openFDs) / float64(softLimit)
 }
 
-// nodeCount is the strict boundary: one master + one peer
-// per continent (2 nodes), derived from the city table so the
+// nodeCount is the strict boundary: 4 tiers per continent
+// (master/controller/superpeer/edge), derived from the role table so the
 // number can never silently drift.
 func (w *world) nodeCount() int {
 	n := 0
 	for _, c := range Continents {
-		if len(Cities[c]) >= 2 {
-			n += 2
+		if len(Cities[c]) >= len(roles) {
+			n += len(roles)
 		}
 	}
 	return n
@@ -412,19 +418,18 @@ func (w *world) gazeZones() []worldmap.Zone {
 	return zones
 }
 
-// spawnNodes launches the mesh: per continent one master (city[0])
-// and one peer (city[1]), each on its own IP:port, staggered to
-// dodge CPU contention and disk thrash at boot.  The strict boundary
-// is derived from Cities so the count can never silently drift.
+// spawnNodes launches the mesh: per continent 4 tiers — master (city[0]),
+// controller (city[1]), superpeer (city[2]), edge (city[3]) — each on its
+// own IP:port, staggered to dodge CPU contention and disk thrash at boot.
+// The strict boundary is derived from roles so the count can never drift.
 func (w *world) spawnNodes(ctx context.Context) {
-	roles := []string{"master", "peer"}
 	for _, c := range Continents {
 		cities := Cities[c]
-		if len(cities) < 2 {
-			fmt.Printf("   ✗ no pair of cities mapped for %s\n", c)
+		if len(cities) < len(roles) {
+			fmt.Printf("   ✗ fewer than %d cities mapped for %s\n", len(roles), c)
 			continue
 		}
-		for host := 0; host < 2; host++ {
+		for host := 0; host < len(roles); host++ {
 			name := fmt.Sprintf("%s-%s-%s", c, roles[host], cities[host])
 			port := w.cfg.basePort + ContinentSubnet[c]*portStride + host + 1
 			advertise := fmt.Sprintf("%s:%d", w.ipOf(c, host+1), port)
