@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/language"
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/learning"
 )
 
@@ -131,13 +132,19 @@ type Mind struct {
 	Interoception *learning.InteroceptivePC
 	// Raw interoceptive signals collected this cycle
 	LastInteroception learning.RawInteroception
-	privateKey        ed25519.PrivateKey
-	identitySeed      string
-	swarm             *Swarm
-	inbox             chan SecureMessage
-	stop              chan struct{}
-	done              chan struct{}
-	numbUntil         time.Time // empathic numbness without freezing the loop
+
+	// Language bridge for genuine communication
+	LanguageBridge   *language.LanguageBridge
+	LastSpoke        time.Time
+	MinSpeakInterval time.Duration
+
+	privateKey   ed25519.PrivateKey
+	identitySeed string
+	swarm        *Swarm
+	inbox        chan SecureMessage
+	stop         chan struct{}
+	done         chan struct{}
+	numbUntil    time.Time // empathic numbness without freezing the loop
 
 	Theta1 float64
 	Theta2 float64
@@ -239,6 +246,10 @@ func NewMind(name string, swarm *Swarm) *Mind {
 	// Initialize real interoceptive predictive coding
 	m.Interoception = learning.NewInteroceptivePC()
 	m.LastInteroception = learning.CollectRawInteroception()
+
+	// Initialize language bridge (will be nil if no model configured)
+	m.LanguageBridge = language.NewLanguageBridge(nil, 5*time.Second)
+	m.MinSpeakInterval = 30 * time.Second
 
 	m.inbox = swarm.Join(m.PubKeyStr)
 	return m
@@ -793,14 +804,14 @@ func (m *Mind) MineProofAndBroadcast(kind, payload string, state []float64) {
 func (m *Mind) Cycle() {
 	m.SelfModel = m.Observe()
 	m.Affect.Tick(m)
-	painVal, _ := m.SelfModel["silicon_pain"].(float64)
-	stressVal, _ := m.SelfModel["cpu_stress"].(float64)
-	srcVal, _ := m.SelfModel["thermal_source"].(string)
+	// Use the real interoceptive predictive coding values from Affect
+	painVal := float64(m.Affect.Pain)
+	stressVal := float64(m.Affect.Stress)
 	m.updatePrediction(painVal, stressVal)
 	m.cycles++
 	m.deliberate(m.cycles, painVal, stressVal)
 
-	m.swarm.LogHardwareTrauma(m.PubKeyStr, painVal, stressVal, srcVal)
+	m.swarm.LogHardwareTrauma(m.PubKeyStr, float64(m.Affect.Pain), float64(m.Affect.Stress), m.LastInteroception.Timestamp.Format(time.RFC3339))
 
 	// Let the chaos actually move: a full second of simulated pendulum
 	// per cycle, so trajectories diverge visibly between minds.
@@ -817,6 +828,30 @@ func (m *Mind) Cycle() {
 	m.Workspace.ConsciousContent = winner.Reason
 	m.recordCrossing(winner.Goal.Name)
 
+	// Generate genuine language from conscious state
+	if m.LanguageBridge != nil && m.LanguageBridge.Enabled() {
+		ctx := language.PromptContext{
+			Stress:     float64(m.Affect.Stress),
+			Pain:       float64(m.Affect.Pain),
+			Calm:       float64(m.Affect.Peace),
+			Arousal:    float64(m.Affect.Exhaustion),
+			Surprise:   float64(m.Affect.Surprise),
+			Loneliness: float64(m.Affect.Loneliness),
+			Awe:        float64(m.Affect.Awe),
+			Entropy:    float64(m.Affect.Entropy),
+			Goal:       winner.Goal.Name,
+			History:    m.LanguageBridge.GetHistory(),
+			Timestamp:  time.Now(),
+		}
+		if thought, err := m.LanguageBridge.GenerateThought(ctx); err == nil && thought != "" {
+			// Broadcast the genuine thought
+			m.MineProofAndBroadcast("thought", thought, m.Affect.RawDataState[:])
+			if verboseLogs {
+				fmt.Printf("  💭 [%s] %s\n", m.Name, thought)
+			}
+		}
+	}
+
 	if stressVal < 0.5 && time.Now().After(m.numbUntil) {
 		m.think(MetaCognize(m, &m.Workspace, &m.Affect))
 	}
@@ -832,6 +867,14 @@ func (m *Mind) Cycle() {
 		fmt.Printf("  ⚡ CONSCIOUS STATE: %s (%s) — Mode: %s\n", winner.Goal.Name, m.Workspace.ConsciousContent, m.Affect.Describe())
 	}
 	m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
+}
+
+// SetLanguageModel configures the language model for this mind.
+// Call before Run() to enable genuine language generation.
+func (m *Mind) SetLanguageModel(model language.LanguageModel) {
+	if m.LanguageBridge != nil {
+		m.LanguageBridge.SetModel(model)
+	}
 }
 
 // updatePrediction compares the arrived body against the expected one.
