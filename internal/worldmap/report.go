@@ -25,6 +25,10 @@ type Report struct {
 	Nodes  []NodeView
 	Links  map[string]bool
 	Now    string
+	// Relay carries the broker-mesh telemetry the relay's /healthz reported.
+	// The zero value renders no infrastructure layer, so a report written
+	// without a relay never invents one.
+	Relay RelayHealth
 }
 
 // CountByContinent tallies masters/peers and frame totals per continent.
@@ -174,7 +178,7 @@ func (w *ReportWriter) Write(r Report) (ReportPaths, error) {
 	if now == "" {
 		now = ag.Now
 	}
-	svg := RenderSVG(r.Nodes, links, gazeName, now)
+	svg := RenderSVGWithInfra(r.Nodes, links, gazeName, now, "", r.Relay)
 	if err := os.WriteFile(svgPath, []byte(svg), 0o644); err != nil {
 		return ReportPaths{}, err
 	}

@@ -13,3 +13,17 @@ client.log
 # world snapshots: the SVG/md are the art; the raw JSON is temp
 world-report/*.json
 world-report/logs/
+
+# full-stack runtime state (make stack)
+/.stack-*.pid
+/.stack-relay.port
+
+# stray root-level build artifacts (canonical output is /bin/)
+/world
+/gaze
+/relay
+/fabric
+/hivemind
+/commune
+/souls
+world-report/

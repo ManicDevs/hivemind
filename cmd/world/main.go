@@ -109,8 +109,8 @@ func main() {
 		settle     = flag.Duration("settle", 8*time.Second, "wait after spawn before polling")
 		reportLoop = flag.Duration("report-every", 10*time.Second, "interval to refresh the report")
 		memFlag    = flag.String("mem", "24GiB", "soft memory ceiling for this orchestrator (e.g. 16GiB)")
-		maxLoad1   = flag.Float64("max-load1", 20.0, "failsafe: 1m load average ceiling")
-		maxLoad5   = flag.Float64("max-load5", 16.0, "failsafe: 5m load average ceiling")
+		maxLoad1   = flag.Float64("max-load1", 20.0, "failsafe: 1m load average ceiling (<=0 disables the load check)")
+		maxLoad5   = flag.Float64("max-load5", 16.0, "failsafe: 5m load average ceiling (<=0 disables the load check)")
 		maxMem     = flag.Float64("max-mem", 0.85, "failsafe: RAM used fraction ceiling (0.85 = 85%)")
 		maxFD      = flag.Float64("max-fd", 0.75, "failsafe: fd usage fraction of ulimit ceiling")
 	)
@@ -195,7 +195,8 @@ type world struct {
 	procs    []*child
 	mu       sync.Mutex
 	reporter *worldmap.ReportWriter
-	cancel   context.CancelFunc // failsafe hook: cancel parent ctx after teardown
+	cancel   context.CancelFunc    // failsafe hook: cancel parent ctx after teardown
+	relay    *worldmap.RelayPoller // broker-mesh telemetry for the infra layer
 }
 
 func newWorld(cfg *config) *world {
@@ -234,6 +235,16 @@ func (w *world) run(ctx context.Context) error {
 
 	zones := w.gazeZones()
 	tm := worldmap.NewTelemetry(len(zones) * 2)
+
+	// Watch the relay so the world map can draw the broker mesh from real
+	// telemetry instead of assuming one hub exists.
+	w.relay = worldmap.NewRelayPoller(os.Getenv("HIVEMIND_RELAY_URL"))
+	if w.relay.Enabled() {
+		relayStop := make(chan struct{})
+		go w.relay.Run(relayStop)
+		defer close(relayStop)
+		fmt.Printf("   🛰️  broker mesh: watching %s/healthz\n", os.Getenv("HIVEMIND_RELAY_URL"))
+	}
 
 	if err := w.waitLinked(ctx, tm, zones); err != nil {
 		w.teardown()
@@ -289,17 +300,18 @@ func (w *world) failsafeMonitor(ctx context.Context) {
 	maxLoad5 := w.cfg.maxLoad5
 	maxMemUse := w.cfg.maxMem
 	maxFDUse := w.cfg.maxFD
-	if maxLoad1 <= 0 {
-		maxLoad1 = 20.0
-	}
-	if maxLoad5 <= 0 {
-		maxLoad5 = 16.0
-	}
 	if maxMemUse <= 0 {
 		maxMemUse = 0.85
 	}
 	if maxFDUse <= 0 {
 		maxFDUse = 0.75
+	}
+	if maxLoad1 <= 0 && maxLoad5 <= 0 {
+		// Both non-positive disables the load checks. On shared or busy
+		// hosts the 1m/5m average reflects other tenants, not this world,
+		// so treating it as a drowning signal would tear down a healthy
+		// world. mem/fd guards stay active either way.
+		fmt.Println("   ⚠ failsafe: load checks disabled (max-load1/5 <= 0); mem/fd guards still active")
 	}
 	t := time.NewTicker(checkInterval)
 	defer t.Stop()
@@ -314,7 +326,8 @@ func (w *world) failsafeMonitor(ctx context.Context) {
 			memUsed := readMemUsedFraction()
 			fdUsed := readFDUsedFraction()
 
-			over := load1 > maxLoad1 || load5 > maxLoad5 || memUsed > maxMemUse || fdUsed > maxFDUse
+			over := memUsed > maxMemUse || fdUsed > maxFDUse ||
+				(maxLoad1 > 0 && load1 > maxLoad1) || (maxLoad5 > 0 && load5 > maxLoad5)
 			if !over {
 				breaches = 0
 				// Proactive GC pressure relief to keep RSS honest under churn.
@@ -625,6 +638,7 @@ func (w *world) writeReport(tm *worldmap.Telemetry, zones []worldmap.Zone) {
 		Nodes:  worldmap.LiveNodes(worldmap.MergeNodes(snap)),
 		Links:  ag.Links,
 		Now:    ag.Now,
+		Relay:  w.relay.Health(),
 	})
 	if err != nil {
 		fmt.Printf("   ✗ report: %v\n", err)

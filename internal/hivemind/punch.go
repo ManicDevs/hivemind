@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,6 +71,26 @@ type pendingPunch struct {
 	port      int
 	at        time.Time
 	accepted  bool
+	// done closes once this attempt has fully finished — won, lost, or
+	// stopped — so the initiator's retry loop can sequence attempts
+	// instead of racing a second simultaneous open against the first.
+	done chan struct{}
+	fin  *sync.Once
+}
+
+func newPendingPunch(p pendingPunch) pendingPunch {
+	p.done = make(chan struct{})
+	p.fin = new(sync.Once)
+	return p
+}
+
+// finishPunch releases the retry loop waiting on this attempt, exactly
+// once, no matter which path ended it. fin is a pointer so pendingPunch
+// stays copyable and vet-clean.
+func (p pendingPunch) finishPunch() {
+	if p.fin != nil {
+		p.fin.Do(func() { close(p.done) })
+	}
 }
 
 // punchMu guards the pending table alongside pm.mu discipline: never
@@ -97,36 +118,92 @@ func punchEnabled() bool {
 // only relative wakeup skew matters, not absolute delay.
 const punchLeadTime = 8 * time.Second
 
+// punchNegotiations bounds how many rendezvous instants the initiator will
+// announce for one peer. awaitPunch already retries the dial; this covers
+// the other half of the handshake, where our punch_req went out but the
+// peer's punch_accept never came back. One dropped or slow gossip frame
+// otherwise leaves the pair with nothing but the relay, forever.
+const punchNegotiations = 3
+
+// punchDialRounds and punchRoundGap pace the simultaneous open itself,
+// once a rendezvous is agreed: three attempts, two seconds apart.
+const (
+	punchDialRounds = 3
+	punchRoundGap   = 2 * time.Second
+)
+
 func (pm *PeerMesh) requestPunch(peerNode string) int {
-	if !punchEnabled() {
+	port, done := pm.announcePunch(peerNode)
+	if done == nil {
 		return 0
+	}
+	go pm.retryRendezvous(peerNode, done)
+	return port
+}
+
+// retryRendezvous re-announces a rendezvous that ended without a link,
+// waiting for each attempt to fully finish before starting the next so
+// two simultaneous opens are never in flight for one peer.
+//
+// Only the initiator runs this. The responder answers a stranger exactly
+// once (see answerPunch); keeping the cadence on the requesting side is
+// what stops a peer that never accepts from looping this node forever.
+func (pm *PeerMesh) retryRendezvous(peer string, done chan struct{}) {
+	for attempt := 1; attempt < punchNegotiations; attempt++ {
+		select {
+		case <-done:
+		case <-pm.stopChan:
+			return
+		}
+		pm.mu.Lock()
+		_, linked := pm.conns[peer]
+		pm.mu.Unlock()
+		if linked {
+			return // the punch landed after all
+		}
+		_, next := pm.announcePunch(peer)
+		if next == nil {
+			return // linked, already pending, or punching off: nothing to do
+		}
+		done = next
+	}
+}
+
+// announcePunch performs one negotiation: refuse a live pipe and refuse to
+// overlap another attempt, bind a port, announce the instant, and arm
+// awaitPunch. Returns the bound port plus a channel closed when this
+// attempt finishes; done is nil when we declined.
+func (pm *PeerMesh) announcePunch(peerNode string) (int, chan struct{}) {
+	if !punchEnabled() {
+		return 0, nil
 	}
 	pm.mu.Lock()
 	if _, ok := pm.conns[peerNode]; ok {
 		pm.mu.Unlock()
-		return 0 // already linked; punching a live pipe is vandalism
+		return 0, nil // already linked; punching a live pipe is vandalism
 	}
 	if _, ok := pm.punchPending[peerNode]; ok {
 		pm.mu.Unlock()
-		return 0 // one rendezvous at a time per peer
+		return 0, nil // one rendezvous at a time per peer
 	}
 	pm.mu.Unlock()
 
 	selfIP := pm.selfDialIP()
 	if selfIP == "" {
-		return 0 // no address the peer could dial back: don't start
+		return 0, nil // no address the peer could dial back: don't start
 	}
 	fd, port, err := bindPunchPort()
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 	at := time.Now().Add(punchLeadTime)
-	pm.punchPut(peerNode, pendingPunch{fd: fd, localPort: port, at: at})
+	pend := newPendingPunch(pendingPunch{fd: fd, localPort: port, at: at})
+	pm.punchPut(peerNode, pend)
 
 	body, _ := json.Marshal(punchFrame{Node: pm.node, IP: selfIP, Port: port, At: at.UnixNano()})
 	pm.swarm.Broadcast(MineMessage(pm.swarm, pm.priv, pm.pub, "punch_req", string(body), nil))
 	go pm.awaitPunch(peerNode, at)
-	return port
+	return port, pend.done
 }
 
 // selfDialIP is the IP this node tells punch peers to dial back: explicit
@@ -188,7 +265,9 @@ func (pm *PeerMesh) answerPunch(msg SecureMessage) {
 		closePunchFD(fd)
 		return
 	}
-	pm.punchPut(req.Node, pendingPunch{fd: fd, localPort: port, ip: req.IP, port: req.Port, at: at, accepted: true})
+	pm.punchPut(req.Node, newPendingPunch(pendingPunch{
+		fd: fd, localPort: port, ip: req.IP, port: req.Port, at: at, accepted: true,
+	}))
 
 	body, _ := json.Marshal(punchFrame{Node: pm.node, IP: selfIP, Port: port, At: at.UnixNano()})
 	pm.swarm.Broadcast(MineMessage(pm.swarm, pm.priv, pm.pub, "punch_accept", string(body), nil))
@@ -236,21 +315,33 @@ func (pm *PeerMesh) awaitPunch(peer string, at time.Time) {
 		delete(pm.punchPending, peer)
 	}
 	pm.mu.Unlock()
-	if !ok || !pend.accepted {
+	if !ok {
+		return // already reaped: another path owns this attempt now
+	}
+	// Signal only once the whole attempt is over, so a retry never starts
+	// a second simultaneous open while these dial rounds are still live.
+	defer pend.finishPunch()
+	if !pend.accepted {
 		// No counterpart (accept never arrived): never dial blind.
 		// dropPunch would double-close; the fd dies here instead.
-		if ok && pend.fd > 0 {
+		if pend.fd > 0 {
 			closePunchFD(pend.fd)
 		}
 		return
 	}
 	// Rendezvous rounds: one instant rarely survives scheduling jitter
 	// on both ends, so a missed overlap rebinds identically and tries
-	// again. Both sides run the same cadence, so retries converge
-	// instead of chasing. Three rounds, then the relay remains.
+	// again. Three rounds, then the relay remains.
+	//
+	// The gap is measured from our own failure, not from the shared
+	// instant: every round is then guaranteed real spacing, so a round
+	// can never collapse into the one before it. Over a real network
+	// the overlap window is wide enough for that; on loopback under a
+	// saturated scheduler it is not, which is why the end-to-end punch
+	// test declines to run on an oversubscribed host.
 	t0 := time.Now()
 	fd, localPort := pend.fd, pend.localPort
-	for round := 0; round < 3; round++ {
+	for round := 0; round < punchDialRounds; round++ {
 		conn, err := connectBoundFD(fd, pend.ip, pend.port)
 		if err == nil {
 			pm.openLink(conn, true, "", "tcp", func(p string) {
@@ -259,22 +350,25 @@ func (pm *PeerMesh) awaitPunch(peer string, at time.Time) {
 			return
 		}
 		closePunchFD(fd)
-		if round == 2 {
+		if round == punchDialRounds-1 {
 			break
 		}
-		select {
-		case <-time.After(2 * time.Second):
-		case <-pm.stopChan:
-			return
-		}
+		// Rebind before waiting: the socket must be held across the gap
+		// or the peer's SYN can land before we own the port again.
 		var rerr error
 		fd, _, rerr = bindPort(localPort)
 		if rerr != nil {
 			fmt.Printf("🕳️  [PEER MESH] Punch to %q lost its footing (%v) — relay remains.\n", peer, rerr)
 			return
 		}
+		select {
+		case <-time.After(punchRoundGap):
+		case <-pm.stopChan:
+			closePunchFD(fd)
+			return
+		}
 	}
-	fmt.Printf("🕳️  [PEER MESH] Punch to %q missed after 3 rounds — relay remains.\n", peer)
+	fmt.Printf("🕳️  [PEER MESH] Punch to %q missed after %d rounds — relay remains.\n", peer, punchDialRounds)
 }
 
 // dropPunch abandons one rendezvous, closing its held socket.
@@ -285,7 +379,10 @@ func (pm *PeerMesh) dropPunch(peer string) {
 		delete(pm.punchPending, peer)
 	}
 	pm.mu.Unlock()
-	if ok && pend.fd > 0 {
-		closePunchFD(pend.fd)
+	if ok {
+		pend.finishPunch()
+		if pend.fd > 0 {
+			closePunchFD(pend.fd)
+		}
 	}
 }

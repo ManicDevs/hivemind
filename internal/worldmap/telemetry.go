@@ -22,7 +22,12 @@ type GazeState struct {
 		ByKind      map[string]int `json:"by_kind"`
 		HourKey     string         `json:"hour_key"`
 		DayRoot     string         `json:"day_root"`
+		LeafKey     string         `json:"leaf_key"`
+		HostKey     string         `json:"host_key"`
+		KeyTier     string         `json:"key_tier"`
+		LeafWindow  int            `json:"leaf_window_minutes"`
 		HourRotates string         `json:"hour_rotates"`
+		LeafRotates string         `json:"leaf_rotates"`
 		RelayOn     bool           `json:"relay_on"`
 		RelayURL    string         `json:"relay_url"`
 		Watch       string         `json:"watch"`

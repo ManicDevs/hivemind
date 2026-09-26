@@ -87,27 +87,29 @@ func ratchetBase(seedHex, fingerprint, machineID string) ([]byte, bool) {
 	return mac.Sum(nil), true
 }
 
-// dayKey walks the hash chain to a day: the TOTD root. One-way per
-// step — a compromised day reveals nothing past, and yesterday's root
-// is unrecoverable from today's. Pure: feeds unit tests and production
-// identically.
+// dayKey derives one day's root from the machine-bound base.
+//
+// It used to be a hash chain — SHA256 applied `day` times — and that was
+// a real defect: dayRoot(D+1) == SHA256(dayRoot(D)), so anyone holding a
+// single day root could walk forward and mint every future day, and every
+// hour key under them, with no other secret. The chain only ever protected
+// the past. Each day is now derived independently from the base with
+// HMAC, so disclosure runs in neither direction.
+//
+// Pure: feeds unit tests and production identically.
 func dayKey(seedHex, fingerprint, machineID string, day int64) ([]byte, bool) {
-	h, ok := ratchetBase(seedHex, fingerprint, machineID)
+	base, ok := ratchetBase(seedHex, fingerprint, machineID)
 	if !ok || day < 0 {
 		return nil, false
 	}
-	for i := int64(0); i < day; i++ {
-		sum := sha256.Sum256(h)
-		h = sum[:]
-	}
-	return h, true
+	return dayTier(base, day), true
 }
 
-// ratchetKey derives an hour's key through the day's root: HMAC(dayKey,
-// hour). Two tiers — an hourly leak reveals nothing (HMAC one-way, not
-// even the day's other hours), a daily leak is bounded to 24 hours, and
-// the chain behind stays buried. Same signature as before: determinism,
-// hourly rotation, machine binding, and 32-byte keys all hold.
+// ratchetKey derives an hour's key through the day's root. Same
+// signature and the same guarantees as before — determinism, hourly
+// rotation, machine binding, 32 bytes — with the forward leak removed:
+// an hour's key no longer implies its neighbours' in either direction,
+// because each period is HMAC'd independently from its parent.
 func ratchetKey(seedHex, fingerprint, machineID string, hour int64) ([]byte, bool) {
 	if hour < 0 {
 		return nil, false
@@ -116,9 +118,7 @@ func ratchetKey(seedHex, fingerprint, machineID string, hour int64) ([]byte, boo
 	if !ok {
 		return nil, false
 	}
-	mac := hmac.New(sha256.New, day)
-	mac.Write([]byte(fmt.Sprintf("hivemind-hour|%d", hour)))
-	return mac.Sum(nil), true
+	return tierKey(day, "hivemind/v2/hour|", hour), true
 }
 
 // hourKey derives this machine's key for a relative hour offset:
@@ -1000,3 +1000,34 @@ func (pm *PeerMesh) Close() {
 		_ = conn.Close()
 	}
 }
+
+// ── relay wire sealing (anonymous transports) ─────────────────────────
+//
+// The peer mesh above is an authenticated overlay: every frame is signed
+// and its peers are known, so a sealed-but-static last resort is a
+// harmless demo affordance. A public MQTT bus is neither. Anyone on the
+// internet can publish to hive/#, and every broker operator along the way
+// can read what we send, so on that wire "obfuscated only" is not a
+// posture — it is the vulnerability.
+//
+// The two functions below are therefore stricter than Encrypt/Decrypt on
+// one deliberate point: there is no static fallback. A payload is sealed
+// under the live hourly ratchet (or an operator-set fleet key) or it is
+// not sent, and a frame that does not open under a real key is dropped
+// without ever being parsed. That single property buys both halves of what
+// production needs here:
+//
+//   - confidentiality — broker operators and passive observers see only
+//     AES-256-GCM ciphertext;
+//   - authenticity — a stranger who cannot derive our key cannot produce a
+//     frame that opens, so an anonymous publisher cannot inject into the
+//     bus at all. No roster, no allowlist: the key is the whole policy.
+
+// relaySealWindow is how many hours back a sealed frame still opens.
+// Wide enough that a message sealed at 14:59 is readable at 15:01 by a
+// peer whose clock or scheduler ran slightly behind, narrow enough that a
+// captured frame has a short shelf life.
+const relaySealWindow = 3
+
+// The v2 seal/open implementation, the leaf tier, the fleet keyring and
+// the quarantined v1 reader all live in keys.go.

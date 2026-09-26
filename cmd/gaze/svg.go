@@ -29,6 +29,9 @@ func toWorldNodes(in []nodeView) []worldmap.NodeView {
 }
 
 // renderSVG paints one world map image from a snapshot via the shared engine.
-func renderSVG(nodes []nodeView, links []string, gazeName, now string) string {
-	return worldmap.RenderSVG(toWorldNodes(nodes), links, gazeName, now)
+// It is the single entry point for map rendering in the gaze, so the broker
+// mesh is wired in exactly one place and cannot drift from the other call
+// sites.
+func renderSVG(nodes []nodeView, links []string, gazeName, now, relayURL string, h worldmap.RelayHealth) string {
+	return worldmap.RenderSVGWithInfra(toWorldNodes(nodes), links, gazeName, now, relayURL, h)
 }

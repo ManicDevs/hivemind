@@ -4,6 +4,17 @@ SHELL := /bin/bash
 
 N ?= 2
 TICK ?= 50
+GAZE_PORT ?= 8090
+BASE_PORT ?= 20000
+RELAY_PORT ?= 8080
+STACK_FOR ?= 24h
+WORLD_CONTINENTS ?= 7
+# Failsafe load ceilings. <=0 disables the load check entirely (mem/fd
+# guards stay on). This host is shared and its 1m/5m load reflects other
+# tenants, so the stack disables the load trip by default; override with
+# e.g. WORLD_MAX_LOAD1=20 WORLD_MAX_LOAD5=16 on a dedicated box.
+WORLD_MAX_LOAD1 ?= 0
+WORLD_MAX_LOAD5 ?= 0
 STATICCHECK := $(shell which staticcheck 2>/dev/null || echo "$(HOME)/go/bin/staticcheck")
 
 RELAY_KEY_FILE := .relaykey
@@ -25,6 +36,20 @@ SAFE_PROCS ?= 4
 SAFE_ENV := ulimit -n 4096 2>/dev/null; export GOMAXPROCS=$(SAFE_PROCS);
 SAFE_RUN := nice -n 19
 
+# The relay's own base URL. World and gaze watch it to draw the broker-mesh
+# layer from real telemetry; set RELAY_URL to move the relay.
+RELAY_URL ?= http://localhost:$(RELAY_PORT)
+
+# Resolve the relay's base URL from the port it actually bound. The relay
+# rolls forward off a busy port and records the result, so tooling must read
+# that file rather than echo the requested default.
+#
+# Deferred (=) so the file is read when the recipe *runs*, not when the
+# Makefile is parsed — the relay has not written it yet at parse time.
+# scripts/relay-url.sh resolves the relay's real base URL at recipe time —
+# a script, not a make variable, because make expands its own functions once
+# per invocation, before the relay has bound.
+
 .PHONY: all help \
 build build-hivemind build-commune build-souls build-gaze build-relay build-world build-all \
 fmt vet staticcheck lint tidy check \
@@ -33,6 +58,7 @@ audit \
 up up-nodes down restart kill rerun status \
 think think-fast think-long demo pain prove \
 	world world-down world-test \
+	stack stack-down stack-restart \
 	fabric fabric-down fabric-status \
 	doctor souls commune gaze \
 rotate-keys list-keys \
@@ -135,40 +161,50 @@ build-hivemind: $(RELAY_KEY_FILE)
 build-commune:
 	@echo "🔨 Building bin/commune..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -o $(BIN_DIR)/commune ./cmd/commune
+	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/commune ./cmd/commune
 	@echo "✅ bin/commune ready"
 
 build-souls:
 	@echo "🔨 Building bin/souls..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -o $(BIN_DIR)/souls ./cmd/souls
+	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/souls ./cmd/souls
 	@echo "✅ bin/souls ready"
 
 build-gaze:
 	@echo "🔨 Building bin/gaze..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -o $(BIN_DIR)/gaze ./cmd/gaze
+	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/gaze ./cmd/gaze
 	@echo "✅ bin/gaze ready"
 
 build-world:
 	@echo "🔨 Building bin/world..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -o $(BIN_DIR)/world ./cmd/world
+	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/world ./cmd/world
 	@echo "✅ bin/world ready"
 
 build-relay:
 	@echo "🔨 Building bin/relay..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -o $(BIN_DIR)/relay ./cmd/relay
+	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/relay ./cmd/relay
 	@echo "✅ bin/relay ready (MQTT bridge)"
 
-build-all: build-hivemind build-commune build-souls build-gaze build-relay build-world build-fabric
+build-all: build-hivemind build-commune build-souls build-gaze build-relay build-world build-fabric build-derive
 
 build-fabric:
 	@echo "🔨 Building bin/fabric..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 go build -o $(BIN_DIR)/fabric ./cmd/fabric
+	@$(SAFE_ENV) CGO_ENABLED=0 $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/fabric ./cmd/fabric
 	@echo "✅ bin/fabric ready (adaptive neural routing fabric)"
+
+# derive prints the live hourly leaf and daily root through the same
+# runtime path the mesh uses. It is the independent cross-check that a
+# deployed binary is actually holding the key it was built with — and the
+# quickest way to confirm two hosts derive the same bus key.
+build-derive:
+	@echo "🔨 Building bin/derive..."
+	@mkdir -p $(BIN_DIR)
+	@$(SAFE_ENV) CGO_ENABLED=0 $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/derive ./cmd/derive
+	@echo "✅ bin/derive ready (rolling key inspector)"
 
 $(RELAY_KEY_FILE):
 	@echo "🔑 Generating machine-local relay key..."
@@ -231,9 +267,109 @@ audit: test
 up: build
 	@mkdir -p $(LOG_DIR)
 	@echo "🚀 Launching $(N) hivemind nodes (throttled)..."
-	@$(SAFE_ENV) $(SAFE_RUN) bin/hivemind up -nodes $(N) -tick $(TICK)
+	@$(SAFE_ENV) $(SAFE_RUN) bin/hivemind up -nodes $(N)
 
 up-nodes: up
+
+# ── full stack: mesh nodes + relay + world/gaze dashboard + fabric ──
+# Brings up every process the system needs, not just nodes. Tune with
+# N (nodes), TICK (ms), GAZE_PORT (dashboard), BASE_PORT (mesh base).
+stack: build-all
+	@# Refuse to start a second copy. Running `make stack` twice used to
+	@# quietly launch a duplicate world and a duplicate set of minds (we saw
+	@# 62 nodes and two worlds), which then fight over the same ports and
+	@# the same sockets. A stack is a singleton; make that explicit rather
+	@# than leaving it to be rediscovered.
+	@if pgrep -x world >/dev/null 2>&1 || pgrep -x hivemind >/dev/null 2>&1; then \
+		echo "✗ A stack is already running ($$(pgrep -x hivemind|wc -l) minds, $$(pgrep -x world|wc -l) world)."; \
+		echo "  Run 'make stack-down' first, or 'make stack-restart'."; \
+		exit 1; \
+	fi
+	@mkdir -p $(LOG_DIR) logs
+	@rm -f .stack-relay.port
+	@echo "🌐 Starting full stack: $(N) mesh nodes, relay, world+gaze, fabric..."
+	@ ( $(SAFE_ENV) $(SAFE_RUN) nohup bin/hivemind up -nodes $(N) -for $(STACK_FOR) > logs/nodes.log 2>&1 & echo $$! > .stack-nodes.pid )
+	@ ( export RELAY_PORT=$(RELAY_PORT); $(SAFE_ENV) $(SAFE_RUN) nohup bin/relay > logs/relay.log 2>&1 & echo $$! > .stack-relay.pid )
+	@# The relay may roll forward off a busy port, so world/fabric must watch
+	@# the port it actually bound, not the one we asked for. Each recipe line
+	@# is its own shell, so the resolver is invoked inline rather than
+	@# exported; it must run after the relay has written its port file.
+	@for i in $$(seq 1 40); do [ -s .stack-relay.port ] && break; sleep 0.2; done
+	@echo "   relay bound :$$(./scripts/relay-url.sh $(RELAY_URL) | sed 's|.*:||')"
+	@ ( export WORLD_CONTINENTS=$(WORLD_CONTINENTS) HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)); $(SAFE_ENV) $(SAFE_RUN) nohup bin/world -bin bin -gaze-port $(GAZE_PORT) -base-port $(BASE_PORT) -max-load1 $(WORLD_MAX_LOAD1) -max-load5 $(WORLD_MAX_LOAD5) > logs/world.log 2>&1 & echo $$! > .stack-world.pid )
+	@ ( export HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)); $(SAFE_ENV) $(SAFE_RUN) nohup bin/fabric > logs/fabric.log 2>&1 & echo $$! > .stack-fabric.pid )
+	@sleep 4
+	@echo "=== FULL STACK STATUS ==="
+	@pgrep -a -x hivemind || echo "No hivemind nodes running"
+	@pgrep -a -x relay || echo "relay: stopped"
+	@pgrep -a -x world || echo "world: stopped"
+	@pgrep -a -x fabric || echo "fabric: stopped"
+	@echo ""
+	@echo "Sockets:"; @ls /tmp/hivemind-*.sock 2>/dev/null || echo "  (none)"
+	@echo "Logs:"; @ls -1 logs/*.log 2>/dev/null | tr '\n' ' '; echo ""
+	@echo "  → Dashboard: http://localhost:$(GAZE_PORT)"
+
+stack-down:
+	@echo "🛑 Stopping full stack..."
+	@for p in nodes relay world fabric; do \
+		if [ -f .stack-$$p.pid ]; then kill -TERM $$(cat .stack-$$p.pid) 2>/dev/null || true; rm -f .stack-$$p.pid; fi; \
+	done
+	@for b in hivemind relay world fabric gaze commune souls; do pkill -TERM -x $$b 2>/dev/null || true; done
+	@# world/hivemind lay down gracefully; wait up to 10s, then escalate.
+	@for i in $$(seq 1 20); do \
+		pgrep -x hivemind >/dev/null 2>&1 || pgrep -x world >/dev/null 2>&1 || \
+		pgrep -x gaze >/dev/null 2>&1 || break; \
+		sleep 0.5; \
+	done
+	@# Escalate anything still standing, gaze included: a world killed
+	@# before its dashboards leaves them orphaned.
+	@for b in hivemind world relay fabric gaze; do pkill -KILL -x $$b 2>/dev/null || true; done
+	@rm -f /tmp/hivemind-*.sock /tmp/hivemind.sock
+	@rm -f .stack-*.pid
+	@echo "✅ Full stack stopped"
+stack-status:
+	@echo "=== FULL STACK STATUS ==="
+	@pgrep -a -x hivemind || echo "No hivemind nodes running"
+	@pgrep -a -x relay || echo "relay: stopped"
+	@pgrep -a -x world || echo "world: stopped"
+	@pgrep -a -x fabric || echo "fabric: stopped"
+	@echo ""
+	@echo "Sockets:"; @ls /tmp/hivemind-*.sock 2>/dev/null || echo "  (none)"
+	@echo "Logs:"; @ls -1 logs/*.log 2>/dev/null | tr '\n' ' '; echo ""
+	@echo "Dashboard: http://localhost:$(GAZE_PORT)"
+
+# The static port map + what this box is actually listening on right now.
+ports:
+	@echo "=== HIVEMIND PORT MAP (configured) ==="
+	@echo "Relay bus:      :$(RELAY_PORT)  (RELAY_PORT; rolls forward if busy)"
+	@echo "Gaze dashboard: :$(GAZE_PORT)  (world -gaze-port) → http://localhost:$(GAZE_PORT)/"
+	@echo "Mesh TCP:       $(BASE_PORT)+subnet*50+tier+1  (world -base-port)"
+	@echo "  continents:   eu=1 na=2 as=3 sa=4 af=5 oc=6 an=7  (stride 50)"
+	@echo "  eu → $(shell expr $(BASE_PORT) + 51)-$(shell expr $(BASE_PORT) + 54)   na → $(shell expr $(BASE_PORT) + 101)-$(shell expr $(BASE_PORT) + 104)   (etc.)"
+	@echo "LAN multicast:  239.192.0.99:37779  (org-local, never routed)"
+	@echo "DHT discovery:  UDP, HIVEMIND_DHT_PORT or ephemeral"
+	@echo "Public MQTT:    outbound tcp://broker.emqx.io:1883  (relay backup bus)"
+	@echo ""
+	@echo "=== LIVE LISTENERS (this box, right now) ==="
+	@# ss/netstat are restricted in some sandboxes; /proc/net is the truth.
+	@# Nodes listen dual-stack, so check both tcp and tcp6.
+	@ours=$$(if [ -s .stack-relay.port ]; then ./scripts/relay-url.sh | sed 's|.*:||'; fi); \
+	awk 'NR>1 && $$4=="0A" {split($$2,a,":"); p=strtonum("0x" a[2]); \
+		if ((p>=20000 && p<=21000)||(p>=8080 && p<=8090)) print p}' \
+		/proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -n | uniq | \
+	awk -v ours="$$ours" '{if ($$1>=20000 && $$1<=21000) print "  tcp LISTEN : " $$1 "  (mesh node)"; \
+	     else if ($$1==8090) print "  tcp LISTEN : 8090  (gaze dashboard)"; \
+	     else if ($$1==ours) print "  tcp LISTEN : " $$1 "  (relay — ours)"; \
+	     else print "  tcp LISTEN : " $$1 "  (NOT ours — foreign occupant)"}'
+	@awk 'BEGIN{f=0} NR>1 && $$4=="0A" {split($$2,a,":"); p=strtonum("0x" a[2]); \
+		if ((p>=20000&&p<=21000)||(p>=8080&&p<=8090)) f=1} \
+		END{if(!f) print "  (no stack TCP listeners — run \"make stack\" first)"}' \
+		/proc/net/tcp /proc/net/tcp6 2>/dev/null
+	@echo ""
+	@echo "=== LIVE UDP (multicast/DHT) ==="
+	@awk 'NR>1 {split($$2,a,":"); p=strtonum("0x" a[2]); if (p==37779) print "  udp :37779 (LAN multicast beacon)"}' \
+		/proc/net/udp /proc/net/udp6 2>/dev/null | sort -u
+	@echo "  (per-node DHT UDP is ephemeral unless HIVEMIND_DHT_PORT is set)"
 
 down:
 	@echo "🛑 Stopping all hivemind processes..."
@@ -249,6 +385,8 @@ down:
 	@echo "✅ All stopped"
 
 restart: down up
+
+stack-restart: stack-down stack
 
 kill: down
 

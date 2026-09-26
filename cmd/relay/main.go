@@ -4,16 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	mqtt "github.com/eclipse/paho.mqtt.golang"
-
-	"gitlab.torproject.org/cerberus-droid/hivemind/internal/infra"
 )
 
 // ── hivemind relay: our own message bus ──────────────────────────────
@@ -44,7 +41,7 @@ type topic struct {
 type relay struct {
 	mu     sync.RWMutex
 	topics map[string]*topic
-	mqtt   mqtt.Client
+	mesh   *mqttMesh
 }
 
 func newRelay() *relay {
@@ -65,38 +62,35 @@ func (r *relay) getTopic(name string) *topic {
 	return t
 }
 
-// connectMQTT connects to a public MQTT broker. No account needed
-// unless the endpoint matrix supplies credentials (e.g. FreeMQTT).
-func (r *relay) connectMQTT(broker string) {
-	opts := mqtt.NewClientOptions().
-		AddBroker(broker).
-		SetClientID(fmt.Sprintf("hivemind-relay-%d", time.Now().UnixNano())).
-		SetAutoReconnect(true).
-		SetConnectRetry(true).
-		SetConnectRetryInterval(10 * time.Second)
-
-	if ep, ok := infra.Lookup(broker); ok {
-		if ep.Username != "" {
-			opts.SetUsername(ep.Username)
-			opts.SetPassword(ep.Password)
+// deliver stores a message on the local bus and fans it out to every local
+// SSE subscriber. It is the single write path for a message regardless of
+// whether it arrived over HTTP or came back from a broker, so both routes
+// behave identically.
+func (r *relay) deliver(topicName string, msg message) {
+	t := r.getTopic(topicName)
+	t.mu.Lock()
+	t.messages = append(t.messages, msg)
+	// Keep last 10000 messages per topic (our bus, our limits)
+	if len(t.messages) > 10000 {
+		t.messages = t.messages[len(t.messages)-10000:]
+	}
+	for _, ch := range t.subChans {
+		select {
+		case ch <- msg:
+		default: // slow subscriber, drop
 		}
 	}
-
-	r.mqtt = mqtt.NewClient(opts)
-	if token := r.mqtt.Connect(); token.Wait() && token.Error() != nil {
-		log.Printf("⚠️  MQTT connect failed: %v (HTTP-only mode)\n", token.Error())
-	} else {
-		log.Printf("📡 [MQTT] Bridged to %s — unlimited pub/sub backup\n", broker)
-	}
+	t.mu.Unlock()
 }
 
-// mqttPublish sends a message to the MQTT broker on the same topic.
-func (r *relay) mqttPublish(topicName string, msg message) {
-	if r.mqtt == nil || !r.mqtt.IsConnected() {
+// inject folds a message that arrived from a broker into the local bus. It
+// deliberately does not re-publish: the message is already on the mesh, and
+// echoing it back would loop.
+func (r *relay) inject(topicName string, msg message) {
+	if topicName == "" {
 		return
 	}
-	payload, _ := json.Marshal(msg)
-	r.mqtt.Publish("hive/"+topicName, 1, false, payload)
+	r.deliver(topicName, msg)
 }
 
 // POST /{topic} — accept a ciphertext blob, store it
@@ -120,6 +114,8 @@ func (r *relay) handlePublish(w http.ResponseWriter, req *http.Request) {
 	t.mu.Lock()
 	t.nextID++
 	id := fmt.Sprintf("hivemind-%d-%d", now, t.nextID)
+	t.mu.Unlock()
+
 	msg := message{
 		ID:        id,
 		Event:     "message",
@@ -128,22 +124,19 @@ func (r *relay) handlePublish(w http.ResponseWriter, req *http.Request) {
 		Time:      now,
 		ExpiresAt: now + 3600, // 1 hour
 	}
-	t.messages = append(t.messages, msg)
-	// Keep last 10000 messages per topic (our bus, our limits)
-	if len(t.messages) > 10000 {
-		t.messages = t.messages[len(t.messages)-10000:]
-	}
-	// Fan out to local SSE subscribers
-	for _, ch := range t.subChans {
-		select {
-		case ch <- msg:
-		default: // slow subscriber, drop
-		}
-	}
-	t.mu.Unlock()
 
-	// Bridge to MQTT (no account, no quota, cross-WAN backup)
-	r.mqttPublish(topicName, msg)
+	// Local bus first, so an HTTP subscriber sees the message even if every
+	// broker is down.
+	r.deliver(topicName, msg)
+
+	// Then fan out to the broker mesh (no account, no quota, cross-WAN
+	// backup). A dead broker costs one lost copy, not the message.
+	if r.mesh != nil {
+		// Record the ID as seen before it hits the wire, so the echo coming
+		// back from each broker is recognised as our own.
+		r.mesh.markSeen(id)
+		r.mesh.publish(topicName, msg)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -208,7 +201,6 @@ func (r *relay) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 			flusher.Flush()
 		}
 	}
-	lastIdx := len(t.messages)
 	t.mu.RUnlock()
 
 	// Long-poll: new messages arrive via channel
@@ -223,24 +215,35 @@ func (r *relay) handleSubscribe(w http.ResponseWriter, req *http.Request) {
 			line, _ := json.Marshal(msg)
 			fmt.Fprintf(w, "%s\n", line)
 			flusher.Flush()
-			_ = lastIdx // used in the historical send above
 		}
 	}
 }
 
-// GET /healthz — health check
+// GET /healthz — health check, including per-broker mesh telemetry.
+//
+// This is the feed the world map renders as its infrastructure layer: it
+// reports which brokers are actually connected and how much traffic has
+// moved each way, so the map can never show a wire that is not carrying.
 func (r *relay) handleHealth(w http.ResponseWriter, req *http.Request) {
 	r.mu.RLock()
 	n := len(r.topics)
 	r.mu.RUnlock()
-	mqttOK := r.mqtt != nil && r.mqtt.IsConnected()
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+
+	payload := map[string]interface{}{
 		"status": "ok",
 		"topics": n,
-		"mqtt":   mqttOK,
 		"uptime": time.Since(startTime).String(),
-	})
+	}
+	if r.mesh != nil {
+		stats := r.mesh.stats()
+		payload["mqtt"] = stats.Live > 0
+		payload["mesh"] = stats
+		payload["brokers"] = r.mesh.snapshot()
+	} else {
+		payload["mqtt"] = false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(payload)
 }
 
 var startTime = time.Now()
@@ -253,47 +256,12 @@ func main() {
 
 	r := newRelay()
 
-	// Optional MQTT bridge: RELAY_MQTT="broker.hivemq.com" (hostname only)
-	if broker := os.Getenv("RELAY_MQTT"); broker != "" {
-		if ep, ok := infra.Lookup(infra.NormalizeHost(broker)); ok {
-			if ep.TCPPort > 0 {
-				broker = "tcp://" + ep.Host + ":" + strconv.Itoa(ep.TCPPort)
-			} else {
-				broker = ep.Host
-			}
-		}
-		r.connectMQTT(broker)
-	} else {
-		// Auto-fallback: walk preferred TARGET INFRASTRUCTURE DATA MATRIX
-		// entries (Prefer=true skips hosts that time out from this network).
-		for _, ep := range infra.Preferred() {
-			if ep.TCPPort <= 0 {
-				continue
-			}
-			broker := "tcp://" + ep.Host + ":" + strconv.Itoa(ep.TCPPort)
-			opts := mqtt.NewClientOptions().
-				AddBroker(broker).
-				SetClientID(fmt.Sprintf("hivemind-%d", time.Now().UnixNano())).
-				SetAutoReconnect(true).
-				SetConnectRetry(true).
-				SetConnectRetryInterval(5 * time.Second).
-				SetKeepAlive(30 * time.Second)
-			if ep.Username != "" {
-				opts.SetUsername(ep.Username)
-				opts.SetPassword(ep.Password)
-			}
-
-			client := mqtt.NewClient(opts)
-			if token := client.Connect(); token.WaitTimeout(3*time.Second) && token.Error() == nil {
-				r.mqtt = client
-				log.Printf("📡 [MQTT] Auto-connected to %s (%s) — unlimited backup relay\n", ep.Name, broker)
-				break
-			}
-		}
-		if r.mqtt == nil {
-			log.Printf("📡 [MQTT] No public broker reachable — HTTP-only mode\n")
-		}
-	}
+	// MQTT bridge mesh. RELAY_MQTT pins a single broker; otherwise every
+	// Prefer=true entry in the infrastructure matrix joins, and we publish
+	// and subscribe across all of them at once.
+	mesh := newMQTTMesh(r, os.Getenv("RELAY_MQTT"))
+	r.mesh = mesh
+	mesh.connectAll(3 * time.Second)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		switch req.Method {
@@ -312,6 +280,97 @@ func main() {
 		}
 	})
 
-	fmt.Printf("📡 [RELAY] Listening on :%s — zero limits, our bus\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	// Bind the configured port; if it's already taken, roll forward to the
+	// next free one rather than refusing to start the whole relay. A busy
+	// port on a dev box should degrade, not kill the mesh. The listener we
+	// bind is the one we serve on — probing a port by opening and closing
+	// it would race anything else that grabs it in between.
+	ln, err := listenFreePort(port)
+	if err != nil {
+		log.Fatalf("relay: no free port from %s: %v", port, err)
+	}
+	bound := ln.Addr().(*net.TCPAddr).Port
+
+	// Publish the port we actually got so `make ports` / stack tooling can
+	// report the truth rather than echoing the configured default.
+	claimStackPort(bound)
+
+	fmt.Printf("📡 [RELAY] Listening on :%d — zero limits, our bus (%d/%d brokers)\n",
+		bound, mesh.live(), len(mesh.peers))
+	log.Fatal(http.Serve(ln, nil))
+}
+
+// listenFreePort returns a live listener on want, or on the next free port
+// above it. The returned listener stays open and is what the caller serves
+// on, so there is no window where another process can take the port.
+func listenFreePort(want string) (net.Listener, error) {
+	base, err := strconv.Atoi(want)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for p := base; p < base+100; p++ {
+		ln, err := net.Listen("tcp", ":"+strconv.Itoa(p))
+		if err == nil {
+			return ln, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("ports %d-%d all busy: %w", base, base+99, lastErr)
+}
+
+const stackPortFile = ".stack-relay.port"
+
+// claimStackPort records the port this relay serves on, for `make ports`
+// and the stack tooling.
+//
+// It is a claim, not a write. A second relay -- someone testing an
+// opt-out, an ad-hoc run -- would otherwise overwrite the file and the
+// tooling would cheerfully report the wrong relay's health as the
+// stack's. It claims only when nobody holds the file, or when the recorded
+// owner is gone, so the tooling always points at a live relay.
+//
+// The port and owning pid are written together and renamed into place, so
+// a reader never sees a port without its owner.
+func claimStackPort(port int) {
+	if b, err := os.ReadFile(stackPortFile); err == nil {
+		if owner := stackPortOwner(b); owner > 0 && processIsRelay(owner) {
+			return // a live relay already owns the tooling
+		}
+	}
+	tmp := fmt.Sprintf("%s.%d.tmp", stackPortFile, os.Getpid())
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(f, "%d\n%d\n", port, os.Getpid())
+	_ = f.Close()
+	if err := os.Rename(tmp, stackPortFile); err != nil {
+		_ = os.Remove(tmp)
+	}
+}
+
+// stackPortOwner reads the owning pid recorded under the port. A file with
+// no pid is a legacy single-line file and reports no owner.
+func stackPortOwner(raw []byte) int {
+	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if len(lines) < 2 {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(lines[1]))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
+// processIsRelay reports whether pid is still a live relay. Checking the
+// command name as well as liveness keeps a recycled pid from holding the
+// claim hostage.
+func processIsRelay(pid int) bool {
+	comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(comm)) == "relay"
 }

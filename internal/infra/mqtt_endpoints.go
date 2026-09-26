@@ -92,7 +92,11 @@ var Endpoints = []Endpoint{
 		TLSPort: 0,
 		WSPort:  10443,
 		WSSPort: 0,
-		Prefer:  true,
+		// No TLS port is offered, and with transport TLS required there is
+		// nothing to connect to. Kept in the matrix for the record but not
+		// auto-dialed: as a preferred entry it only ever produced a broker
+		// that could not come up.
+		Prefer: false,
 	},
 	{
 		Name:     "FreeMQTT Public Cloud Instance",

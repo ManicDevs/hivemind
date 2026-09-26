@@ -77,6 +77,10 @@ func main() {
 	watchFlag := flag.String("watch", "", "continent/node-name filter (e.g. eu, as) when serving")
 	flag.Parse()
 
+	if *serveFlag == "" && flag.NArg() > 0 {
+		*serveFlag = flag.Arg(0)
+	}
+
 	if *serveFlag != "" {
 		if err := serve(*serveFlag, *watchFlag); err != nil {
 			fmt.Fprintf(os.Stderr, "gaze: %v\n", err)

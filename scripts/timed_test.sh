@@ -33,7 +33,7 @@ rm -f logs/peer-a.log logs/peer-b.log "${SOCK_A}" "${SOCK_B}"
 
 echo "🚀 [TIMED EXPERIMENT] Spawning symmetric two-peer mesh..."
 
-${HIVEMIND_BIN:-bin/hivemind} -mode peer -node alpha-node > logs/peer-a.log 2>&1 &
+HIVEMIND_VERBOSE=1 ${HIVEMIND_BIN:-bin/hivemind} -mode peer -node alpha-node > logs/peer-a.log 2>&1 &
 PID_A=$!
 
 W=0; while [ ! -S "${SOCK_A}" ] && [ $W -lt 50 ]; do sleep 0.1; W=$((W+1)); done
@@ -44,7 +44,7 @@ if [ ! -S "${SOCK_A}" ]; then
 fi
 echo "✔ alpha-node socket present (after ${W} poll intervals)"
 
-${HIVEMIND_BIN:-bin/hivemind} -mode peer -node beta-node > logs/peer-b.log 2>&1 &
+HIVEMIND_VERBOSE=1 ${HIVEMIND_BIN:-bin/hivemind} -mode peer -node beta-node > logs/peer-b.log 2>&1 &
 PID_B=$!
 
 echo "⏳ Waiting for peer link to form (max 15s)..."

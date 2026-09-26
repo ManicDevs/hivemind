@@ -302,7 +302,21 @@ func tooltip(name, role, cont string, alive bool, lives int, fitness float64) st
 // RenderSVG paints one complete world map image: coastlines, graticule,
 // day/night terminator, great-circle link arcs, nodes at real city
 // coordinates with tooltips, continent labels, legend, and clock.
-func RenderSVG(nodes []NodeView, links []string, gazeName, now string) string {
+// RenderSVG draws the map with no broker layer. Callers that have a relay
+// poller should use RenderSVGWithInfra so the infrastructure layer reflects
+// real telemetry instead of being inferred from a configured URL.
+func RenderSVG(nodes []NodeView, links []string, gazeName, now, relayURL string) string {
+	return renderSVG(nodes, links, gazeName, now, relayURL, RelayHealth{})
+}
+
+// RenderSVGWithInfra draws the map plus the broker mesh, using the relay's
+// reported per-broker health. Passing an empty RelayHealth degrades to
+// RenderSVG's behaviour, so a missing or dead relay never invents a wire.
+func RenderSVGWithInfra(nodes []NodeView, links []string, gazeName, now, relayURL string, h RelayHealth) string {
+	return renderSVG(nodes, links, gazeName, now, relayURL, h)
+}
+
+func renderSVG(nodes []NodeView, links []string, gazeName, now, relayURL string, relayHealth RelayHealth) string {
 	const W, H = 1200.0, 700.0
 	t0 := time.Now()
 	if now != "" {
@@ -317,8 +331,19 @@ func RenderSVG(nodes []NodeView, links []string, gazeName, now string) string {
 		byCont[n.Continent] = append(byCont[n.Continent], n)
 	}
 
-	// Project every node to its real coordinates.
+	// The relay is a class-actor, not a prop: it holds a live socket to
+	// every node at once. Bake it into posOf with its own role so the
+	// same linkArcsSVG that routes peer arcs routes the relay's — one
+	// arc engine, zero observer-centrism. When the relay is off we carry
+	// no phantom: the zero value keeps it out of the fan naturally.
 	posOf := map[string]nodePos{}
+	if relayURL != "" {
+		posOf["relay-broker"] = nodePos{
+			lon: 33.75, lat: 0, // 🛰️ geosynchronous: one hub, every horizon.
+			role:  "relay",
+			alive: true,
+		}
+	}
 	for cont, members := range byCont {
 		for _, n := range members {
 			ll := nodeLL(n.Name, cont)
@@ -373,6 +398,37 @@ func RenderSVG(nodes []NodeView, links []string, gazeName, now string) string {
 		linked[l] = true
 	}
 	b.WriteString(linkArcsSVG(W, H, gx, gy, linked, posOf))
+
+	// Infrastructure layer. When the relay has reported per-broker health we
+	// draw the real broker mesh — one marker per broker, arcs only where
+	// bytes actually moved, greyed out where the relay could not reach a
+	// host. Only if there is no telemetry do we fall back to the old
+	// "one hub, one fan" picture, and even then only for a configured
+	// relay: silence stays silence.
+	if len(relayHealth.Brokers) > 0 {
+		b.WriteString(infraLayer(W, H, gx, gy, relayHealth))
+	} else if relayURL != "" {
+		var fb strings.Builder
+		for _, p := range posOf {
+			if p.lon == 0 && p.lat == 0 {
+				continue
+			}
+			pts := greatCirclePoints(geoLL{lon: p.lon, lat: p.lat}, geoLL{lon: gx, lat: gy}, 24)
+			var pb strings.Builder
+			pb.WriteString(`<path class="relayflow" d="`)
+			for i, pt := range pts {
+				x, y := project(pt[0], pt[1], W, H)
+				if i == 0 {
+					fmt.Fprintf(&pb, "M%.1f,%.1f", x, y)
+				} else {
+					fmt.Fprintf(&pb, "L%.1f,%.1f", x, y)
+				}
+			}
+			fmt.Fprintf(&pb, `" fill="none" stroke="#2dd4bf" stroke-width="0.9" stroke-opacity="0.55" stroke-dasharray="2 3"/>`)
+			fb.WriteString(pb.String())
+		}
+		b.WriteString(fb.String())
+	}
 
 	// Nodes with tooltips and pulse animation on live ones.
 	byName := map[string]NodeView{}
