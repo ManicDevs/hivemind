@@ -282,7 +282,7 @@ up-nodes: up
 # ── full stack: mesh nodes + relay + world/gaze dashboard + fabric ──
 # Brings up every process the system needs, not just nodes. Tune with
 # N (nodes), TICK (ms), GAZE_PORT (dashboard), BASE_PORT (mesh base).
-stack: build-all
+stack: build-release
 	@# Refuse to start a second copy. Running `make stack` twice used to
 	@# quietly launch a duplicate world and a duplicate set of minds (we saw
 	@# 62 nodes and two worlds), which then fight over the same ports and

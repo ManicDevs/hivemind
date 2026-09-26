@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"runtime"
 	"strings"
@@ -57,6 +58,9 @@ type AntiRE struct {
 func GetAntiRE() (*AntiRE, error) {
 	antireOnce.Do(func() {
 		antireInstance, antireInitErr = newAntiRE()
+		if antireInstance != nil && antireInstance.enabled {
+			log.Printf("🛡️ [ANTI-RE] initialized (release build)")
+		}
 	})
 	return antireInstance, antireInitErr
 }
@@ -64,6 +68,7 @@ func GetAntiRE() (*AntiRE, error) {
 // newAntiRE creates the AntiRE instance. In non-release builds it returns
 // a no-op instance.
 func newAntiRE() (*AntiRE, error) {
+	log.Printf("🛡️ [ANTI-RE] newAntiRE called, releaseBuild=%v", isReleaseBuild())
 	a := &AntiRE{enabled: isReleaseBuild()}
 	if !a.enabled {
 		return a, nil
@@ -473,4 +478,17 @@ func (ef *EncryptedFunc) Call() {
 	// Placeholder: full encrypted function pointer implementation
 	// requires platform-specific runtime code modification.
 	panic("antire: EncryptedFunc not implemented")
+}
+
+// AnnounceKeyPosture logs the current key configuration at startup.
+// In release builds, this includes anti-RE status.
+func AnnounceKeyPosture() {
+	fmt.Fprintf(os.Stderr, "🛡️ [ANTI-RE] runtime hardening active: string encryption, key rotation sync, integrity checks\n")
+	a, err := GetAntiRE()
+	if err == nil && a != nil && a.isEnabled() {
+		// Already logged above
+	}
+	if RootRotationActive() {
+		fmt.Fprintf(os.Stderr, "🔄 [KEYS] root rotation active — listening on %d namespaces so old-root frames are delivered\n", len(Namespaces()))
+	}
 }

@@ -16,3 +16,6 @@ const (
 	PTRACE_TRACEME = 0
 	EPERM          = 1
 )
+
+// AnnounceKeyPosture is a no-op in non-release builds.
+func AnnounceKeyPosture() {}

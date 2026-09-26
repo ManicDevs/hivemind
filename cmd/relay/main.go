@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 	"log"
 	"net"
 	"net/http"
@@ -249,6 +250,7 @@ func (r *relay) handleHealth(w http.ResponseWriter, req *http.Request) {
 var startTime = time.Now()
 
 func main() {
+	log.Printf("🚀 [RELAY] starting (release build)")
 	port := "8080"
 	if p := os.Getenv("RELAY_PORT"); p != "" {
 		port = p
@@ -261,6 +263,9 @@ func main() {
 	// and subscribe across all of them at once.
 	mesh := newMQTTMesh(r, os.Getenv("RELAY_MQTT"))
 	r.mesh = mesh
+	log.Printf("🚀 [RELAY] calling AnnounceKeyPosture")
+	hm.AnnounceKeyPosture()
+	log.Printf("🚀 [RELAY] AnnounceKeyPosture returned")
 	mesh.connectAll(3 * time.Second)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
