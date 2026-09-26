@@ -296,16 +296,16 @@ stack: build-release
 	@mkdir -p $(LOG_DIR) logs
 	@rm -f .stack-relay.port
 	@echo "🌐 Starting full stack: $(N) mesh nodes, relay, world+gaze, fabric..."
-	@ ( $(SAFE_ENV) $(SAFE_RUN) nohup bin/hivemind up -nodes $(N) -for $(STACK_FOR) > logs/nodes.log 2>&1 & echo $$! > .stack-nodes.pid )
-	@ ( export RELAY_PORT=$(RELAY_PORT); $(SAFE_ENV) $(SAFE_RUN) nohup bin/relay > logs/relay.log 2>&1 & echo $$! > .stack-relay.pid )
+	@ ( export HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/hivemind up -nodes $(N) -for $(STACK_FOR) > logs/nodes.log 2>&1 & echo $$! > .stack-nodes.pid )
+	@ ( export RELAY_PORT=$(RELAY_PORT) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/relay > logs/relay.log 2>&1 & echo $$! > .stack-relay.pid )
 	@# The relay may roll forward off a busy port, so world/fabric must watch
 	@# the port it actually bound, not the one we asked for. Each recipe line
 	@# is its own shell, so the resolver is invoked inline rather than
 	@# exported; it must run after the relay has written its port file.
 	@for i in $$(seq 1 40); do [ -s .stack-relay.port ] && break; sleep 0.2; done
 	@echo "   relay bound :$$(./scripts/relay-url.sh $(RELAY_URL) | sed 's|.*:||')"
-	@ ( export WORLD_CONTINENTS=$(WORLD_CONTINENTS) HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)); $(SAFE_ENV) $(SAFE_RUN) nohup bin/world -bin bin -gaze-port $(GAZE_PORT) -base-port $(BASE_PORT) -max-load1 $(WORLD_MAX_LOAD1) -max-load5 $(WORLD_MAX_LOAD5) > logs/world.log 2>&1 & echo $$! > .stack-world.pid )
-	@ ( export HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)); $(SAFE_ENV) $(SAFE_RUN) nohup bin/fabric > logs/fabric.log 2>&1 & echo $$! > .stack-fabric.pid )
+	@ ( export WORLD_CONTINENTS=$(WORLD_CONTINENTS) HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/world -bin bin -gaze-port $(GAZE_PORT) -base-port $(BASE_PORT) -max-load1 $(WORLD_MAX_LOAD1) -max-load5 $(WORLD_MAX_LOAD5) > logs/world.log 2>&1 & echo $$! > .stack-world.pid )
+	@ ( export HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/fabric > logs/fabric.log 2>&1 & echo $$! > .stack-fabric.pid )
 	@sleep 4
 	@echo "=== FULL STACK STATUS ==="
 	@pgrep -a -x hivemind || echo "No hivemind nodes running"
