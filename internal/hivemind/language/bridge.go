@@ -2,7 +2,6 @@ package language
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -97,9 +96,3 @@ func (b *LanguageBridge) Close() error {
 }
 
 // FormatInteroceptionForLog creates a human-readable summary of interoceptive state
-func FormatInteroception(ctx PromptContext) string {
-	return fmt.Sprintf(
-		"Stress:%.2f Pain:%.2f Calm:%.2f Arousal:%.2f Surprise:%.2f Loneliness:%.2f Awe:%.2f Entropy:%.2f",
-		ctx.Stress, ctx.Pain, ctx.Calm, ctx.Arousal, ctx.Surprise, ctx.Loneliness, ctx.Awe, ctx.Entropy,
-	)
-}
