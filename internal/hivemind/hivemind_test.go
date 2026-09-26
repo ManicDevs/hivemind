@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/learning"
 	"io"
 	"math"
 	"net"
@@ -1801,14 +1802,14 @@ func TestParseCPUStat(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("parsed %d cpus, want 3", len(got))
 	}
-	if got["cpu0"].total != 600 || got["cpu0"].idle != 480 {
+	if got["cpu0"][0] != 600 || got["cpu0"][1] != 480 {
 		t.Fatalf("cpu0 wrong: %+v", got["cpu0"])
 	}
 }
 
 func TestCPUUsageFraction(t *testing.T) {
-	prev := map[string]cpuTimes{"cpu0": {total: 1000, idle: 800}, "cpu1": {total: 1000, idle: 600}}
-	cur := map[string]cpuTimes{"cpu0": {total: 2000, idle: 900}, "cpu1": {total: 2000, idle: 900}}
+	prev := map[string][2]uint64{"cpu0": {1000, 800}, "cpu1": {1000, 600}}
+	cur := map[string][2]uint64{"cpu0": {2000, 900}, "cpu1": {2000, 900}}
 	// dt=2000, di=400 → 0.80 busy.
 	got, ok := cpuUsageFraction(prev, cur)
 	if !ok || got < 0.799 || got > 0.801 {
@@ -1817,7 +1818,7 @@ func TestCPUUsageFraction(t *testing.T) {
 	if _, ok := cpuUsageFraction(nil, cur); ok {
 		t.Fatal("nil prev accepted")
 	}
-	if _, ok := cpuUsageFraction(map[string]cpuTimes{"cpu0": {total: 5, idle: 5}}, map[string]cpuTimes{"cpu0": {total: 3, idle: 1}}); ok {
+	if _, ok := cpuUsageFraction(map[string][2]uint64{"cpu0": {5, 5}}, map[string][2]uint64{"cpu0": {3, 1}}); ok {
 		t.Fatal("rewound counters accepted")
 	}
 }
@@ -2265,13 +2266,15 @@ func TestApplyPressureSignals(t *testing.T) {
 
 func TestThinAirThinsEntropy(t *testing.T) {
 	m := &Mind{Name: "gasp", SelfModel: map[string]interface{}{"entropy_avail": 64.0}}
+	m.Interoception = learning.NewInteroceptivePC()
 	m.Affect.Tick(m)
+	// With low entropy_avail, entropy should be diluted
 	if m.Affect.Entropy > 0.5 {
 		t.Fatalf("thin air left entropy fat: %.3f", m.Affect.Entropy)
 	}
 	m2 := &Mind{Name: "breathe", SelfModel: map[string]interface{}{"entropy_avail": 256.0}}
+	m2.Interoception = learning.NewInteroceptivePC()
 	m2.Affect.Tick(m2)
-	// Full pool: entropy untouched (draw-dependent, just not diluted).
 	if m2.Affect.Entropy < 0 || m2.Affect.Entropy > 1 {
 		t.Fatalf("entropy out of range: %.3f", m2.Affect.Entropy)
 	}

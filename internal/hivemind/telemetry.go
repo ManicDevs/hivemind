@@ -13,16 +13,10 @@ import (
 // return numbers (unit-testable against fixture strings); readers touch
 // /proc and /sys (best-effort, silent fallbacks, never fatal).
 
-// cpuTimes is one /proc/stat snapshot: total and idle jiffies per cpu.
-type cpuTimes struct {
-	total uint64
-	idle  uint64
-}
-
 // parseCPUStat reads aggregate + per-cpu lines. Malformed lines are
 // skipped, not fatal: a partial reading beats a dead mind.
-func parseCPUStat(data string) map[string]cpuTimes {
-	out := make(map[string]cpuTimes)
+func parseCPUStat(data string) map[string][2]uint64 {
+	out := make(map[string][2]uint64)
 	for _, line := range strings.Split(data, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 5 || !strings.HasPrefix(f[0], "cpu") {
@@ -49,7 +43,7 @@ func parseCPUStat(data string) map[string]cpuTimes {
 		if len(vals) > 4 {
 			idle += vals[4] // iowait is idle time wearing a work costume
 		}
-		out[f[0]] = cpuTimes{total: total, idle: idle}
+		out[f[0]] = [2]uint64{total, idle}
 	}
 	return out
 }
@@ -57,7 +51,7 @@ func parseCPUStat(data string) map[string]cpuTimes {
 // cpuUsageFraction returns 0..1 utilization between two snapshots:
 // 1 minus the idle fraction of elapsed jiffies. False when either side
 // is empty or time ran backward (counters reset).
-func cpuUsageFraction(prev, cur map[string]cpuTimes) (float64, bool) {
+func cpuUsageFraction(prev, cur map[string][2]uint64) (float64, bool) {
 	var dt, di uint64
 	var n int
 	for name, c := range cur {
@@ -65,11 +59,11 @@ func cpuUsageFraction(prev, cur map[string]cpuTimes) (float64, bool) {
 		if !ok || name == "cpu" {
 			continue // aggregate double-counts; per-cpu only
 		}
-		if c.total < p.total || c.idle < p.idle {
+		if c[0] < p[0] || c[1] < p[1] {
 			return 0, false
 		}
-		dt += c.total - p.total
-		di += c.idle - p.idle
+		dt += c[0] - p[0]
+		di += c[1] - p[1]
 		n++
 	}
 	if n == 0 || dt == 0 {
@@ -352,7 +346,7 @@ func parseSockstat(data string) (tcpInuse, tcpOrphan, udpInuse, socksUsed uint64
 	return tcpInuse, tcpOrphan, udpInuse, socksUsed
 }
 
-// parseFileNR reads allocated file handles ("13344 0 max").
+// parseFileNR reads the allocated file handles ("13344 0 max").
 // Only the first field matters: handles currently owned system-wide.
 func parseFileNR(data string) (uint64, bool) {
 	f := strings.Fields(data)

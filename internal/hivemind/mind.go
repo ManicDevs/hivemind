@@ -10,10 +10,14 @@ import (
 	"math"
 	"math/big"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/learning"
 )
 
 // Tuning for bodies and lifecycles: death heat, chaos resolution,
@@ -88,7 +92,7 @@ type Mind struct {
 	pendingBank   int
 	// prevCPU holds the last /proc/stat snapshot for delta-based CPU
 	// utilization. Per-mind (not shared): each mind feels its own window.
-	prevCPU      map[string]cpuTimes
+	prevCPU      map[string][2]uint64
 	prevNet      map[string][2]uint64
 	prevDisk     [2]uint64
 	prevStat     [2]uint64
@@ -122,13 +126,18 @@ type Mind struct {
 	Affect          Affect
 	Will            Will
 	PubKeyStr       string
-	privateKey      ed25519.PrivateKey
-	identitySeed    string
-	swarm           *Swarm
-	inbox           chan SecureMessage
-	stop            chan struct{}
-	done            chan struct{}
-	numbUntil       time.Time // empathic numbness without freezing the loop
+
+	// Real interoceptive predictive coding (replaces lookup-table feelings)
+	Interoception *learning.InteroceptivePC
+	// Raw interoceptive signals collected this cycle
+	LastInteroception learning.RawInteroception
+	privateKey        ed25519.PrivateKey
+	identitySeed      string
+	swarm             *Swarm
+	inbox             chan SecureMessage
+	stop              chan struct{}
+	done              chan struct{}
+	numbUntil         time.Time // empathic numbness without freezing the loop
 
 	Theta1 float64
 	Theta2 float64
@@ -226,8 +235,203 @@ func NewMind(name string, swarm *Swarm) *Mind {
 	}
 
 	m.SelfModel = m.Observe()
+
+	// Initialize real interoceptive predictive coding
+	m.Interoception = learning.NewInteroceptivePC()
+	m.LastInteroception = learning.CollectRawInteroception()
+
 	m.inbox = swarm.Join(m.PubKeyStr)
 	return m
+}
+
+// CollectInteroception reads real hardware telemetry for interoceptive processing.
+func (m *Mind) CollectInteroception() learning.RawInteroception {
+	now := time.Now()
+
+	// CPU load from /proc/stat (delta since last call)
+	cpuLoad := float32(0)
+	if m.prevCPU != nil {
+		cpuLoad = m.readCPULoad()
+	}
+
+	// RAM pressure from /proc/meminfo
+	ramPressure := m.readRAMPressure()
+
+	// Thermal from /sys/class/thermal
+	thermal := m.readThermal()
+
+	// Disk I/O from /proc/diskstats
+	diskIO := m.readDiskIO()
+
+	// Network I/O from /proc/net/dev
+	netIO := m.readNetIO()
+
+	m.prevObserved = now
+	return learning.RawInteroception{
+		CPULoad:     cpuLoad,
+		RAMPressure: ramPressure,
+		Thermal:     thermal,
+		DiskIO:      diskIO,
+		NetworkIO:   netIO,
+		Timestamp:   now,
+	}
+}
+
+// readCPULoad reads /proc/stat and returns CPU utilization 0-1
+func (m *Mind) readCPULoad() float32 {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return 0
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "cpu ") {
+			fields := strings.Fields(line)
+			if len(fields) < 8 {
+				continue
+			}
+			var total, idle uint64
+			for i := 1; i < len(fields); i++ {
+				v, _ := strconv.ParseUint(fields[i], 10, 64)
+				total += v
+				if i == 4 {
+					idle = v
+				}
+			}
+			if prev, ok := m.prevCPU["total"]; ok {
+				dt := total - prev[0]
+				di := idle - prev[1]
+				if dt > 0 {
+					return float32(float64(dt-di) / float64(dt))
+				}
+			}
+			if m.prevCPU == nil {
+				m.prevCPU = make(map[string][2]uint64)
+			}
+			m.prevCPU["total"] = [2]uint64{total, idle}
+			return 0
+		}
+	}
+	return 0
+}
+
+// readRAMPressure reads /proc/meminfo and returns memory pressure 0-1
+func (m *Mind) readRAMPressure() float32 {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	var total, available uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				v, _ := strconv.ParseUint(fields[1], 10, 64)
+				total = v
+			}
+		}
+		if strings.HasPrefix(line, "MemAvailable:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				v, _ := strconv.ParseUint(fields[1], 10, 64)
+				available = v
+			}
+		}
+	}
+	if total > 0 {
+		return float32(1.0 - float64(available)/float64(total))
+	}
+	return 0
+}
+
+// readThermal reads thermal zones and returns max temperature normalized 0-1
+func (m *Mind) readThermal() float32 {
+	maxTemp := float32(0)
+	thermalDir := "/sys/class/thermal"
+	entries, err := os.ReadDir(thermalDir)
+	if err != nil {
+		return 0
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "thermal_zone") {
+			path := filepath.Join(thermalDir, entry.Name(), "temp")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			temp, err := strconv.ParseFloat(strings.TrimSpace(string(data)), 64)
+			if err == nil {
+				// temp is in millidegrees Celsius
+				tempC := float32(temp / 1000.0)
+				// Normalize: 0 at 40C, 1 at 90C+
+				norm := (tempC - 40) / 50
+				if norm > maxTemp {
+					maxTemp = norm
+				}
+			}
+		}
+	}
+	return float32(clamp(float64(maxTemp), 0, 1))
+}
+
+// readDiskIO reads /proc/diskstats and returns I/O utilization 0-1
+func (m *Mind) readDiskIO() float32 {
+	data, err := os.ReadFile("/proc/diskstats")
+	if err != nil {
+		return 0
+	}
+	var totalIO uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 14 {
+			reads, _ := strconv.ParseUint(fields[3], 10, 64)
+			writes, _ := strconv.ParseUint(fields[7], 10, 64)
+			totalIO += reads + writes
+		}
+	}
+	if m.prevDisk[1] > 0 {
+		delta := totalIO - m.prevDisk[1]
+		// Normalize: 1000 IOPS = 1.0
+		val := float32(delta) / 1000.0
+		m.prevDisk[1] = totalIO
+		return float32(clamp(float64(val), 0, 1))
+	}
+	m.prevDisk[1] = totalIO
+	return 0
+}
+
+// readNetIO reads /proc/net/dev and returns network utilization 0-1
+func (m *Mind) readNetIO() float32 {
+	data, err := os.ReadFile("/proc/net/dev")
+	if err != nil {
+		return 0
+	}
+	var total uint64
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.Contains(line, ":") {
+			fields := strings.Fields(line)
+			if len(fields) >= 17 {
+				rx, _ := strconv.ParseUint(fields[1], 10, 64)
+				tx, _ := strconv.ParseUint(fields[9], 10, 64)
+				total += rx + tx
+			}
+		}
+	}
+	if m.prevNet != nil {
+		for iface, prev := range m.prevNet {
+			delta := total - prev[1]
+			// Normalize: 10MB/s = 1.0
+			val := float32(delta) / (10 * 1024 * 1024)
+			newArr := [2]uint64{prev[0], total}
+			m.prevNet[iface] = newArr
+			return float32(clamp(float64(val), 0, 1))
+		}
+	}
+	if m.prevNet == nil {
+		m.prevNet = make(map[string][2]uint64)
+	}
+	m.prevNet["total"] = [2]uint64{0, total}
+	return 0
 }
 
 func shortIDLong(key string) string {

@@ -39,16 +39,10 @@ type Affect struct {
 // by pain and stress, awe cooling toward wonder again.
 func (a *Affect) Tick(m *Mind) {
 	now := time.Now()
-	if m.LastContact.IsZero() {
-		a.Loneliness = clamp(a.Loneliness+0.05, 0, 1)
-	} else {
-		elapsed := now.Sub(m.LastContact).Seconds()
-		a.Loneliness = clamp(a.Loneliness-(elapsed/20), 0, 1)
-	}
 
 	b := make([]byte, 1)
 	if _, err := rand.Read(b); err != nil {
-		a.Entropy = 0.5 // cosmetic noise: a midpoint is the honest fallback
+		a.Entropy = 0.5
 	} else {
 		a.Entropy = float64(b[0]) / 255.0
 	}
@@ -58,21 +52,53 @@ func (a *Affect) Tick(m *Mind) {
 		a.Entropy *= clamp(avail/128, 0, 1)
 	}
 
-	if val, ok := m.SelfModel["cpu_stress"].(float64); ok {
-		a.Stress = val
+	// --- REAL INTEROCEPTIVE PREDICTIVE CODING ---
+	// Collect raw hardware signals (CPU, RAM, thermal, disk, network)
+	raw := m.CollectInteroception()
+	m.LastInteroception = raw
+
+	// Step the predictive coding hierarchy
+	feelings, predErrors := m.Interoception.Step(raw)
+
+	// Prediction errors ARE the feelings (predictive coding theory)
+	// Prediction error = what arrived minus what was expected
+	surprise := predErrors["interoceptive_error"]
+	if surprise < 0 {
+		surprise = -surprise
 	}
-	if val, ok := m.SelfModel["silicon_pain"].(float64); ok {
-		a.Pain = val
-	}
-	if val, ok := m.SelfModel["ram_fatigue"].(float64); ok {
-		a.Exhaustion = val
+	a.Surprise = clamp(float64(surprise), 0, 1)
+
+	// Map predictive coding feelings to affect dimensions
+	// Stress = interoceptive prediction error (body surprise)
+	a.Stress = clamp(float64(feelings["stress"]), 0, 1)
+	// Calm = inverse of stress (predictable = calm)
+	a.Peace = clamp(float64(feelings["calm"]), 0, 1)
+	// Arousal = interoceptive arousal dimension
+	a.Exhaustion = clamp(float64(feelings["fatigue"]), 0, 1)
+	// Pain = high-precision thermal/CPU prediction error
+	a.Pain = clamp(float64(feelings["stress"]*1.5), 0, 1)
+
+	// Awe decays, replenished by novelty (high surprise)
+	a.Awe = clamp(a.Awe*0.90+float64(surprise)*0.1, 0, 1)
+
+	// Loneliness: decay with contact
+	if m.LastContact.IsZero() {
+		a.Loneliness = clamp(a.Loneliness+0.05, 0, 1)
+	} else {
+		elapsed := now.Sub(m.LastContact).Seconds()
+		a.Loneliness = clamp(a.Loneliness-(elapsed/20), 0, 1)
 	}
 
-	a.Awe = clamp(a.Awe*0.90, 0, 1)
+	// Entropy from entropy pool
+	if avail, ok := m.SelfModel["entropy_avail"].(float64); ok && avail < 128 {
+		a.Entropy *= clamp(avail/128, 0, 1)
+	}
+
+	// Disruption from pain/stress
 	disruption := (a.Pain * 1.5) + (a.Stress * 0.5)
 	a.Peace = clamp(a.Peace+0.01-disruption, 0, 1)
 
-	// The raw vector transferred across the network.
+	// Raw vector for network transmission (4 dims)
 	a.RawDataState[0] = a.Pain
 	a.RawDataState[1] = a.Stress
 	a.RawDataState[2] = a.Exhaustion
