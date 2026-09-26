@@ -128,3 +128,17 @@ func NewLanguageModel(config ModelConfig) (LanguageModel, error) {
 func RegisterFactory(f LanguageModelFactory) {
 	defaultFactory = f
 }
+
+// RegisterLlamaCpp registers the CGO-based llama.cpp backend.
+// Only available when built with -tags release.
+func RegisterLlamaCpp() {
+	RegisterFactory(func(config ModelConfig) (LanguageModel, error) {
+		return NewLlamaCpp(config)
+	})
+}
+
+// Auto-register llama.cpp when built with release tag
+func init() {
+	// Only registers if built with -tags release
+	RegisterLlamaCpp()
+}
