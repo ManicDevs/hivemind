@@ -182,6 +182,9 @@ build-world:
 	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/world ./cmd/world
 	@echo "✅ bin/world ready"
 
+# Release build flags: enable anti-RE, strip symbols, disable debug info
+RELEASE_LDFLAGS = -s -w -X gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind.releaseBuild=1
+
 build-relay:
 	@echo "🔨 Building bin/relay..."
 	@mkdir -p $(BIN_DIR)
@@ -189,6 +192,11 @@ build-relay:
 	@echo "✅ bin/relay ready (MQTT bridge)"
 
 build-all: build-hivemind build-commune build-souls build-gaze build-relay build-world build-fabric build-derive
+
+build-release: build-all
+	@echo "Building release binaries with anti-RE hardening..."
+	@for bin in hivemind commune souls gaze relay world fabric derive; do 		go build -tags release -ldflags "$(RELEASE_LDFLAGS)" -o bin/$$bin ./cmd/$$bin; 	done
+	@echo "Release binaries in bin/ (stripped, anti-RE enabled)"
 
 build-fabric:
 	@echo "🔨 Building bin/fabric..."
