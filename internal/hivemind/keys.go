@@ -373,23 +373,6 @@ func Namespaces() []string {
 	return out
 }
 
-// v1RatchetKey is the retired derivation, kept only to read v1 frames.
-// Its chain walk is the defect v2 removes; do not reuse it for anything
-// that mints new keys.
-func v1RatchetKey(backHours int) ([]byte, bool) {
-	hour := hourEpoch(time.Now()) - int64(backHours)
-	if hour < 0 {
-		return nil, false
-	}
-	h := v1DayRoot(compileRelayKey, machineFingerprint(), machineSecret(), hour/24)
-	if h == nil {
-		return nil, false
-	}
-	mac := hmac.New(sha256.New, h)
-	mac.Write([]byte(fmt.Sprintf("hivemind-hour|%d", hour)))
-	return mac.Sum(nil), true
-}
-
 // v1DayRoot is the forward hash chain v1 shipped: SHA256 applied `day`
 // times. Its forward leak is why v2 derives each day independently.
 func v1DayRoot(seedHex, fingerprint, machineID string, day int64) []byte {

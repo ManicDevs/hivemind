@@ -1,5 +1,3 @@
-//go:build !release || !cgo
-
 package language
 
 import (

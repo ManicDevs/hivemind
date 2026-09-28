@@ -3,7 +3,13 @@ package learning
 import (
 	"math"
 	"math/rand"
+	"time"
 )
+
+// rng is the package's independent source of randomness for weight
+// initialisation. It exists so callers can pin reproducible weight draws
+// without touching the process-global rand (deprecated since Go 1.20).
+var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
 // Tensor is a flat row-major tensor with shape
 type Tensor struct {
@@ -136,7 +142,12 @@ func (v *Value) Backward() {
 	}
 	build(v)
 	for i := len(topo) - 1; i >= 0; i-- {
-		topo[i].backward()
+		// Leaves (produced by NewValue, e.g. raw inputs and loss targets)
+		// carry no backward closure. They still belong in the topological
+		// order, so skip the call rather than dereferencing nil.
+		if topo[i].backward != nil {
+			topo[i].backward()
+		}
 	}
 }
 
@@ -180,7 +191,7 @@ func NewLinear(in, out int) *Linear {
 		for j := 0; j < in; j++ {
 			// Xavier init
 			scale := float32(math.Sqrt(2.0 / float64(in)))
-			l.Weight[i][j] = NewParam(float32(rand.NormFloat64()) * scale)
+			l.Weight[i][j] = NewParam(float32(rng.NormFloat64()) * scale)
 		}
 		l.Bias[i] = NewParam(0)
 	}
@@ -319,9 +330,29 @@ func NewGRU(inputSize, hiddenSize int) *GRU {
 	return &GRU{Cell: cell, Hidden: h}
 }
 
+// Forward advances the recurrence by one step.
+//
+// The incoming hidden state is detached first: it is replaced by fresh leaf
+// values carrying the same numbers. Without this, h would be last step's
+// output nodes, whose `prev` chains reach back through every earlier step, so
+// the gradient would be an unbounded product of Jacobians and would overflow
+// to Inf/NaN within a few hundred streaming steps. Detaching keeps the
+// recurrence — the state still carries information forward numerically —
+// while bounding backprop to a single step (truncated BPTT), which is the
+// correct semantics for an online learner.
 func (g *GRU) Forward(x []*Value) []*Value {
-	g.Hidden = g.Cell.Forward(x, g.Hidden)
+	g.Hidden = g.Cell.Forward(x, g.DetachedHidden())
 	return g.Hidden
+}
+
+// DetachedHidden returns the current hidden state as fresh leaves, severing any
+// gradient path back through previous steps.
+func (g *GRU) DetachedHidden() []*Value {
+	out := make([]*Value, len(g.Hidden))
+	for i, v := range g.Hidden {
+		out[i] = NewValue(v.Data)
+	}
+	return out
 }
 
 func (g *GRU) Reset() {
@@ -416,18 +447,35 @@ func ReLU() *Activation {
 type SGD struct {
 	Lr       float32
 	Momentum float32
+	// Clip, when > 0, bounds the L2 norm of the gradient of a single Step.
+	// A recurrent net trained through its own hidden state can produce very
+	// large gradients; without a bound the weights run away and the loss
+	// goes NaN within a few hundred ticks.
+	Clip     float32
 	Velocity map[*Value]float32
 }
 
 func NewSGD(lr, momentum float32) *SGD {
-	return &SGD{Lr: lr, Momentum: momentum, Velocity: make(map[*Value]float32)}
+	return &SGD{Lr: lr, Momentum: momentum, Clip: 0, Velocity: make(map[*Value]float32)}
 }
 
 func (o *SGD) Step(params []*Param) {
+	// Scale every gradient by one common factor so the total update norm
+	// respects Clip, rather than clipping each gradient independently.
+	scale := float32(1.0)
+	if o.Clip > 0 {
+		var sum float64
+		for _, p := range params {
+			sum += float64(p.Value.Grad) * float64(p.Value.Grad)
+		}
+		if norm := float32(math.Sqrt(sum)); norm > o.Clip {
+			scale = o.Clip / (norm + 1e-8)
+		}
+	}
 	for _, p := range params {
 		v := p.Value
 		vel := o.Velocity[v]
-		vel = o.Momentum*vel + o.Lr*v.Grad
+		vel = o.Momentum*vel + o.Lr*scale*v.Grad
 		o.Velocity[v] = vel
 		v.Data -= vel
 	}

@@ -6,11 +6,11 @@
 
 #include "textflag.h"
 
-TEXT ·rawSyscall(SB), NOSPLIT, $0-40
+TEXT ·rawSyscall(SB), NOSPLIT, $0-56
     MOVD trap+0(FP), X8
     MOVD a1+8(FP), X0
     MOVD a2+16(FP), X1
-    MOVD a2+24(FP), X2
+    MOVD a3+24(FP), X2
     SVC 0
     MOVD X0, r1+32(FP)
     MOVD X1, r2+40(FP)

@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	ErrNoModelPath     = errors.New("no model path provided")
-	ErrModelLoadFailed = errors.New("failed to load model")
+	ErrNoModelPath      = errors.New("no model path provided")
+	ErrModelLoadFailed  = errors.New("failed to load model")
 	ErrGenerationFailed = errors.New("generation failed")
 )
 
@@ -58,15 +58,23 @@ func DefaultRemoteLLMConfig(endpoint, model string) RemoteLLMConfig {
 	return RemoteLLMConfig{
 		Endpoint: endpoint,
 		Model:    model,
-		Timeout:  60 * time.Second,
+		Timeout:  300 * time.Second,
 	}
 }
 
 func OllamaConfig(endpoint, model string) RemoteLLMConfig {
+	// Normalize endpoint: if it already ends with /api/generate, use as-is
+	// Otherwise append /api/generate
+	endpoint = strings.TrimSuffix(endpoint, "/")
+	if strings.HasSuffix(endpoint, "/api/generate") {
+		// Already has the full path
+	} else {
+		endpoint = endpoint + "/api/generate"
+	}
 	return RemoteLLMConfig{
-		Endpoint: endpoint + "/api/generate",
+		Endpoint: endpoint,
 		Model:    model,
-		Timeout:  60 * time.Second,
+		Timeout:  300 * time.Second,
 	}
 }
 
@@ -74,7 +82,7 @@ func OpenAICompatibleConfig(endpoint, model, apiKey string) RemoteLLMConfig {
 	return RemoteLLMConfig{
 		Endpoint: endpoint + "/v1/completions",
 		Model:    model,
-		Timeout:  60 * time.Second,
+		Timeout:  300 * time.Second,
 		APIKey:   apiKey,
 	}
 }
@@ -135,5 +143,3 @@ func BuildPrompt(ctx PromptContext) string {
 	b.WriteString("<|assistant|>\n")
 	return b.String()
 }
-
-

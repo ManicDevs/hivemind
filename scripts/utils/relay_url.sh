@@ -13,7 +13,7 @@
 # would see a connection error instead of an honest fallback. A second relay
 # cannot steal the file either -- the relay only claims it when unowned.
 #
-# Usage: scripts/relay-url.sh [fallback-url]
+# Usage: scripts/utils/relay_url.sh [fallback-url]
 port_file=".stack-relay.port"
 fallback="${1:-http://localhost:8080}"
 

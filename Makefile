@@ -15,6 +15,14 @@ WORLD_CONTINENTS ?= 7
 # e.g. WORLD_MAX_LOAD1=20 WORLD_MAX_LOAD5=16 on a dedicated box.
 WORLD_MAX_LOAD1 ?= 0
 WORLD_MAX_LOAD5 ?= 0
+# Failsafe RAM/fd ceilings. These mirror cmd/world's own defaults (0.85 /
+# 0.75) so behaviour is unchanged unless you override them. The RAM guard is
+# NOT a soft warning: crossing it makes the world tear itself down, because
+# 28 minds + 7 gazes will otherwise OOM the box. On a small or shared host,
+# either lower WORLD_CONTINENTS / N or raise this deliberately, e.g.
+#   make stack WORLD_MAX_MEM=0.95
+WORLD_MAX_MEM ?= 0.85
+WORLD_MAX_FD ?= 0.75
 STATICCHECK := $(shell which staticcheck 2>/dev/null || echo "$(HOME)/go/bin/staticcheck")
 
 RELAY_KEY_FILE := .relaykey
@@ -36,6 +44,17 @@ SAFE_PROCS ?= 4
 SAFE_ENV := ulimit -n 4096 2>/dev/null; export GOMAXPROCS=$(SAFE_PROCS);
 SAFE_RUN := nice -n 19
 
+# Hivemind is pure Go. Every recipe goes through PURE_GO, which hard-disables
+# cgo and blanks the CGO_* variables, so an ambient `CGO_LDFLAGS=-lllama` in the
+# caller's shell (or a leftover llama.cpp checkout in /tmp) can never leak into
+# a link step. Do not invoke `go build` here without this prefix.
+PURE_GO := CGO_ENABLED=0 CGO_CFLAGS= CGO_CPPFLAGS= CGO_CXXFLAGS= CGO_LDFLAGS=
+
+# Resolves the relay's real base URL from the port it actually bound. Defined
+# once here: a stale path used to resolve to nothing, which silently handed
+# world/fabric an empty HIVEMIND_RELAY_URL instead of failing.
+RELAY_URL_SCRIPT := scripts/utils/relay_url.sh
+
 # The relay's own base URL. World and gaze watch it to draw the broker-mesh
 # layer from real telemetry; set RELAY_URL to move the relay.
 RELAY_URL ?= http://localhost:$(RELAY_PORT)
@@ -46,14 +65,14 @@ RELAY_URL ?= http://localhost:$(RELAY_PORT)
 #
 # Deferred (=) so the file is read when the recipe *runs*, not when the
 # Makefile is parsed — the relay has not written it yet at parse time.
-# scripts/relay-url.sh resolves the relay's real base URL at recipe time —
+# scripts/utils/relay_url.sh resolves the relay's real base URL at recipe time —
 # a script, not a make variable, because make expands its own functions once
 # per invocation, before the relay has bound.
 
 .PHONY: all help \
 build build-hivemind build-commune build-souls build-gaze build-relay build-world build-all \
 fmt vet staticcheck lint tidy check \
-test test-race test-verbose test-full \
+test test-concurrent test-race test-verbose test-full \
 audit \
 up up-nodes down restart kill rerun status \
 think think-fast think-long demo pain prove \
@@ -105,8 +124,8 @@ help:
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-gaze" "bin/gaze only"
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-fabric" "bin/fabric only (adaptive neural fabric)"
 	@echo ""
-	@printf "  \033[33m%-20s\033[0m %s\n" "test" "fmt + vet + tests"
-	@printf "  \033[33m%-20s\033[0m %s\n" "test-race" "Tests with -race"
+	@printf "  \033[33m%-20s\033[0m %s\n" "test" "fmt + vet + tests (with -race if a C compiler exists)"
+	@printf "  \033[33m%-20s\033[0m %s\n" "test-concurrent" "Pure-Go concurrency gate (no C toolchain needed)"
 	@printf "  \033[33m%-20s\033[0m %s\n" "test-full" "Full test suite"
 	@printf "  \033[33m%-20s\033[0m %s\n" "audit" "fmt + vet + build + tests"
 	@printf "  \033[33m%-20s\033[0m %s\n" "lint" "gofmt + vet + staticcheck"
@@ -155,31 +174,31 @@ build: build-all
 build-hivemind: $(RELAY_KEY_FILE)
 	@echo "🔨 Building bin/hivemind..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/hivemind ./cmd/hivemind
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/hivemind ./cmd/hivemind
 	@echo "✅ bin/hivemind ready"
 
 build-commune:
 	@echo "🔨 Building bin/commune..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/commune ./cmd/commune
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/commune ./cmd/commune
 	@echo "✅ bin/commune ready"
 
 build-souls:
 	@echo "🔨 Building bin/souls..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/souls ./cmd/souls
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/souls ./cmd/souls
 	@echo "✅ bin/souls ready"
 
 build-gaze:
 	@echo "🔨 Building bin/gaze..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/gaze ./cmd/gaze
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/gaze ./cmd/gaze
 	@echo "✅ bin/gaze ready"
 
 build-world:
 	@echo "🔨 Building bin/world..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/world ./cmd/world
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/world ./cmd/world
 	@echo "✅ bin/world ready"
 
 # Release build flags: enable anti-RE, strip symbols, disable debug info
@@ -188,21 +207,38 @@ RELEASE_LDFLAGS = -s -w -X gitlab.torproject.org/cerberus-droid/hivemind/interna
 build-relay:
 	@echo "🔨 Building bin/relay..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/relay ./cmd/relay
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/relay ./cmd/relay
 	@echo "✅ bin/relay ready (MQTT bridge)"
 
-build-all: build-hivemind build-commune build-souls build-gaze build-relay build-world build-fabric build-derive
+build-all: build-hivemind build-souls build-gaze build-relay build-world build-fabric build-derive
 
-build-release: build-all
+build-release: build-hivemind build-gaze build-relay build-world build-fabric build-derive build-souls
 	@echo "Building release binaries with anti-RE hardening..."
-	@for bin in hivemind commune souls gaze relay world fabric derive; do 		go build -tags release -ldflags "$(RELEASE_LDFLAGS)" -o bin/$$bin ./cmd/$$bin; 	done
+	@for bin in hivemind commune souls gaze relay world fabric derive; do 		$(PURE_GO) go build -tags release -ldflags "$(RELEASE_LDFLAGS)" -o bin/$$bin ./cmd/$$bin; 	done
 	@echo "Release binaries in bin/ (stripped, anti-RE enabled)"
 
 build-fabric:
 	@echo "🔨 Building bin/fabric..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) CGO_ENABLED=0 $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/fabric ./cmd/fabric
-	@echo "✅ bin/fabric ready (adaptive neural routing fabric)"
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/fabric ./cmd/fabric
+	@echo "✅ bin/fabric ready (adaptive neural routing fabric, real data only)"
+
+# Simulator-enabled developer builds. These are built into bin/ like any other
+# binary, which is why `make clean-release-sim` exists: bin/ is a shared
+# workspace, and a simulator-enabled binary must never be mistaken for a
+# release artefact. Only the `sim` tag is added; the release tag is not, so
+# these are not hardened builds and are not meant to be shipped.
+build-fabric-sim:
+	@echo "🔨 Building bin/fabric (simulator enabled — NOT a release artefact)..."
+	@mkdir -p $(BIN_DIR)
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -tags sim -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/fabric ./cmd/fabric
+	@echo "✅ bin/fabric ready (with adversarial matrix)"
+
+build-world-sim:
+	@echo "🔨 Building bin/world (simulator enabled — NOT a release artefact)..."
+	@mkdir -p $(BIN_DIR)
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -tags sim -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/world ./cmd/world
+	@echo "✅ bin/world ready (with adversarial gate)"
 
 # derive prints the live hourly leaf and daily root through the same
 # runtime path the mesh uses. It is the independent cross-check that a
@@ -211,7 +247,7 @@ build-fabric:
 build-derive:
 	@echo "🔨 Building bin/derive..."
 	@mkdir -p $(BIN_DIR)
-	@$(SAFE_ENV) CGO_ENABLED=0 $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/derive ./cmd/derive
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/derive ./cmd/derive
 	@echo "✅ bin/derive ready (rolling key inspector)"
 
 $(RELAY_KEY_FILE):
@@ -236,7 +272,7 @@ fmt:
 	@echo "✅ Formatted"
 
 vet:
-	@$(SAFE_ENV) $(SAFE_RUN) go vet ./...
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go vet ./...
 	@echo "✅ Vet clean"
 
 staticcheck:
@@ -250,24 +286,83 @@ tidy:
 
 check: lint tidy
 
+# ── Adversarial continental simulator (development only) ─────────────────────
+#
+# The simulator is an in-process 56-node matrix (28 defender / 28 attacker)
+# across all 7 continents. It exists to attack the defence under test; it is
+# never a source of reported data.
+#
+# It is compiled behind the `sim` build tag. `make build-release` does NOT set
+# that tag, so a release fabric or world contains no simulator: no simulated
+# node, no synthetic attack, no modelled latency, and no -sim flag to invoke one
+# with. Release binaries report only measurements from their own real sockets,
+# via cmd/fabric/telemetry.go.
+#
+# Everything below builds with -tags sim into bin/, which is a developer
+# workspace, not a release artefact. `make clean-release-sim` removes it.
+
+SIM_DURATION ?= 30s
+SIM_SEED ?= 1
+
+# Print the modelled geography and node matrix without running anything.
+sim-topology: build-fabric-sim
+	@./bin/fabric -sim-topology
+
+# Run the matrix standalone for a bounded time, with a full scoreboard table.
+sim: build-fabric-sim
+	@./bin/fabric -sim -sim-duration=$(SIM_DURATION) -sim-seed=$(SIM_SEED) -sim-verbose
+
+# Run the matrix attached to a live fabric. Ctrl-C to stop; the scoreboard stays
+# on the terminal and nothing is persisted.
+sim-live: build-fabric-sim
+	@./bin/fabric -sim
+
+# Adversarial launch gate: refuses to start a world whose defence does not hold.
+# Exits non-zero on failure, so it can gate a deployment directly. The gate is
+# built with -tags sim and is a development instrument, not a release component.
+sim-preflight: build-world-sim
+	@./bin/world -sim-preflight -sim-preflight-duration=$(SIM_DURATION) \
+		-sim-preflight-seed=$(SIM_SEED)
+
+# Remove simulator-enabled binaries, leaving only release-capable ones.
+clean-release-sim:
+	@echo "🧹 Removing simulator-enabled binaries (release builds are unaffected)"
+	@rm -f bin/fabric bin/world
+	@echo "✅ Done — run 'make build-release' for real-data binaries"
+
+
 test: check
 	@echo "🧪 Testing..."
 	@if command -v gcc >/dev/null 2>&1; then \
 	echo "  (using -race)"; \
-	$(SAFE_ENV) $(SAFE_RUN) timeout 120 go test ./... -race -count=1 2>/tmp/hivemind-test.log && echo "✅ Tests passed (-race)" || (cat /tmp/hivemind-test.log; exit 1); \
+	$(SAFE_ENV) $(SAFE_RUN) timeout 120 $(PURE_GO) go test ./... -race -count=1 2>/tmp/hivemind-test.log && echo "✅ Tests passed (-race)" || (cat /tmp/hivemind-test.log; exit 1); \
 	else \
-	echo "  ⚠️  No C compiler — running plain tests"; \
-	$(SAFE_ENV) $(SAFE_RUN) timeout 120 go test ./... -count=1 && echo "✅ Tests passed (plain)"; \
+	echo "  ⚠️  No C compiler — running plain tests + pure-Go concurrency gate"; \
+	$(MAKE) test-concurrent; \
+	$(SAFE_ENV) $(SAFE_RUN) timeout 120 $(PURE_GO) go test ./... -count=1 && echo "✅ Tests passed (plain)"; \
 	fi
 
+# Pure-Go concurrency gate. Without a C toolchain, `go test -race` is impossible:
+# the race detector requires cgo. This target runs the two substitutes instead —
+# a static analysis over Transport and Detector (any write to a field that is
+# neither atomic nor provably under the mutex fails the build) and a dynamic
+# invariant sweep across adversarial GOMAXPROCS — then the whole suite with the
+# runtime's own pointer checker enabled.
+test-concurrent:
+	@echo "  🔒 static write-discipline analysis (Transport/Detector)"
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./internal/fabricsim/ -run '^TestNoUnsynchronisedStructWrites$$' -count=1
+	@echo "  🔁 dynamic invariants under GOMAXPROCS 1..32"
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./internal/fabricsim/ -run '^TestConcurrentRunKeepsAccountingInvariants$$' -count=1
+	@echo "  ✅ pure-Go concurrency gate passed"
+
 test-race: check
-	@$(SAFE_ENV) $(SAFE_RUN) go test ./... -race -count=1
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./... -race -count=1
 
 test-verbose: check
-	@$(SAFE_ENV) $(SAFE_RUN) go test ./... -v -count=1
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./... -v -count=1
 
 test-full: check
-	@$(SAFE_ENV) $(SAFE_RUN) go test ./... -count=1 -v
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./... -count=1 -v
 
 audit: test
 	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/audit.sh
@@ -295,26 +390,50 @@ stack: build-release
 	fi
 	@mkdir -p $(LOG_DIR) logs
 	@rm -f .stack-relay.port
+	@# Self-heal before launching. A half-dead stack used to leave orphaned
+	@# relays squatting on $(RELAY_PORT) and stale world.pid/world.lock files
+	@# pointing at dead PIDs; the next `make stack` would then start a relay
+	@# that could not bind, a world that quit at once, and still print a
+	@# cheerful success report. Clear the decks first.
+	@for b in hivemind relay world fabric gaze; do pkill -TERM -x $$b 2>/dev/null || true; done
+	@sleep 1
+	@for b in hivemind world relay fabric gaze; do pkill -KILL -x $$b 2>/dev/null || true; done
+	@rm -f .stack-*.pid /tmp/hivemind-*.sock /tmp/hivemind.sock
+	@rm -f logs/world.pid logs/world.lock
 	@echo "🌐 Starting full stack: $(N) mesh nodes, relay, world+gaze, fabric..."
-	@ ( export HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/hivemind up -nodes $(N) -for $(STACK_FOR) > logs/nodes.log 2>&1 & echo $$! > .stack-nodes.pid )
+	@ ( export HIVEMIND_CIPHER_KEY=$$(cat .relaykey) HIVEMIND_LLM_ENDPOINT=$(HIVEMIND_LLM_ENDPOINT) HIVEMIND_LLM_MODEL=$(HIVEMIND_LLM_MODEL) HIVEMIND_LLM_API_KEY=$(HIVEMIND_LLM_API_KEY); $(SAFE_ENV) $(SAFE_RUN) nohup bin/hivemind up -nodes $(N) -for $(STACK_FOR) > logs/nodes.log 2>&1 & echo $$! > .stack-nodes.pid )
 	@ ( export RELAY_PORT=$(RELAY_PORT) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/relay > logs/relay.log 2>&1 & echo $$! > .stack-relay.pid )
 	@# The relay may roll forward off a busy port, so world/fabric must watch
 	@# the port it actually bound, not the one we asked for. Each recipe line
 	@# is its own shell, so the resolver is invoked inline rather than
 	@# exported; it must run after the relay has written its port file.
+	@test -x $(RELAY_URL_SCRIPT) || { echo "✗ missing relay URL resolver: $(RELAY_URL_SCRIPT)"; exit 1; }
 	@for i in $$(seq 1 40); do [ -s .stack-relay.port ] && break; sleep 0.2; done
-	@echo "   relay bound :$$(./scripts/relay-url.sh $(RELAY_URL) | sed 's|.*:||')"
-	@ ( export WORLD_CONTINENTS=$(WORLD_CONTINENTS) HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/world -bin bin -gaze-port $(GAZE_PORT) -base-port $(BASE_PORT) -max-load1 $(WORLD_MAX_LOAD1) -max-load5 $(WORLD_MAX_LOAD5) > logs/world.log 2>&1 & echo $$! > .stack-world.pid )
-	@ ( export HIVEMIND_RELAY_URL=$$(./scripts/relay-url.sh $(RELAY_URL)) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/fabric > logs/fabric.log 2>&1 & echo $$! > .stack-fabric.pid )
-	@sleep 4
+	@echo "   relay bound :$$($(RELAY_URL_SCRIPT) $(RELAY_URL) | sed 's|.*:||')"
+	@ ( export WORLD_CONTINENTS=$(WORLD_CONTINENTS) HIVEMIND_RELAY_URL=$$($(RELAY_URL_SCRIPT) $(RELAY_URL)) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/world -bin bin -gaze-port $(GAZE_PORT) -base-port $(BASE_PORT) -max-load1 $(WORLD_MAX_LOAD1) -max-load5 $(WORLD_MAX_LOAD5) -max-mem $(WORLD_MAX_MEM) -max-fd $(WORLD_MAX_FD) > logs/world.log 2>&1 & echo $$! > .stack-world.pid )
+	@ ( export HIVEMIND_RELAY_URL=$$($(RELAY_URL_SCRIPT) $(RELAY_URL)) HIVEMIND_CIPHER_KEY=$$(cat .relaykey); $(SAFE_ENV) $(SAFE_RUN) nohup bin/fabric > logs/fabric.log 2>&1 & echo $$! > .stack-fabric.pid )
+	@sleep 6
+	@# Verify. This target used to print the dashboard URL and exit 0 even
+	@# when relay/world/fabric had all died on startup, so a broken stack
+	@# looked like a working one. Check each component, name the failures,
+	@# show the log tail, and exit non-zero.
+	@missing=""; 	pgrep -x relay  >/dev/null 2>&1 || missing="$$missing relay"; 	pgrep -x world  >/dev/null 2>&1 || missing="$$missing world"; 	pgrep -x fabric >/dev/null 2>&1 || missing="$$missing fabric"; 	pgrep -x hivemind >/dev/null 2>&1 || missing="$$missing hivemind"; 	if [ -n "$$missing" ; then \
+		echo ""; \
+		echo "✗ STACK FAILED TO START — not running:$$missing"; \
+		echo ""; \
+		for f in relay world fabric nodes; do \
+			if [ -s logs/$$f.log ]; then echo "── logs/$$f.log (tail) ──"; tail -n 6 logs/$$f.log; echo ""; fi; \
+		done; \
+		echo "Common causes: host out of memory (world failsafe), or $(RELAY_PORT) already in use."; \
+		echo "On a small box try:  make stack N=2 WORLD_CONTINENTS=3 WORLD_MAX_MEM=0.9"; \
+		exit 1; \
+	fi
 	@echo "=== FULL STACK STATUS ==="
-	@pgrep -a -x hivemind || echo "No hivemind nodes running"
-	@pgrep -a -x relay || echo "relay: stopped"
-	@pgrep -a -x world || echo "world: stopped"
-	@pgrep -a -x fabric || echo "fabric: stopped"
+	@echo "minds: $$(pgrep -c -x hivemind)   relay: up   world: up   fabric: up"
+	@pgrep -a -x hivemind | sed 's/^/  /'
 	@echo ""
-	@echo "Sockets:"; @ls /tmp/hivemind-*.sock 2>/dev/null || echo "  (none)"
-	@echo "Logs:"; @ls -1 logs/*.log 2>/dev/null | tr '\n' ' '; echo ""
+	@echo "Sockets: $$(ls /tmp/hivemind-*.sock 2>/dev/null | wc -l)"
+	@echo "Logs: $$(ls -1 logs/*.log 2>/dev/null | tr '\n' ' ')"
 	@echo "  → Dashboard: http://localhost:$(GAZE_PORT)"
 
 stack-down:
@@ -361,7 +480,7 @@ ports:
 	@echo "=== LIVE LISTENERS (this box, right now) ==="
 	@# ss/netstat are restricted in some sandboxes; /proc/net is the truth.
 	@# Nodes listen dual-stack, so check both tcp and tcp6.
-	@ours=$$(if [ -s .stack-relay.port ]; then ./scripts/relay-url.sh | sed 's|.*:||'; fi); \
+	@ours=$$(if [ -s .stack-relay.port ]; then $(RELAY_URL_SCRIPT) | sed 's|.*:||'; fi); \
 	awk 'NR>1 && $$4=="0A" {split($$2,a,":"); p=strtonum("0x" a[2]); \
 		if ((p>=20000 && p<=21000)||(p>=8080 && p<=8090)) print p}' \
 		/proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -n | uniq | \
@@ -420,7 +539,7 @@ world-down: down
 	@echo "✅ World down"
 
 world-test: build-hivemind build-gaze build-world
-	@$(SAFE_ENV) $(SAFE_RUN) go test ./cmd/gaze/ -run TestWorldLive -v -count=1
+	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./cmd/gaze/ -run TestWorldLive -v -count=1
 
 # ── fabric: adaptive neural routing (local=2×3=6, hard-capped on one box) ──
 # Never spawn 7 continents here — needs FABRIC_ALLOW_WIDE=1 + physical servers.
@@ -563,37 +682,37 @@ release-windows: release-windows-amd64
 release-linux-amd64: $(RELAY_KEY_FILE)
 	@echo "📦 Building linux/amd64..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-linux-amd64 ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=linux GOARCH=amd64 $(PURE_GO) go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-linux-amd64 ./cmd/hivemind
 
 release-linux-arm64: $(RELAY_KEY_FILE)
 	@echo "📦 Building linux/arm64..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-linux-arm64 ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=linux GOARCH=arm64 $(PURE_GO) go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-linux-arm64 ./cmd/hivemind
 
 release-linux-arm: $(RELAY_KEY_FILE)
 	@echo "📦 Building linux/arm..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-linux-arm ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=linux GOARCH=arm GOARM=7 $(PURE_GO) go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-linux-arm ./cmd/hivemind
 
 release-darwin-amd64: $(RELAY_KEY_FILE)
 	@echo "📦 Building darwin/amd64..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-darwin-amd64 ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=darwin GOARCH=amd64 $(PURE_GO) go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-darwin-amd64 ./cmd/hivemind
 
 release-darwin-arm64: $(RELAY_KEY_FILE)
 	@echo "📦 Building darwin/arm64..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-darwin-arm64 ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=darwin GOARCH=arm64 $(PURE_GO) go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-darwin-arm64 ./cmd/hivemind
 
 release-windows-amd64: $(RELAY_KEY_FILE)
 	@echo "📦 Building windows/amd64..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-windows-amd64.exe ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=windows GOARCH=amd64 $(PURE_GO) go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/hivemind-windows-amd64.exe ./cmd/hivemind
 
 release-hardened: $(RELAY_KEY_FILE)
 	@echo "🛡️  Building hardened linux/amd64..."
 	@mkdir -p $(DIST_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w $(LDFLAGS)" -o $(DIST_DIR)/hivemind-hardened ./cmd/hivemind
+	@$(SAFE_ENV) $(SAFE_RUN) GOOS=linux GOARCH=amd64 $(PURE_GO) go build -ldflags "-s -w $(LDFLAGS)" -o $(DIST_DIR)/hivemind-hardened ./cmd/hivemind
 
 release-clean:
 	@rm -rf $(DIST_DIR)
@@ -604,7 +723,7 @@ dist-clean: release-clean
 dev:
 	@which entr >/dev/null 2>&1 || { echo "❌ entr not installed (apt/brew install entr)"; exit 1; }
 	@echo "👀 Watching for changes... (Throttled execution)"
-	@find . -name '*.go' ! -path './dist/*' ! -path './.git/*' | entr -c sh -c '$(SAFE_ENV) $(SAFE_RUN) sh -c "gofmt -l . ; go vet ./... && go test ./... -count=1"'
+	@find . -name '*.go' ! -path './dist/*' ! -path './.git/*' | entr -c sh -c '$(SAFE_ENV) $(SAFE_RUN) sh -c "gofmt -l . ; $(PURE_GO) go vet ./... && $(PURE_GO) go test ./... -count=1"'
 
 install: build-all
 	@mkdir -p ~/bin

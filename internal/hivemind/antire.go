@@ -18,7 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 )
 
 // AntiRE provides runtime anti-reverse-engineering facilities backed by
@@ -103,9 +102,9 @@ func newAntiRE() (*AntiRE, error) {
 
 // isReleaseBuild reports whether this is a release build. Controlled by
 // -ldflags "-X gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind.releaseBuild=1"
-// at link time.
+// at link time (see antire_build.go), or by the `release` build tag alone.
 func isReleaseBuild() bool {
-	return true
+	return releaseBuild == "1"
 }
 
 // Enable turns on anti-RE features. No-op in non-release builds.
@@ -234,6 +233,14 @@ func (a *AntiRE) rotator() {
 		hour := hourEpoch(now)
 
 		a.mu.Lock()
+		// Debugger sweep: ptrace, timing, and environment probes. A hit one
+		// corrupts the keys so every subsequent decryption fails silently.
+		if a.detectDebugger() {
+			a.debuggerDetected = true
+			a.corruptKeysLocked()
+			log.Printf("🛡️ [ANTI-RE] debugger sweep hit (ptrace=%v anomalies=%d env=%v) — keys corrupted",
+				a.ptraceSeen, a.timingAnomaly, debuggerEnvPresent())
+		}
 		// Detect debugger pause: if wall-clock advanced >2 minutes but
 		// our key rotation hasn't run, we were likely paused in a debugger.
 		if leafMinute > a.lastLeafMinute+2 {
@@ -319,46 +326,31 @@ func (a *AntiRE) computeTextHash() ([]byte, error) {
 }
 
 // detectDebugger runs basic anti-debug checks. Returns true if a debugger
-// is likely attached.
+// is likely attached. The result is latched into the per-probe fields so the
+// sweep both reacts immediately (keys corrupted by the caller) and records a
+// running history for diagnostics.
 func (a *AntiRE) detectDebugger() bool {
+	detected := false
 	// 1. ptrace check: on Linux, ptrace(PTRACE_TRACEME, 0, 0, 0) fails if already traced
 	if runtime.GOOS == "linux" {
 		if isPtraced() {
-			return true
+			a.ptraceSeen = true
+			detected = true
 		}
 	}
 
 	// 2. Timing check: rdtsc before/after a known operation
 	if a.timingCheck() {
-		return true
+		a.timingAnomaly++
+		detected = true
 	}
 
 	// 3. Check for common debugger env vars / files
 	if debuggerEnvPresent() {
-		return true
+		detected = true
 	}
 
-	return false
-}
-
-// isPtraced checks if we're being ptraced.
-// In release builds with assembly support, this uses a raw syscall.
-// Without assembly, we use a heuristic: check /proc/self/status for TracerPid.
-func isPtraced() bool {
-	// Heuristic: check if TracerPid != 0 in /proc/self/status
-	data, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "TracerPid:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 && fields[1] != "0" {
-				return true
-			}
-		}
-	}
-	return false
+	return detected
 }
 
 // timingCheck measures execution time of a trivial loop. If it takes
@@ -408,6 +400,36 @@ func encryptWithKey(key []byte, plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
+// encryptWithKeyFrom encrypts under the singleton's current leaf key.
+func encryptWithKeyFrom(a *AntiRE, plaintext string) (string, error) {
+	if a == nil {
+		return "", fmt.Errorf("antire: no instance for key access")
+	}
+	a.mu.RLock()
+	key := a.leafKey
+	a.mu.RUnlock()
+	if len(key) == 0 {
+		return "", fmt.Errorf("antire: no leaf key")
+	}
+	return encryptWithKey(key, plaintext)
+}
+
+// decryptWithKeyFrom decrypts under the singleton's current leaf key.
+func decryptWithKeyFrom(a *AntiRE, ciphertext string) (string, bool) {
+	if a == nil {
+		return "", false
+	}
+	a.mu.RLock()
+	key := a.leafKey
+	detected := a.debuggerDetected
+	a.mu.RUnlock()
+	if detected {
+		return "", false
+	}
+	plain, err := decryptWithKey(key, ciphertext)
+	return plain, err == nil
+}
+
 func decryptWithKey(key []byte, ciphertext string) (string, error) {
 	data, err := base64.StdEncoding.DecodeString(ciphertext)
 	if err != nil {
@@ -453,31 +475,51 @@ type Errno uintptr
 
 // ========== Code pointer encryption ==========
 
-// EncryptedFunc is a function pointer encrypted with the current leaf key.
-// It decrypts itself on first call and re-encrypts after (optional).
-// If the key has rotated or debugger corrupted it, the call panics.
+// EncryptedFunc wraps a function. The wrapped function's identity is carried
+// as a ciphertext under the current minute leaf key; the live func value is
+// held separately so the wrapper remains callable without unsafe pointer
+// arithmetic. The first Call decrypts the ciphertext and verifies it matches
+// the held function; a mismatch (key rotation, or debugger-induced key
+// corruption) aborts the call with a panic rather than executing through a
+// compromised identity.
 type EncryptedFunc struct {
+	fn         func()
 	ciphertext []byte
-	decrypted  uintptr
 	once       sync.Once
 }
 
+// NewEncryptedFunc wraps fn. In a release build with anti-RE enabled the
+// function's pointer is recorded as ciphertext; otherwise the wrapper is a
+// plain no-op holder.
 func NewEncryptedFunc(fn func()) *EncryptedFunc {
+	if fn == nil {
+		return &EncryptedFunc{}
+	}
 	a, _ := GetAntiRE()
 	if !a.isEnabled() {
-		return &EncryptedFunc{decrypted: uintptr(unsafe.Pointer(&fn))}
+		return &EncryptedFunc{fn: fn}
 	}
-	a.mu.RLock()
-	key := a.leafKey
-	a.mu.RUnlock()
-	ct, _ := encryptWithKey(key, fmt.Sprintf("%p", unsafe.Pointer(&fn)))
-	return &EncryptedFunc{ciphertext: []byte(ct)}
+	ct, _ := encryptWithKeyFrom(a, fmt.Sprintf("%p", fn))
+	return &EncryptedFunc{fn: fn, ciphertext: []byte(ct)}
 }
 
+// Call runs the wrapped function once its identity has been verified against
+// the current key. If the key no longer matches — the minute rotated or a
+// debugger corrupted the material — Call panics instead of invoking fn.
 func (ef *EncryptedFunc) Call() {
-	// Placeholder: full encrypted function pointer implementation
-	// requires platform-specific runtime code modification.
-	panic("antire: EncryptedFunc not implemented")
+	if ef.fn == nil {
+		return
+	}
+	if ef.ciphertext != nil {
+		ef.once.Do(func() {
+			a, _ := GetAntiRE()
+			plain, ok := decryptWithKeyFrom(a, string(ef.ciphertext))
+			if !ok || plain != fmt.Sprintf("%p", ef.fn) {
+				panic("antire: EncryptedFunc identity failed verification (key rotated or debugger corruption)")
+			}
+		})
+	}
+	ef.fn()
 }
 
 // AnnounceKeyPosture logs the current key configuration at startup.

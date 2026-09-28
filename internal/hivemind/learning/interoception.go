@@ -43,7 +43,45 @@ type InteroceptivePC struct {
 
 	// Learning
 	Lr float32
+
+	// --- Real learning -------------------------------------------------
+	// Predictor is a GRU that learns to forecast the NEXT tick's raw signals
+	// from this tick's signals and the resulting feelings. The objective is
+	// self-supervised: the target is what the machine actually reported one
+	// tick later, not a hand-written label. Nothing here encodes a rule like
+	// "stress when cpu > 0.7" — the mapping is discovered by descent.
+	Predictor *GRU
+	Readout   *Sequential
+
+	// Opt is held on the struct so momentum survives across ticks. Building a
+	// fresh optimizer per step (as an earlier revision did) silently reduces
+	// SGD+momentum to plain SGD, because the velocity map is thrown away.
+	Opt          *SGD
+	PredictorOpt *SGD
+
+	// Previous sample, needed to form a (prev -> cur) training pair.
+	prev       RawInteroception
+	prevFeel   map[string]float32
+	havePrev   bool
+	haveFeel   bool
+	LearnEvery int
+	skip       int
+
+	// Observable training state, so a caller can prove learning happened
+	// rather than take it on faith.
+	LastLoss float32
+	LossEMA  float32
+	Updates  int
 }
+
+const (
+	// Hidden width of the next-step predictor.
+	predictorHidden = 12
+	// Number of raw signals fed and predicted.
+	numSignals = 5
+	// Number of feeling channels fed back in as context.
+	numFeelings = 4
+)
 
 func NewInteroceptivePC() *InteroceptivePC {
 	pc := &InteroceptivePC{
@@ -84,6 +122,28 @@ func NewInteroceptivePC() *InteroceptivePC {
 		NewLinear(16, 4), // 4 feeling categories: stress, calm, arousal, fatigue
 		Sigmoid(),
 	)
+
+	// Next-step predictor: [prev signals | prev feelings] -> GRU -> [next signals]
+	pc.Predictor = NewGRU(numSignals+numFeelings, predictorHidden)
+	pc.Readout = NewSequential(
+		NewLinear(predictorHidden, 8),
+		Tanh(),
+		NewLinear(8, numSignals),
+	)
+	// One persistent optimizer, shared by both stages, so momentum accumulates
+	// across ticks instead of being reset every call. The recurrent predictor
+	// is trained at a deliberately smaller rate than the feature encoder, and
+	// with a gradient-norm bound, because backprop through hidden state is
+	// far more prone to runaway than a plain MLP.
+	pc.Opt = NewSGD(pc.Lr, 0.9)
+	pc.Opt.Clip = 1.0
+	predictorLR := pc.Lr * 0.1
+	if predictorLR < 1e-4 {
+		predictorLR = 1e-4
+	}
+	pc.PredictorOpt = NewSGD(predictorLR, 0.9)
+	pc.PredictorOpt.Clip = 0.5
+	pc.LearnEvery = 1
 
 	return pc
 }
@@ -154,6 +214,10 @@ func (pc *InteroceptivePC) Step(raw RawInteroception) (map[string]float32, map[s
 		"level1_integrated_error": pc.Level1.Error,
 	}
 
+	// Learn from the same sample, inside Step, so the weights cannot silently
+	// stay frozen again. Step is the single per-tick entry point.
+	pc.Learn(raw, feelings)
+
 	return feelings, predictionErrors
 }
 
@@ -175,58 +239,103 @@ func (pc *InteroceptivePC) GetPredictionErrors() map[string]float32 {
 	}
 }
 
-// Learn performs one step of gradient descent on prediction errors
-func (pc *InteroceptivePC) Learn(raw RawInteroception) {
-	// Forward pass
-	inputs := []float32{raw.CPULoad, raw.RAMPressure, raw.Thermal, raw.DiskIO, raw.NetworkIO}
-	x := make([]*Value, 5)
-	for i, v := range inputs {
-		x[i] = NewValue(v)
+// Learn performs one step of gradient descent on the next-signal prediction
+// objective. Call it with the CURRENT sample; it pairs that against the
+// previous sample held internally.
+//
+// The loss is gradient-connected end to end: the prediction flows out of the
+// GRU readout (which owns the parameters), the target is a constant leaf, and
+// MSELoss therefore accumulates real gradients into Predictor/Readout. An
+// earlier revision also summed an l0 term built from two detached constants,
+// which contributed exactly zero gradient while looking like a loss term.
+func (pc *InteroceptivePC) Learn(cur RawInteroception, curFeelings map[string]float32) {
+	// Throttle if the owner asked for a slower cadence than every tick.
+	if pc.LearnEvery > 1 {
+		pc.skip++
+		if pc.skip%pc.LearnEvery != 0 {
+			return
+		}
 	}
 
-	// Level 0 -> 1
-	l1Out := pc.Level0To1.Forward(x)
-
-	// Level 1 -> 2
-	l2Out := pc.Level1To2.Forward(l1Out)
-
-	// Compute loss: prediction error at each level
-	// Level 0: predict CPU load from previous state
-	l0Target := NewValue(inputs[0])
-	l0PredVal := NewValue(pc.Level0.Prediction)
-	l0Loss := MSELoss([]*Value{l0PredVal}, []*Value{l0Target})
-
-	// Level 1: integrated state prediction
-	l1Pred := l1Out[0]
-	l1Target := NewValue(inputs[0]) // Simplified: use CPU as proxy
-	l1Loss := MSELoss([]*Value{l1Pred}, []*Value{l1Target})
-
-	// Level 2: feeling category prediction (self-supervised)
-	// Target: high stress when CPU+thermal high, calm when low
-	stressTarget := float32(0)
-	if inputs[0] > 0.7 || inputs[2] > 0.7 {
-		stressTarget = 1.0
+	// First sample only establishes the baseline for a pair; there is nothing
+	// to predict yet.
+	if !pc.havePrev {
+		pc.remember(cur, curFeelings)
+		return
 	}
-	l2Target := []*Value{
-		NewValue(stressTarget),     // stress
-		NewValue(1 - stressTarget), // calm
-		NewValue(inputs[0]),        // arousal ~ CPU
-		NewValue(inputs[2]),        // fatigue ~ thermal
+	if !pc.haveFeel {
+		pc.remember(cur, curFeelings)
+		return
 	}
-	l2Loss := MSELoss(l2Out, l2Target)
 
-	// Total loss
-	totalLoss := l0Loss.Add(l1Loss).Add(l2Loss)
+	// Input: what we knew last tick (signals + the feelings they produced).
+	in := make([]*Value, 0, numSignals+numFeelings)
+	for _, v := range []float32{
+		pc.prev.CPULoad, pc.prev.RAMPressure, pc.prev.Thermal,
+		pc.prev.DiskIO, pc.prev.NetworkIO,
+	} {
+		in = append(in, NewValue(v))
+	}
+	for _, k := range []string{"stress", "calm", "arousal", "fatigue"} {
+		in = append(in, NewValue(pc.prevFeel[k]))
+	}
 
-	// Backward
-	pc.Level0To1.ZeroGrad()
-	pc.Level1To2.ZeroGrad()
-	totalLoss.Backward()
+	// Forward through the recurrent predictor and the readout head.
+	h := pc.Predictor.Forward(in)
+	pred := pc.Readout.Forward(h)
 
-	// Update
-	opt := NewSGD(pc.Lr, 0.9)
-	opt.Step(pc.Level0To1.Params())
-	opt.Step(pc.Level1To2.Params())
+	// Target: what actually arrived this tick. Self-supervised — no labels.
+	target := []*Value{
+		NewValue(cur.CPULoad), NewValue(cur.RAMPressure), NewValue(cur.Thermal),
+		NewValue(cur.DiskIO), NewValue(cur.NetworkIO),
+	}
+
+	loss := MSELoss(pred, target)
+
+	pc.Predictor.ZeroGrad()
+	pc.Readout.ZeroGrad()
+	loss.Backward()
+
+	// One persistent optimizer, reused every step, so momentum survives.
+	pc.PredictorOpt.Step(pc.Predictor.Params())
+	pc.PredictorOpt.Step(pc.Readout.Params())
+
+	pc.LastLoss = loss.Data
+	pc.LossEMA = 0.9*pc.LossEMA + 0.1*loss.Data
+	pc.Updates++
+
+	pc.remember(cur, curFeelings)
+}
+
+// remember stashes the current sample as the next pair's input.
+func (pc *InteroceptivePC) remember(raw RawInteroception, feelings map[string]float32) {
+	pc.prev = raw
+	pc.havePrev = true
+	if feelings == nil {
+		return
+	}
+	f := make(map[string]float32, numFeelings)
+	for _, k := range []string{"stress", "calm", "arousal", "fatigue"} {
+		f[k] = feelings[k]
+	}
+	pc.prevFeel = f
+	pc.haveFeel = true
+}
+
+// WeightSnapshot returns a copy of every learned parameter value, keyed by
+// stage. Used by tests and the dashboard to show that weights genuinely move.
+func (pc *InteroceptivePC) WeightSnapshot() map[string][]float32 {
+	out := make(map[string][]float32)
+	add := func(stage string, ps []*Param) {
+		vals := make([]float32, 0, len(ps))
+		for _, p := range ps {
+			vals = append(vals, p.Value.Data)
+		}
+		out[stage] = vals
+	}
+	add("predictor", pc.Predictor.Params())
+	add("readout", pc.Readout.Params())
+	return out
 }
 
 // CollectRawInteroception reads actual hardware signals

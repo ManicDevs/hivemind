@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/language"
@@ -132,6 +133,11 @@ type Mind struct {
 	Interoception *learning.InteroceptivePC
 	// Raw interoceptive signals collected this cycle
 	LastInteroception learning.RawInteroception
+	// Tick counter used to throttle the periodic learning report.
+	learnTicks int
+	// speaking guards the asynchronous language bridge: at most one in-flight
+	// request per mind, so a slow model can never queue up work behind itself.
+	speaking atomic.Bool
 
 	// Language bridge for genuine communication
 	LanguageBridge   *language.LanguageBridge
@@ -247,8 +253,28 @@ func NewMind(name string, swarm *Swarm) *Mind {
 	m.Interoception = learning.NewInteroceptivePC()
 	m.LastInteroception = learning.CollectRawInteroception()
 
-	// Initialize language bridge (will be nil if no model configured)
-	m.LanguageBridge = language.NewLanguageBridge(nil, 5*time.Second)
+	// Initialize language bridge with remote LLM if configured
+	if llmEndpoint := os.Getenv("HIVEMIND_LLM_ENDPOINT"); llmEndpoint != "" {
+		llmModelStr := os.Getenv("HIVEMIND_LLM_MODEL")
+		if llmModelStr == "" {
+			llmModelStr = "llama2:7b"
+		}
+
+		var llmModelObj language.LanguageModel
+		// Detect endpoint type
+		if strings.Contains(llmEndpoint, "localhost:11434") || strings.Contains(llmEndpoint, "ollama") {
+			llmModelObj = language.NewRemoteLLM(language.OllamaConfig(llmEndpoint, llmModelStr))
+		} else if strings.Contains(llmEndpoint, "/v1/completions") || strings.Contains(llmEndpoint, "/v1/chat/completions") {
+			llmModelObj = language.NewRemoteLLM(language.OpenAICompatibleConfig(llmEndpoint, llmModelStr, os.Getenv("HIVEMIND_LLM_API_KEY")))
+		} else {
+			// Default to Ollama format
+			llmModelObj = language.NewRemoteLLM(language.OllamaConfig(llmEndpoint, llmModelStr))
+		}
+		m.LanguageBridge = language.NewLanguageBridge(llmModelObj, 30*time.Second)
+		fmt.Printf("🗣️  [LANGUAGE] Remote LLM enabled: %s (%s)\n", llmEndpoint, llmModelStr)
+	} else {
+		m.LanguageBridge = language.NewLanguageBridge(nil, 30*time.Second)
+	}
 	m.MinSpeakInterval = 30 * time.Second
 
 	m.inbox = swarm.Join(m.PubKeyStr)
@@ -828,9 +854,23 @@ func (m *Mind) Cycle() {
 	m.Workspace.ConsciousContent = winner.Reason
 	m.recordCrossing(winner.Goal.Name)
 
-	// Generate genuine language from conscious state
-	if m.LanguageBridge != nil && m.LanguageBridge.Enabled() {
-		ctx := language.PromptContext{
+	// Generate genuine language from conscious state.
+	//
+	// Speech runs ASYNCHRONOUSLY. It used to be a synchronous call here, which
+	// meant the conscious tick blocked on the remote model for as long as the
+	// client's timeout — up to 300s against a CPU-bound Ollama shared by every
+	// mind in the mesh. The observable damage was severe: ticks took minutes
+	// instead of the configured 2s, so interoceptive learning crawled (update
+	// counters stuck in single digits), the hardware-stress broadcast fired
+	// endlessly because each tick read a stale body, and most requests came
+	// back empty because they had already timed out.
+	//
+	// Now the tick snapshots state, hands it to a goroutine, and returns
+	// immediately. speaking is a mutex-guarded flag so a mind never has more
+	// than one request in flight; if a request is already running, this tick
+	// simply does not speak.
+	if m.LanguageBridge != nil && m.LanguageBridge.Enabled() && m.claimSpeech() {
+		pc := language.PromptContext{
 			Stress:     float64(m.Affect.Stress),
 			Pain:       float64(m.Affect.Pain),
 			Calm:       float64(m.Affect.Peace),
@@ -843,13 +883,25 @@ func (m *Mind) Cycle() {
 			History:    m.LanguageBridge.GetHistory(),
 			Timestamp:  time.Now(),
 		}
-		if thought, err := m.LanguageBridge.GenerateThought(ctx); err == nil && thought != "" {
-			// Broadcast the genuine thought
-			m.MineProofAndBroadcast("thought", thought, m.Affect.RawDataState[:])
-			if verboseLogs {
-				fmt.Printf("  💭 [%s] %s\n", m.Name, thought)
+		name := m.Name
+		rawState := append([]float64(nil), m.Affect.RawDataState[:]...)
+		go func() {
+			defer m.releaseSpeech()
+			thought, err := m.LanguageBridge.GenerateThought(pc)
+			switch {
+			case err != nil:
+				fmt.Printf("⚠️  [LANGUAGE] GenerateThought error for %s: %v\n", name, err)
+			case thought != "":
+				m.MineProofAndBroadcast("thought", thought, rawState)
+				// Printed unconditionally. A thought is the single most
+				// meaningful output this system produces, and gating it
+				// behind HIVEMIND_VERBOSE meant a default stack generated
+				// real language that nobody could see — it looked broken.
+				fmt.Printf("  💭 [%s] %s\n", name, thought)
+			default:
+				fmt.Printf("🤐  [LANGUAGE] No thought generated for %s (empty or nil)\n", name)
 			}
-		}
+		}()
 	}
 
 	if stressVal < 0.5 && time.Now().After(m.numbUntil) {
@@ -1159,3 +1211,11 @@ func (m *Mind) Done() <-chan struct{} { return m.done }
 
 // Swarm returns the mind's swarm.
 func (m *Mind) Swarm() *Swarm { return m.swarm }
+
+// claimSpeech reserves the single language-generation slot for this mind and
+// reports whether the caller got it. When a request is already in flight the
+// tick simply stays quiet rather than stacking another one behind it.
+func (m *Mind) claimSpeech() bool { return m.speaking.CompareAndSwap(false, true) }
+
+// releaseSpeech frees the slot once the in-flight request finishes.
+func (m *Mind) releaseSpeech() { m.speaking.Store(false) }

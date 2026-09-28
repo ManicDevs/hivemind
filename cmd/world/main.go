@@ -114,7 +114,16 @@ func main() {
 		maxMem     = flag.Float64("max-mem", 0.85, "failsafe: RAM used fraction ceiling (0.85 = 85%)")
 		maxFD      = flag.Float64("max-fd", 0.75, "failsafe: fd usage fraction of ulimit ceiling")
 	)
+	registerSimFlags()
 	flag.Parse()
+
+	if simOpts.preflight {
+		if err := simPreflight(simOpts.duration, simOpts.seed); err != nil {
+			log.Printf("[sim] preflight FAILED: %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	// Native runtime regulation: the GC paces itself against a strict
 	// ceiling instead of racing the whole host's RAM.
@@ -450,6 +459,13 @@ func (w *world) spawnNodes(ctx context.Context) {
 				"HIVEMIND_DHT=off",
 				"HIVEMIND_RELAY=off",
 				"HIVEMIND_TICK_MS=" + strconv.Itoa(w.cfg.tickMS),
+				// Forward the remote-LLM config. Without these the spawned
+				// minds construct a nil LanguageBridge, Enabled() is false,
+				// and they silently never speak — the world's minds looked
+				// alive but could not generate a single thought.
+				"HIVEMIND_LLM_ENDPOINT=" + os.Getenv("HIVEMIND_LLM_ENDPOINT"),
+				"HIVEMIND_LLM_MODEL=" + os.Getenv("HIVEMIND_LLM_MODEL"),
+				"HIVEMIND_LLM_API_KEY=" + os.Getenv("HIVEMIND_LLM_API_KEY"),
 			}
 			w.spawn(ctx, w.cfg.binDir+"/hivemind", name, env, 0, "-mode", "peer", "-node", name)
 			time.Sleep(w.cfg.stagger)
@@ -493,7 +509,7 @@ func (w *world) spawn(ctx context.Context, bin, name string, env []string, resta
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = out
 	cmd.Stderr = out
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	detachProcessGroup(cmd)
 
 	if err := cmd.Start(); err != nil {
 		out.Close()
@@ -667,13 +683,13 @@ func (w *world) teardown() {
 	fmt.Println("   🛑 tearing the world down…")
 	for _, c := range procs {
 		if c.cmd.Process != nil {
-			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGTERM)
+			terminateProcessGroup(c.cmd.Process.Pid, false)
 		}
 	}
 	time.Sleep(2 * time.Second)
 	for _, c := range procs {
 		if c.cmd.Process != nil {
-			_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
+			terminateProcessGroup(c.cmd.Process.Pid, true)
 		}
 	}
 

@@ -42,7 +42,21 @@ func TestSealHidesPayloadFromTheWire(t *testing.T) {
 	if !m.sealing {
 		t.Fatal("sealing must default on")
 	}
-	msg := message{ID: "m1", Event: "probe", Title: "t", Message: "plaintext-canary-9f3a"}
+	// The canaries must be long.
+	//
+	// Sealed frames are base64, whose alphabet includes every letter and digit,
+	// so any short token will eventually appear in ciphertext by chance. An
+	// earlier version of this test used "m1" and failed roughly 3% of runs —
+	// a false alarm indistinguishable from a real plaintext leak. A 32-character
+	// token collides with probability around 1e-40, which is below the rate at
+	// which a real leak would be missed.
+	const canary = "plaintext-canary-9f3a7c1d8e4f60a2b"
+	msg := message{
+		ID:      "canary-id-7c1d8e4f60a2b3d9e",
+		Event:   "probe",
+		Title:   "t",
+		Message: canary,
+	}
 	plain, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +65,9 @@ func TestSealHidesPayloadFromTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seal: %v", err)
 	}
-	for _, leak := range []string{"plaintext-canary-9f3a", `"id"`, "probe", "m1"} {
+	// `"id"` is safe to check directly: the quote character is not in the
+	// base64 alphabet, so it can only appear if real JSON escaped onto the wire.
+	for _, leak := range []string{canary, msg.ID, `"id"`, `"event"`} {
 		if strings.Contains(sealed, leak) {
 			t.Fatalf("sealed frame leaked %q", leak)
 		}

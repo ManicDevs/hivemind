@@ -67,8 +67,26 @@ var contFallback = map[string]geoLL{
 	"sa": {-60, -15}, "af": {20, 5}, "oc": {145, -30}, "an": {0, -80},
 }
 
+// contColors is the continent palette, in continentOrder.
+//
+// These are not decorative fills: they paint the continent label text and the
+// live node dots, so the hard constraint is legibility, not prettiness. The
+// previous palette was the fully-saturated Material 400 hues, whose peak
+// luminance was 69% — on a #080b14 field the yellow alone hit 13.9:1 and
+// glared in a dark room.
+//
+// The replacement keeps the same hue families (so the map still reads the way
+// it did) but pulls every entry down and desaturates it. Verified against the
+// rendered field, not by eye:
+//
+//   - worst case vs the #080b14 field: 4.82:1  (WCAG AA needs 4.5:1 for text)
+//   - worst case vs the #101725 landmass: 4.40:1 (WCAG 1.4.11 needs 3:1)
+//   - peak luminance 33.3%, down from 69.4% — 52% dimmer at the brightest
+//
+// The eye now lands on the node dots and the mesh links rather than on the
+// continent names, which is the right priority: the dots are the live data.
 var contColors = []string{
-	"#4fc3f7", "#ffb74d", "#81c784", "#ba68c8", "#ef5350", "#ffd54f", "#4db6ac",
+	"#548db6", "#b58e4a", "#52ad83", "#986db0", "#b96a5b", "#499eab", "#8792a1",
 }
 
 var continentOrder = []string{"eu", "as", "af", "na", "sa", "oc", "an"}
@@ -120,33 +138,33 @@ func graticuleSVG(w, h float64) string {
 	// Latitude lines every 30°.
 	for lat := -60.0; lat <= 60.0; lat += 30 {
 		_, y := project(0, lat, w, h)
-		fmt.Fprintf(&b, `<line x1="0" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#131c30" stroke-width="0.8"/>`, y, w, y)
+		fmt.Fprintf(&b, `<line x1="0" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#111726" stroke-width="0.7"/>`, y, w, y)
 		label := "0°"
 		if lat > 0 {
 			label = fmt.Sprintf("%.0f°N", lat)
 		} else if lat < 0 {
 			label = fmt.Sprintf("%.0f°S", -lat)
 		}
-		fmt.Fprintf(&b, `<text x="4" y="%.1f" fill="#2a3a5c" font-size="9">%s</text>`, y-3, label)
+		fmt.Fprintf(&b, `<text x="4" y="%.1f" fill="#33405c" font-size="9">%s</text>`, y-3, label)
 	}
 	// Equator emphasised.
 	_, ey := project(0, 0, w, h)
-	fmt.Fprintf(&b, `<line x1="0" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#1e2d4a" stroke-width="1.2"/>`, ey, w, ey)
+	fmt.Fprintf(&b, `<line x1="0" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#1a2436" stroke-width="1"/>`, ey, w, ey)
 	// Longitude lines every 30°.
 	for lon := -150.0; lon <= 150.0; lon += 30 {
 		x, _ := project(lon, 0, w, h)
-		fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%.1f" stroke="#131c30" stroke-width="0.8"/>`, x, x, h)
+		fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%.1f" stroke="#111726" stroke-width="0.7"/>`, x, x, h)
 		label := fmt.Sprintf("%.0f°", lon)
 		if lon > 0 {
 			label = fmt.Sprintf("%.0f°E", lon)
 		} else if lon < 0 {
 			label = fmt.Sprintf("%.0f°W", -lon)
 		}
-		fmt.Fprintf(&b, `<text x="%.1f" y="%d" fill="#2a3a5c" font-size="9" text-anchor="middle">%s</text>`, x, int(h)-6, label)
+		fmt.Fprintf(&b, `<text x="%.1f" y="%d" fill="#33405c" font-size="9" text-anchor="middle">%s</text>`, x, int(h)-6, label)
 	}
 	// Prime meridian emphasised.
 	pmx, _ := project(0, 0, w, h)
-	fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%.1f" stroke="#1e2d4a" stroke-width="1.2"/>`, pmx, pmx, h)
+	fmt.Fprintf(&b, `<line x1="%.1f" y1="0" x2="%.1f" y2="%.1f" stroke="#1a2436" stroke-width="1"/>`, pmx, pmx, h)
 	return b.String()
 }
 
@@ -167,7 +185,7 @@ func coastSVG(w, h float64) string {
 				fmt.Fprintf(&b, "L%.1f,%.1f", x, y)
 			}
 		}
-		b.WriteString(`Z" fill="#111a2e" stroke="#243b5e" stroke-width="1" stroke-linejoin="round"/>`)
+		b.WriteString(`Z" fill="#101725" stroke="#22304a" stroke-width="1" stroke-linejoin="round"/>`)
 	}
 	return b.String()
 }
@@ -366,7 +384,7 @@ func renderSVG(nodes []NodeView, links []string, gazeName, now, relayURL string,
 	b.WriteString(fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="%.0f" height="%.0f" viewBox="0 0 %.0f %.0f" font-family="ui-monospace,Menlo,Consolas,monospace">`, W, H, W, H))
 	b.WriteString(styleSVG())
 	// Ocean.
-	b.WriteString(`<rect x="0" y="0" width="100%" height="100%" fill="#0a0e1a"/>`)
+	b.WriteString(`<rect x="0" y="0" width="100%" height="100%" fill="#080b14"/>`)
 	b.WriteString(graticuleSVG(W, H))
 	b.WriteString(coastSVG(W, H))
 	b.WriteString(terminatorSVG(W, H, t0))

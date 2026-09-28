@@ -38,7 +38,16 @@ func supervise(args []string) {
 	procs := make([]*exec.Cmd, 0, *nodes)
 	for i := 0; i < *nodes; i++ {
 		name := fmt.Sprintf("up-%d", i+1)
+		// Build environment for child process with LLM config
+		fmt.Printf("🔧 [SUPERVISOR] Spawning node %s with LLM: endpoint=%s model=%s\n", name,
+			os.Getenv("HIVEMIND_LLM_ENDPOINT"), os.Getenv("HIVEMIND_LLM_MODEL"))
+		env := append(os.Environ(),
+			"HIVEMIND_LLM_ENDPOINT="+os.Getenv("HIVEMIND_LLM_ENDPOINT"),
+			"HIVEMIND_LLM_MODEL="+os.Getenv("HIVEMIND_LLM_MODEL"),
+			"HIVEMIND_LLM_API_KEY="+os.Getenv("HIVEMIND_LLM_API_KEY"),
+		)
 		cmd := exec.Command(self, "-mode", "peer", "-node", name)
+		cmd.Env = env
 		cmd.Stdout = prefixWriter{tag: name, w: os.Stdout}
 		cmd.Stderr = prefixWriter{tag: name, w: os.Stderr}
 		cmd.Stdin = nil

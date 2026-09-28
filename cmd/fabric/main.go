@@ -73,15 +73,6 @@ const (
 	tierSuper  = 3
 	tierEdge   = 4
 
-	// Continents 1..7
-	contNA = 1 // North America
-	contSA = 2 // South America
-	contEU = 3 // Europe
-	contAF = 4 // Africa
-	contAS = 5 // Asia
-	contOC = 6 // Australia
-	contAN = 7 // Antarctica
-
 	// Frame types inside the plaintext cell.
 	frameData     = 0x01
 	frameFeedback = 0x02
@@ -193,15 +184,6 @@ func allNodes() []NodeID {
 func isActive(id NodeID) bool {
 	return id.Continent >= 1 && id.Continent <= activeContinents &&
 		id.Tier >= 1 && id.Tier <= activeTiers
-}
-
-// routeUp returns the vertical parent (tier-1) inside the same continent.
-// Edge→SuperPeer→Controller→Master. Master has no parent.
-func routeUp(id NodeID) (NodeID, bool) {
-	if id.Tier <= tierMaster {
-		return NodeID{}, false
-	}
-	return NodeID{Continent: id.Continent, Tier: id.Tier - 1}, true
 }
 
 // routePeers returns softmax candidate next-hops for forwarding DATA.
@@ -701,8 +683,11 @@ type peer struct {
 
 	// EMA latency (microseconds) and drop accounting for Loss.
 	latencyUs atomic.Int64
-	drops     atomic.Uint64
-	sent      atomic.Uint64
+	// tel is the node-level collector, set when the peer is attached to a
+	// fabric. It is nil for a peer built outside a running node.
+	tel   *telemetry
+	drops atomic.Uint64
+	sent  atomic.Uint64
 
 	sendCh chan []byte // sealed wire frames
 	closed chan struct{}
@@ -746,6 +731,12 @@ func (p *peer) observe(rtt time.Duration, ok bool) {
 	p.sent.Add(1)
 	if !ok {
 		p.drops.Add(1)
+	}
+	// Feed the node-level collector with the real measured round trip. This is
+	// an actual timing of a real frame on a real socket, which is the only kind
+	// of figure the release build reports.
+	if p.tel != nil {
+		p.tel.observeRTT(rtt)
 	}
 }
 
@@ -798,6 +789,18 @@ type fabric struct {
 	// feedback throttle: at most one FEEDBACK burst per second
 	fbMu     sync.Mutex
 	lastFbAt time.Time
+
+	// tel records what this node actually measured on the wire. It is always
+	// present, in every build, and holds nothing synthetic.
+	tel *telemetry
+
+	// simGate, when non-nil, is a development-build hook that lets the
+	// adversarial matrix stop real traffic when it reaches its fail-closed
+	// seal. It is nil in a release build, where no simulator exists and the node
+	// is governed only by its own observations.
+	simGate func() bool
+	// simWait is the matching shutdown hook, likewise nil in release.
+	simWait func()
 }
 
 func newFabric(id *identity) (*fabric, error) {
@@ -854,6 +857,8 @@ func (f *fabric) getOrCreatePeer(dst NodeID) (*peer, error) {
 
 	addr := matrixAddr(dst.Continent, dst.Tier)
 	p = newPeer(dst, addr)
+	p.tel = f.tel
+	f.tel.recordPeerAdded()
 
 	d := &net.Dialer{Timeout: 3 * time.Second}
 	raw, err := d.DialContext(f.ctx, "tcp", addr)
@@ -951,6 +956,7 @@ func (f *fabric) dropPeer(id NodeID) {
 	if p, ok := f.peers[id]; ok {
 		delete(f.peers, id)
 		f.peerMu.Unlock()
+		f.tel.recordPeerForgot()
 		p.close()
 		return
 	}
@@ -1042,6 +1048,13 @@ func (f *fabric) forwardData(hdr cellHdr, payload []byte, visited map[NodeID]boo
 
 // onDeliver is the Tier-1 Master sink (or any Dst match).
 func (f *fabric) onDeliver(hdr cellHdr, payload []byte) error {
+	// A DATA cell that reached its declared destination here. Counted for every
+	// origin, because the destination is the only place in the protocol where
+	// delivery is observable at all — nothing acknowledges a cell back to the
+	// node that injected it.
+	if hdr.Type == frameData {
+		f.tel.recordDelivered()
+	}
 	loss := hdr.Loss
 	if loss == 0 {
 		loss = computeLoss(hdr.LatencyUsToDuration(), hdr.DropRate)
@@ -1129,6 +1142,9 @@ func (f *fabric) handleWire(from *peer, wire []byte) {
 			plain, err = openCell(prev, wire)
 		}
 		if err != nil {
+			// A real authentication failure on the wire. This is a measurement
+			// about a frame that actually arrived, so it is recorded as such.
+			f.tel.recordAuthFailure()
 			log.Printf("[crypto] open failed from %s: %v", from.id, err)
 			return
 		}
@@ -1150,6 +1166,7 @@ func (f *fabric) handleWire(from *peer, wire []byte) {
 	case frameProbe:
 		// Lightweight liveness; bump weight slightly.
 		from.setWeight(rewardWeight(from.getWeight()))
+		f.tel.recordProbeOK()
 	case frameFeedback:
 		// Preceding node: apply Gradient Descent relative to error scale.
 		oldW := from.getWeight()
@@ -1166,6 +1183,7 @@ func (f *fabric) handleWire(from *peer, wire []byte) {
 		}
 		if err := f.forwardData(hdr, payload, visited); err != nil {
 			log.Printf("[fwd] err: %v", err)
+			f.tel.recordInjectError()
 		}
 	default:
 		// ignore
@@ -1186,7 +1204,15 @@ func (f *fabric) Inject(payload []byte) error {
 		Dst:      NodeID{Continent: dstCont, Tier: tierMaster},
 	}
 	visited := map[NodeID]bool{f.id.self: true}
-	return f.forwardData(hdr, payload, visited)
+	// Counted here, at the single point a DATA cell enters the mesh from this
+	// node. Counting it in sendOn instead would inflate the figure once per
+	// relay hop, since a forwarded cell passes through every node on the path.
+	f.tel.recordInjected()
+	if err := f.forwardData(hdr, payload, visited); err != nil {
+		f.tel.recordInjectError()
+		return err
+	}
+	return nil
 }
 
 // InjectTo targets a specific destination node.
@@ -1199,7 +1225,15 @@ func (f *fabric) InjectTo(dst NodeID, payload []byte) error {
 		Dst:      dst,
 	}
 	visited := map[NodeID]bool{f.id.self: true}
-	return f.forwardData(hdr, payload, visited)
+	// Counted here, at the single point a DATA cell enters the mesh from this
+	// node. Counting it in sendOn instead would inflate the figure once per
+	// relay hop, since a forwarded cell passes through every node on the path.
+	f.tel.recordInjected()
+	if err := f.forwardData(hdr, payload, visited); err != nil {
+		f.tel.recordInjectError()
+		return err
+	}
+	return nil
 }
 
 // listen starts the mTLS server on this node's matrix address.
@@ -1255,6 +1289,7 @@ func (f *fabric) serveConn(conn net.Conn) {
 	}
 
 	p := newPeer(remote, conn.RemoteAddr().String())
+	p.tel = f.tel
 	p.conn = conn
 	f.peerMu.Lock()
 	// Prefer existing outbound peer object; otherwise adopt inbound.
@@ -1319,6 +1354,9 @@ func (f *fabric) metricsLoop(ctx context.Context, every time.Duration) {
 					p.dropRate(), p.currentLoss())
 			}
 			f.peerMu.RUnlock()
+			// The node-level line reports only measurements from this node's
+			// real sockets. No simulated or synthetic figure can reach it.
+			log.Print(f.tel.Report())
 		}
 	}
 }
@@ -1337,6 +1375,13 @@ func (f *fabric) trafficLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// A development build may let the adversarial matrix suppress real
+			// traffic when it reaches its seal. In a release build simGate is
+			// nil and this is never true.
+			if f.simGate != nil && !f.simGate() {
+				log.Printf("[tx] suppressed: fabric-sim fail-closed seal engaged")
+				continue
+			}
 			n++
 			msg := []byte(fmt.Sprintf("tick=%d node=%s t=%d", n, f.id.self, time.Now().UnixNano()))
 			if err := f.Inject(msg); err != nil {
@@ -1350,6 +1395,12 @@ func (f *fabric) trafficLoop(ctx context.Context) {
 func (f *fabric) shutdown() {
 	if f.cancel != nil {
 		f.cancel()
+	}
+	if f.simWait != nil {
+		// Give the simulator a moment to print its closing summary before the
+		// process exits, so the run's final numbers are not lost. Nil in a
+		// release build.
+		f.simWait()
 	}
 	if f.ln != nil {
 		_ = f.ln.Close()
@@ -1369,10 +1420,15 @@ func (f *fabric) shutdown() {
 func main() {
 	showMatrix := flag.Bool("matrix", false, "print the active matrix and exit")
 	selfTest := flag.Bool("self-test", false, "run pack/seal/softmax self-test and exit")
+	registerSimFlags()
 	flag.Parse()
 
 	if *showMatrix {
 		printMatrix()
+		return
+	}
+	if simOpts.topology {
+		printSimTopology()
 		return
 	}
 	if *selfTest {
@@ -1411,6 +1467,8 @@ func main() {
 		log.Fatalf("fabric: %v", err)
 	}
 	f.ctx, f.cancel = context.WithCancel(context.Background())
+	f.tel = newTelemetry(4096)
+	startFabricSim(f.ctx, f, self)
 
 	if err := f.listen(); err != nil {
 		log.Fatal(err)

@@ -7,7 +7,7 @@
 
 #include "textflag.h"
 
-TEXT ·rawSyscall(SB), NOSPLIT, $0-40
+TEXT ·rawSyscall(SB), NOSPLIT, $0-56
     MOVQ trap+0(FP), AX
     MOVQ a1+8(FP), DI
     MOVQ a2+16(FP), SI

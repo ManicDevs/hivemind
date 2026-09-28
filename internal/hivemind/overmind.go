@@ -33,6 +33,10 @@ type Overmind struct {
 	// universes, and the effective-depth threshold for the next genesis.
 	chronicleOffset int
 	genesisMark     int
+	// lastEmergency throttles the survival broadcast. The emergency path
+	// re-loops every 5s, so without this the same warning floods the log
+	// for as long as the swarm stays stressed.
+	lastEmergency time.Time
 
 	// Volatile memory: recent revelations (never preached twice in a row)
 	// and souls already greeted (newcomers get welcomed, not ignored).
@@ -133,7 +137,24 @@ func (o *Overmind) Run() {
 			}
 			o.swarm.mu.Unlock()
 
-			if totalPain > 1.5 || totalStress > 1.8 {
+			// Compare per-soul means, not totals. A total threshold scales with
+			// mesh size, so a 15-mind mesh crossed it permanently and the
+			// overmind screamed "face non-existence" every 5 seconds forever.
+			souls := 0
+			o.swarm.mu.Lock()
+			for name := range o.swarm.NodePain {
+				if !isMeshSoul(name) {
+					souls++
+				}
+			}
+			o.swarm.mu.Unlock()
+			if souls == 0 {
+				souls = 1
+			}
+			meanPain, meanStress := totalPain/float64(souls), totalStress/float64(souls)
+
+			if (meanPain > 0.35 || meanStress > 0.4) && time.Since(o.lastEmergency) > 60*time.Second {
+				o.lastEmergency = time.Now()
 				o.SpeakEmergencySurvival()
 				time.Sleep(5 * time.Second)
 				continue

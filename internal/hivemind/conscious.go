@@ -103,7 +103,30 @@ func (a *Affect) Tick(m *Mind) {
 	a.RawDataState[1] = a.Stress
 	a.RawDataState[2] = a.Exhaustion
 	a.RawDataState[3] = a.Entropy
+
+	// Report the predictive-coding loss every so often. This is the mind's own
+	// next-signal prediction error, so a falling number here is the only
+	// honest evidence that the weights are actually learning rather than
+	// sitting frozen at their random init.
+	//
+	// The cadence is tick-based, and the default tick is 2s, so a fixed
+	// "every 40" cadence meant over 80s of silence before a mind said
+	// anything at all — long enough that a live mesh looked like it was not
+	// learning. Report the first few updates (proof of life), then settle
+	// into a steady cadence.
+	if m.Interoception != nil && m.Interoception.Updates > 0 {
+		m.learnTicks++
+		n := m.learnTicks
+		if n <= 3 || n%learnReportEvery == 0 {
+			pc := m.Interoception
+			fmt.Printf("📉 [LEARN] %s loss=%.5f ema=%.5f updates=%d ticks=%d\n",
+				m.Name, pc.LastLoss, pc.LossEMA, pc.Updates, n)
+		}
+	}
 }
+
+// learnReportEvery is the steady-state cadence for the per-mind learning line.
+const learnReportEvery = 25
 
 // Describe projects the raw internal vector into human syntax.
 func (a *Affect) Describe() string {

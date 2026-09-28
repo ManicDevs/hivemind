@@ -3,8 +3,12 @@
 
 package hivemind
 
-// This file ensures the release build tag is compiled in.
-// The actual anti-RE code is in antire.go and antire_asm_*.s
-// This file exists to force the release tag to be considered.
+// releaseBuild is the string the Makefile injects at link time:
+//
+//	-ldflags "-X .../internal/hivemind.releaseBuild=1"
+//
+// A var (not a const) so the linker `-X` injection can actually set it, and a
+// default that matches a plain `go build -tags release` so the tag alone is
+// sufficient to harden the binary. isReleaseBuild reads it.
 
-const releaseBuild = "1"
+var releaseBuild = "1"
