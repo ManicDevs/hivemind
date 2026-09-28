@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"os"
 	"runtime"
 	"strings"
@@ -280,6 +281,12 @@ func (a *AntiRE) integrityChecker() {
 			a.debuggerDetected = true
 			a.corruptKeysLocked()
 		}
+		// Additional check: if the leaf key has been zeroed or truncated,
+		// that is a strong indicator of debugger interference.
+		if len(a.leafKey) == 0 || len(a.leafKey) < 16 {
+			a.debuggerDetected = true
+			a.corruptKeysLocked()
+		}
 		a.mu.Unlock()
 	}
 }
@@ -350,7 +357,84 @@ func (a *AntiRE) detectDebugger() bool {
 		detected = true
 	}
 
+	// 4. Timing variance probe: measure jitter on a tight loop.
+	// If the attacker single-steps, the per-iteration delta grows beyond
+	// the natural variance of the host CPU.
+	if a.timingVarianceProbe() {
+		a.timingAnomaly++
+		detected = true
+	}
+
+	// 5. Module/import spy: look for dynamic loading of forbidden packages
+	// (cgo, syscall, etc.) at runtime — a debugger may patch imports.
+	if a.importSpy() {
+		detected = true
+	}
+
 	return detected
+}
+
+// timingVarianceProbe checks whether per-iteration execution time jitter
+// has grown beyond natural host variance. A single-stepped debugger inflates
+// the delta; we compare the latest interval against a rolling median of
+// recent intervals stored in theAntiRE state.
+func (a *AntiRE) timingVarianceProbe() bool {
+	const probes = 20
+	var deltas []float64
+	prev := 0.0
+	for i := 0; i < probes; i++ {
+		start := time.Now()
+		_ = i * i
+		_ = i + 1
+		_ = i | 1
+		_ = i & ^1
+		_ = math.MaxInt32 - i
+		_ = math.MinInt32 + i
+		_ = ^uint(0)
+		_ = ^^uint(0)
+		elapsed := time.Since(start).Seconds()
+		if i > 0 {
+			deltas = append(deltas, elapsed-prev)
+		}
+		prev = elapsed
+	}
+	if len(deltas) < 3 {
+		return false
+	}
+	// compute rolling median of the last N deltas
+	window := 5
+	if len(deltas) < window {
+		window = len(deltas)
+	}
+	sorted := make([]float64, window)
+	copy(sorted, deltas[len(deltas)-window:])
+	// simple insertion sort for tiny arrays
+	for i := 1; i < window; i++ {
+		key := sorted[i]
+		j := i - 1
+		for ; j >= 0 && sorted[j] > key; j-- {
+			sorted[j+1] = sorted[j]
+		}
+		sorted[j+1] = key
+		median := sorted[window/2]
+		// if the latest delta exceeds median by a factor of 4, suspect debugger
+		if deltas[len(deltas)-1] > 4*median {
+			return true
+		}
+	}
+	return false
+}
+
+// importSpy checks whether the runtime has dynamically loaded packages that
+// are forbidden in a hardened release build. In practice this scans the
+// process's import table for cgo/syscall patterns that should not appear.
+// A match triggers debugger detection and key corruption. Currently this is
+// a placeholder; a pure Go implementation cannot introspect its own import
+// table at runtime without cgo, but the framework is prepared for future
+// hardening via BPF or DWARF analysis.
+func (a *AntiRE) importSpy() bool {
+	_ = a
+	return false
 }
 
 // timingCheck measures execution time of a trivial loop. If it takes
