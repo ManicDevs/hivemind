@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- HIVEMIND Mesh Diagram — 56-node fabric network (28D/28A across 7 zones × 4 tiers) -->
+<svg width="900" height="700" viewBox="0 0 900 700"
+     xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<style>
+  .link { stroke: #555; stroke-width: 1; stroke-opacity: 0.4; }
+  .link-active { stroke: #d32f2f; stroke-width: 2; stroke-opacity: 1; }
+  .node { fill: #fff; stroke: #555; stroke-width: 2; }
+  .node-active { fill: #d32f2f; stroke: #b71c1c; stroke-width: 3; }
+  .label { font-family: sans-serif; font-size: 9; fill: #555; text-anchor: middle; }
+  .grid { stroke: #e0e0e0; stroke-width: 0.5; }
+</style>
+<!-- Mesh background -->
+<rect width="900" height="700" fill="#fff"/>
+<!-- 7 zones horizontally, 4 tiers vertically -->
+<!-- Zone positions -->
+<g transform="translate(50, 50)">
+  <!-- Zone position circles -->
+  <g id="zone-NA"><!-- NA --><circle cx="0" cy="0" r="12" fill="#4a90e2" stroke="#2a6ebd" stroke-width="2"/><text x="0" y="25" class="label">NA</text></g>
+  <g id="zone-SA"><!-- SA --><circle cx="140" cy="0" r="12" fill="#4a90e2" stroke="#2a6ebd"/><text x="140" y="25" class="label">SA</text></g>
+  <g id="zone-EU"><!-- EU --><circle cx="280" cy="0" r="12" fill="#4a90e2" stroke="#2a6ebd"/><text x="280" y="25" class="label">EU</text></g>
+  <g id="zone-AF"><!-- AF --><circle cx="420" cy="0" r="12" fill="#4a90e2" stroke="#2a6ebd"/><text x="420" y="25" class="label">AF</text></g>
+  <g id="zone-AS"><!-- AS --><circle cx="560" cy="0" r="12" fill="#4a90e2" stroke="#2a6ebd"/><text x="560" y="25" class="label">AS</text></g>
+  <g id="zone-OC"><!-- OC --><circle cx="700" cy="0" r="12" fill="#4a90e2" stroke="#2a6ebd"/><text x="700" y="25" class="label">OC</text></g>
+  <g id="zone-AN"><!-- AN --><circle cx="700" cy="140" r="12" fill="#4a90e2" stroke="#2a6ebd"/><text x="700" y="162" class="label">AN</text></g>
+</g>
+<!-- Tier positions vertically -->
+<g transform="translate(0, 130)">
+  <!-- Tier positions -->
+  <g id="tier-edge"><!-- Edge --><circle cx="0" cy="0" r="12" fill="#7ed321" stroke="#5a9e1a" stroke-width="2"/><text x="0" y="25" class="label">Edge</text></g>
+  <g id="tier-super"><!-- SuperPeer --><circle cx="0" cy="-50" r="12" fill="#7ed321" stroke="#5a9e1a" stroke-width="2"/><text x="0" y="-45" class="label">SuperPeer</text></g>
+  <g id="tier-controller"><!-- Controller --><circle cx="0" cy="-100" r="12" fill="#7ed321" stroke="#5a9e1a" stroke-width="2"/><text x="0" y="-95" class="label">Controller</text></g>
+  <g id="tier-master"><!-- Master --><circle cx="0" cy="-150" r="12" fill="#7ed321" stroke="#5a9e1a" stroke-width="2"/><text x="0" y="-145" class="label">Master</text></g>
+</g>
+<!-- Nodes: 7 zones × 4 tiers = 28 nodes -->
+<!-- NA nodes -->
+<g transform="translate(0, 0)">
+  <g id="node-na-edge"><!-- NA-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">NA-E</text></g>
+  <g id="node-na-super"><!-- NA-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">NA-S</text></g>
+  <g id="node-na-controller"><!-- NA-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">NA-C</text></g>
+  <g id="node-na-master"><!-- NA-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">NA-M</text></g>
+</g>
+<!-- SA nodes -->
+<g transform="translate(140, 0)">
+  <g id="node-sa-edge"><!-- SA-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">SA-E</text></g>
+  <g id="node-sa-super"><!-- SA-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">SA-S</text></g>
+  <g id="node-sa-controller"><!-- SA-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">SA-C</text></g>
+  <g id="node-sa-master"><!-- SA-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">SA-M</text></g>
+</g>
+<!-- EU nodes -->
+<g transform="translate(280, 0)">
+  <g id="node-eu-edge"><!-- EU-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">EU-E</text></g>
+  <g id="node-eu-super"><!-- EU-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">EU-S</text></g>
+  <g id="node-eu-controller"><!-- EU-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">EU-C</text></g>
+  <g id="node-eu-master"><!-- EU-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">EU-M</text></g>
+</g>
+<!-- AF nodes -->
+<g transform="translate(420, 0)">
+  <g id="node-af-edge"><!-- AF-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">AF-E</text></g>
+  <g id="node-af-super"><!-- AF-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">AF-S</text></g>
+  <g id="node-af-controller"><!-- AF-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">AF-C</text></g>
+  <g id="node-af-master"><!-- AF-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">AF-M</text></g>
+</g>
+<!-- AS nodes -->
+<g transform="translate(560, 0)">
+  <g id="node-as-edge"><!-- AS-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">AS-E</text></g>
+  <g id="node-as-super"><!-- AS-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">AS-S</text></g>
+  <g id="node-as-controller"><!-- AS-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">AS-C</text></g>
+  <g id="node-as-master"><!-- AS-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">AS-M</text></g>
+</g>
+<!-- OC nodes -->
+<g transform="translate(700, 0)">
+  <g id="node-oc-edge"><!-- OC-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">OC-E</text></g>
+  <g id="node-oc-super"><!-- OC-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">OC-S</text></g>
+  <g id="node-oc-controller"><!-- OC-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">OC-C</text></g>
+  <g id="node-oc-master"><!-- OC-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">OC-M</text></g>
+</g>
+<!-- AN nodes -->
+<g transform="translate(700, 140)">
+  <g id="node-an-edge"><!-- AN-Edge --><circle cx="0" cy="0" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="5" class="label">AN-E</text></g>
+  <g id="node-an-super"><!-- AN-Super --><circle cx="0" cy="-50" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-45" class="label">AN-S</text></g>
+  <g id="node-an-controller"><!-- AN-Controller --><circle cx="0" cy="-100" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-95" class="label">AN-C</text></g>
+  <g id="node-an-master"><!-- AN-Master --><circle cx="0" cy="-150" r="8" fill="#fff" stroke="#555" stroke-width="2"/><text x="0" y="-145" class="label">AN-M</text></g>
+</g>
+<!-- Active quarantine nodes (9 attacker quarantined) -->
+<g transform="translate(0, 0)">
+  <!-- Quarantine overlay: red 'X' on 9 specific nodes -->
+  <!-- Example: mark first 9 nodes as quarantined -->
+  <g id="quarantine-overlay">
+    <g transform="translate(0, 0)">
+      <g id="q-na-edge"><!-- NA-Edge quarantined --><circle cx="0" cy="0" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="0" y="5" class="label">NA-E</text></g>
+      <g id="q-na-super"><!-- NA-Super quarantined --><circle cx="0" cy="-50" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="0" y="-45" class="label">NA-S</text></g>
+      <g id="q-na-controller"><!-- NA-Controller quarantined --><circle cx="0" cy="-100" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="0" y="-95" class="label">NA-C</text></g>
+      <g id="q-na-master"><!-- NA-Master quarantined --><circle cx="0" cy="-150" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="0" y="-145" class="label">NA-M</text></g>
+      <g id="q-sa-edge"><!-- SA-Edge quarantined --><circle cx="140" cy="0" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="140" y="5" class="label">SA-E</text></g>
+      <g id="q-sa-super"><!-- SA-Super quarantined --><circle cx="140" cy="-50" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="140" y="-45" class="label">SA-S</text></g>
+      <g id="q-eu-edge"><!-- EU-Edge quarantined --><circle cx="280" cy="0" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="280" y="5" class="label">EU-E</text></g>
+      <g id="q-af-edge"><!-- AF-Edge quarantined --><circle cx="420" cy="0" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="420" y="5" class="label">AF-E</text></g>
+      <g id="q-as-edge"><!-- AS-Edge quarantined --><circle cx="560" cy="0" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="560" y="5" class="label">AS-E</text></g>
+      <g id="q-an-edge"><!-- AN-Edge quarantined --><circle cx="700" cy="140" r="8" fill="none" stroke="#d32f2f" stroke-width="3"/><text x="700" y="162" class="label">AN-E</text></g>
+    </g>
+  </g>
+</g>
+<!-- Links: intra-zone same-tier connections (simplified) -->
+<g class="link">
+  <!-- NA same-tier horizontal -->
+  <line x1="0" y1="0" x2="140" y2="0" class="link"/>
+  <!-- SA same-tier horizontal -->
+  <line x1="140" y1="0" x2="280" y2="0" class="link"/>
+  <!-- EU same-tier horizontal -->
+  <line x1="280" y1="0" x2="420" y2="0" class="link"/>
+  <!-- AF same-tier horizontal -->
+  <line x1="420" y1="0" x2="420" y2="0" class="link"/><!-- Same point, skip -->
+  <!-- AS same-tier horizontal -->
+  <line x1="560" y1="0" x2="700" y2="0" class="link"/>
+  <!-- OC same-tier horizontal -->
+  <line x1="700" y1="0" x2="700" y2="0" class="link"/><!-- Same point -->
+  <!-- AN same-tier horizontal -->
+  <line x1="700" y1="140" x2="700" y2="140" class="link"/><!-- Same point -->
+  <!-- Tier vertical connections (same zone) -->
+  <g transform="translate(0, 0)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+  <g transform="translate(140, 0)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+  <g transform="translate(280, 0)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+  <g transform="translate(420, 0)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+  <g transform="translate(560, 0)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+  <g transform="translate(700, 0)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+  <g transform="translate(700, 140)">
+    <line x1="0" y1="0" x2="0" y2="-50" class="link"/>
+    <line x1="0" y1="-50" x2="0" y2="-100" class="link"/>
+    <line x1="0" y1="-100" x2="0" y2="-150" class="link"/>
+  </g>
+</g>
+<!-- Legend -->
+<g transform="translate(720, 550)">
+  <rect x="0" y="0" width="160" height="100" fill="#f5f5f5" stroke="#b0b0b0"/>
+  <text x="10" y="20" class="label">HIVEMIND Mesh Diagram</text>
+  <text x="10" y="40" class="label">56 nodes (28D/28A) · 7 zones · 4 tiers</text>
+  <g transform="translate(20, 55)">
+    <circle cx="6" cy="6" r="6" fill="#fff" stroke="#555" stroke-width="2"/>
+    <text x="20" y="57" class="label">Node (active)</text>
+  </g>
+  <g transform="translate(20, 70)">
+    <circle cx="6" cy="6" r="6" fill="#d32f2f" stroke="#b71c1c" stroke-width="3"/>
+    <text x="20" y="71" class="label">Node (quarantined)</text>
+  </g>
+  <g transform="translate(40, 55)">
+    <line x1="1" y1="5" x2="9" y2="11" class="link"/>
+    <text x="15" y="57" class="label">Link (normal)</text>
+  </g>
+  <g transform="translate(40, 70)">
+    <line x1="1" y1="5" x2="9" y2="11" class="link-active"/>
+    <text x="15" y="71" class="label">Link (active / quarantined path)</text>
+  </g>
+</g>
+<!-- Title -->
+<text x="450" y="30" text-anchor="middle" font-size="22" font-weight="bold">HIVEMIND — Fabric Mesh</text>
+<text x="450" y="55" text-anchor="middle" font-size="12" fill="#666">28 fabric nodes · 7 zones × 4 tiers · quarantine: 9 attacker nodes isolated</text>
