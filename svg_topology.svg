@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- HIVEMIND Topology Diagram — 7 continents × 4 tiers -->
+<!-- Generated from internal/fabricsim topology structure -->
+<svg width="800" height="600" viewBox="0 0 800 600"
+     xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<style>
+  .continent { fill: #4a90e2; stroke: #2a6ebd; stroke-width: 2; }
+  .tier { fill: #7ed321; stroke: #5a9e1a; stroke-width: 1; }
+  .node { fill: #f0a500; stroke: #c47d05; stroke-width: 1; }
+  .label { font-family: sans-serif; font-size: 10; fill: #333; }
+  .grid { stroke: #e0e0e0; stroke-width: 0.5; }
+</style>
+<!-- Background -->
+<rect width="800" height="600" fill="#ffffff"/>
+<!-- Continent zones (7) across top -->
+<g transform="translate(40, 20)">
+  <g id="continent-NA" class="continent"><!-- NA --><title>North America</title><rect x="0" y="0" width="80" height="40"/><text x="40" y="25" class="label">NA</text></rect>
+  <g id="continent-SA" class="continent"><!-- SA --><title>South America</title><rect x="90" y="0" width="80" height="40"/><text x="40" y="25" class="label">SA</text></rect>
+  <g id="continent-EU" class="continent"><!-- EU --><title>Europe</title><rect x="180" y="0" width="80" height="40"/><text x="40" y="25" class="label">EU</text></rect>
+  <g id="continent-AF" class="continent"><!-- AF --><title>Africa</title><rect x="270" y="0" width="80" height="40"/><text x="40" y="25" class="label">AF</text></rect>
+  <g id="continent-AS" class="continent"><!-- AS --><title>Asia</title><rect x="360" y="0" width="80" height="40"/><text x="40" y="25" class="label">AS</text></rect>
+  <g id="continent-OC" class="continent"><!-- OC --><title>Australia</title><rect x="450" y="0" width="80" height="40"/><text x="40" y="25" class="label">OC</text></rect>
+  <g id="continent-AN" class="continent"><!-- AN --><title>Antarctica</title><rect x="540" y="0" width="80" height="40"/><text x="40" y="25" class="label">AN</text></rect>
+</g>
+<!-- Tier levels (4) vertically -->
+<g transform="translate(20, 70)">
+  <g id="tier-edge" class="tier"><!-- Edge --><title>Edge (Tier 4)</title><rect x="0" y="0" width="60" height="40"/><text x="30" y="25" class="label">Edge</text></rect></g>
+  <g id="tier-super" class="tier"><!-- SuperPeer --><title>SuperPeer (Tier 3)</title><rect x="0" y="50" width="60" height="40"/><text x="30" y="25" class="label">SuperPeer</text></rect></g>
+  <g id="tier-controller" class="tier"><!-- Controller --><title>Controller (Tier 2)</title><rect x="0" y="100" width="60" height="40"/><text x="30" y="25" class="label">Controller</text></rect></g>
+  <g id="tier-master" class="tier"><!-- Master --><title>Master (Tier 1)</title><rect x="0" y="150" width="60" height="40"/><text x="30" y="25" class="label">Master</text></rect></g>
+</g>
+<!-- Node placement grid -->
+<g transform="translate(180, 30)">
+  <!-- 7 zones × 4 tiers = 28 nodes -->
+  <!-- Zone NA, Tier Edge -->
+  <g id="node-na-edge" class="node"><!-- NA-Edge --><title>NA-Edge</title><circle cx="0" cy="0" r="8"/><text x="0" y="5" class="label">NA-E</text></g>
+  <!-- Zone NA, Tier SuperPeer -->
+  <g id="node-na-super" class="node"><!-- NA-Super --><title>NA-Super</title><circle cx="0" cy="-50" r="8"/><text x="0" y="-45" class="label">NA-S</text></g>
+  <!-- Zone NA, Tier Controller -->
+  <g id="node-na-controller" class="node"><!-- NA-Controller --><title>NA-Controller</title><circle cx="0" cy="-100" r="8"/><text x="0" y="-95" class="label">NA-C</text></g>
+  <!-- Zone NA, Tier Master -->
+  <g id="node-na-master" class="node"><!-- NA-Master --><title>NA-Master</title><circle cx="0" cy="-150" r="8"/><text x="0" y="-145" class="label">NA-M</text></g>
+  <!-- Zone SA, Tier Edge -->
+  <g id="node-sa-edge" class="node"><!-- SA-Edge --><title>SA-Edge</title><circle cx="70" cy="0" r="8"/><text x="70" y="5" class="label">SA-E</text></g>
+  <!-- Zone SA, Tier SuperPeer -->
+  <g id="node-sa-super" class="node"><!-- SA-Super --><title>SA-Super</title><circle cx="70" cy="-50" r="8"/><text x="70" y="-45" class="label">SA-S</text></g>
+  <!-- Continue pattern for all 7 zones × 4 tiers -->
+  <!-- Zone EU, Tier Edge -->
+  <g id="node-eu-edge" class="node"><!-- EU-Edge --><title>EU-Edge</title><circle cx="140" cy="0" r="8"/><text x="140" y="5" class="label">EU-E</text></g>
+  <!-- Zone AF, Tier Edge -->
+  <g id="node-af-edge" class="node"><!-- AF-Edge --><title>AF-Edge</title><circle cx="210" cy="0" r="8"/><text x="210" y="5" class="label">AF-E</text></g>
+  <!-- Zone AS, Tier Edge -->
+  <g id="node-as-edge" class="node"><!-- AS-Edge --><title>AS-Edge</title><circle cx="280" cy="0" r="8"/><text x="280" y="5" class="label">AS-E</text></g>
+  <!-- Zone OC, Tier Edge -->
+  <g id="node-oc-edge" class="node"><!-- OC-Edge --><title>OC-Edge</title><circle cx="350" cy="0" r="8"/><text x="350" y="5" class="label">OC-E</text></g>
+  <!-- Zone AN, Tier Edge -->
+  <g id="node-an-edge" class="node"><!-- AN-Edge --><title>AN-Edge</title><circle cx="420" cy="0" r="8"/><text x="420" y="5" class="label">AN-E</text></g>
+  <!-- Horizontal grid lines for tiers -->
+  <g class="grid">
+    <line x1="0" y1="-50" x2="490" y2="-50"/>
+    <line x1="0" y1="-100" x2="490" y2="-100"/>
+    <line x1="0" y1="-150" x2="490" y2="-150"/>
+  </g>
+  <!-- Vertical grid lines for zones -->
+  <g class="grid">
+    <line x1="70" y1="0" x2="70" y2="-200"/>
+    <line x1="140" y1="0" x2="140" y2="-200"/>
+    <line x1="210" y1="0" x2="210" y2="-200"/>
+    <line x1="280" y1="0" x2="280" y2="-200"/>
+    <line x1="350" y1="0" x2="350" y2="-200"/>
+    <line x1="420" y1="0" x2="420" y2="-200"/>
+  </g>
+</g>
+<!-- Legend -->
+<g transform="translate(560, 20)">
+  <rect x="0" y="0" width="180" height="150" fill="#f5f5f5" stroke="#b0b0b0"/>
+  <text x="10" y="20" class="label">HIVEMIND Topology Diagram</text>
+  <text x="10" y="40" class="label">7 zones × 4 tiers = 28 nodes</text>
+  <circle cx="15" cy="60" r="6" fill="#f0a500" stroke="#c47d05"/>
+  <text x="25" y="62" class="label">Node (fabric participant)</text>
+  <circle cx="15" cy="80" r="6" fill="#4a90e2" stroke="#2a6ebd"/>
+  <text x="25" y="82" class="label">Continent zone</text>
+  <circle cx="15" cy="100" r="6" fill="#7ed321" stroke="#5a9e1a"/>
+  <text x="25" y="102" class="label">Tier level</text>
+</g>
+<!-- Title -->
+<text x="400" y="30" text-anchor="middle" font-size="20" font-weight="bold">HIVEMIND — Continental Topology</text>
+<text x="400" y="55" text-anchor="middle" font-size="12" fill="#666">28 nodes · 7 continents · 4 tiers · pure Go</text>
