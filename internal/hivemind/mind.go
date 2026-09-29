@@ -35,10 +35,6 @@ const (
 	// thoughtWindow caps the live archive: a year-long mind stays lean.
 	// Retired thoughts are banked (counted for fitness), never mourned.
 	thoughtWindow = 500
-	// replyMinInterval is the per-mind floor between answering remote
-	// siblings. One reply, then the mind goes quiet for a minute: a node
-	// that wants gossip has nothing to say every ten seconds.
-	replyMinInterval = 60 * time.Second
 	// replySocializationFloor is the gene weight a mind needs to answer a
 	// distant thought at all. Social minds speak for the node; hermits
 	// stay hermits and that is their right.
@@ -48,6 +44,19 @@ const (
 	// not. Soloists and taglines both still entrain every node's physics.
 	proseLen = 24
 )
+
+// replyMinInterval is the per-mind floor between answering remote siblings,
+// operator-tunable via HIVEMIND_REPLY_INTERVAL_MS (default 60s). One reply,
+// then the mind goes quiet: a node that wants gossip has nothing to say
+// every ten seconds.
+var replyMinInterval = func() time.Duration {
+	if raw := os.Getenv("HIVEMIND_REPLY_INTERVAL_MS"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 100 {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return 60 * time.Second
+}()
 
 var telemetryOnce sync.Once
 
@@ -369,11 +378,37 @@ func NewMind(name string, swarm *Swarm) *Mind {
 			ep.endpoint, ep.model, ep.desc)
 	}
 
+	// A private loopback Ollama daemon — when one is running — becomes the
+	// primary voice: free, unthrottled, and wholly off-network. The cloud
+	// keyless members above back it up under load or outage. Only loopback
+	// targets are ever auto-discovered (HIVEMIND_OLLAMA_ENDPOINT must honor
+	// that); HIVEMIND_OLLAMA_MODEL pins the model, otherwise the best tag on
+	// the daemon is chosen.
+	var localLLM *language.RemoteLLM
+	if lllm, err := language.NewLocalOllama(); err == nil {
+		localLLM = lllm
+		pool = append([]*language.RemoteLLM{lllm}, pool...)
+		language.WarmLocalOllama(lllm)
+		fmt.Printf("🗣️  [LANGUAGE] Primary pool member: local Ollama (model %s) - private, unthrottled\n",
+			lllm.Model())
+	} else if language.LocalOllamaPresent() {
+		// The daemon answered /api/tags but none of its models could serve a
+		// realistic swarm prompt inside the viability window (typical on a
+		// CPU-only box: ~7 tokens/s prompt ingest). Say so instead of quietly
+		// skipping, and point at the override for operators who disagree.
+		fmt.Printf("⏭️  [LANGUAGE] Local Ollama present but too slow for swarm cadence (%v) - cloud keyless pool stands in; HIVEMIND_OLLAMA_MODEL forces it\n",
+			err)
+	}
+
 	if len(pool) > 0 {
 		var llmObj language.LanguageModel
-		if len(pool) == 1 {
+		switch {
+		case len(pool) == 1:
 			llmObj = pool[0]
-		} else {
+		case localLLM != nil:
+			// local model sits at pool[0]; rotate the cloud members only.
+			llmObj = language.NewLocalFirstRotatingLLM(localLLM, pool[1:]...)
+		default:
 			llmObj = language.NewRotatingLLM(pool...)
 		}
 		m.LanguageBridge = language.NewLanguageBridge(llmObj, 30*time.Second)

@@ -48,18 +48,25 @@ func DefaultConfig(modelPath string) ModelConfig {
 }
 
 type RemoteLLMConfig struct {
-	Endpoint string
-	Model    string
-	Timeout  time.Duration
-	APIKey   string
-	Headers  map[string]string
+	Endpoint  string
+	Model     string
+	Timeout   time.Duration
+	APIKey    string
+	Headers   map[string]string
+	MaxTokens int
+	// CallTimeout bounds a single Generate call. Public endpoints are fast;
+	// a private CPU-bound Ollama can take minutes on a heavy prompt, and the
+	// swarm cannot wait that long per thought.
+	CallTimeout time.Duration
 }
 
 func DefaultRemoteLLMConfig(endpoint, model string) RemoteLLMConfig {
 	return RemoteLLMConfig{
-		Endpoint: endpoint,
-		Model:    model,
-		Timeout:  300 * time.Second,
+		Endpoint:    endpoint,
+		Model:       model,
+		Timeout:     300 * time.Second,
+		MaxTokens:   256,
+		CallTimeout: 30 * time.Second,
 	}
 }
 
@@ -87,10 +94,12 @@ func OllamaConfig(endpoint, model string) RemoteLLMConfig {
 // origin.
 func OpenAICompatibleConfig(endpoint, model, apiKey string) RemoteLLMConfig {
 	return RemoteLLMConfig{
-		Endpoint: strings.TrimSuffix(endpoint, "/"),
-		Model:    model,
-		Timeout:  300 * time.Second,
-		APIKey:   apiKey,
+		Endpoint:    strings.TrimSuffix(endpoint, "/"),
+		Model:       model,
+		Timeout:     300 * time.Second,
+		APIKey:      apiKey,
+		MaxTokens:   256,
+		CallTimeout: 30 * time.Second,
 	}
 }
 

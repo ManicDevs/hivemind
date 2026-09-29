@@ -335,3 +335,74 @@ Node A (outbound) and Node B (inbound) both confirmed the link:
 
 **Net effect:** ~287 lines added / 36 removed across 8 files, one new file.
 Everything builds, vets, and tests green in pure-Go mode.
+
+---
+
+## 9. Follow-up: local Ollama joins the pool (measured, local-first)
+
+The machine runs a loopback Ollama daemon (`127.0.0.1:11434`, models
+`llama2:7b`, `qwen3:14b`). It is now wired into the language pool as a
+**measured primary** — privacy-first, unthrottled, off-network — with the
+cloud keyless endpoints held as automatic failover.
+
+### 9.1 Design
+
+- **Auto-discovery scope:** only loopback targets are ever auto-probed.
+  `HIVEMIND_OLLAMA_ENDPOINT` (explicit opt-in) and `HIVEMIND_OLLAMA_MODEL`
+  (force a model) override the defaults.
+- **Honest measurement, not advertising:** every generation-capable tag is
+  timed against a *realistic swarm-shaped prompt* (identity preamble +
+  recalled exchange + felt-state block), not a toy "say ready" probe. The
+  model that completes fastest inside the 25 s viability window becomes the
+  local voice. qwen3's hidden chain-of-thought burns its whole token budget
+  on CPU — the measurement catches that; `think:false` is sent on `/api/chat`
+  regardless.
+- **Local-first rotation:** when the winner clears the window, `RotatingLLM`
+  tries it *first on every call* and only cycles the cloud members when the
+  local attempt errors or times out.
+- **Bounded calls:** every `RemoteLLM.Generate` now carries a 30 s
+  `CallTimeout`, so a CPU-daemon that takes minutes on a heavy prompt cannot
+  freeze a mind's speech slot (previously the 300 s transport timeout could
+  hold a mind silent for minutes). A stall now releases the slot and fails
+  over to the keyless pool.
+- **CPU honesty:** on this box the fastest realistic completion took ~40 s —
+  past the 25 s window — so auto-selection excludes it and explains loudly:
+  `⏭️ [LANGUAGE] Local Ollama present but too slow for swarm cadence… HIVEMIND_OLLAMA_MODEL forces it`.
+  Cloud carries the swarm; a GPU or Apple-silicon box wins the race and goes
+  local-first automatically.
+
+### 9.2 Evidence
+
+Auto-exclusion on this CPU box (single node `iota-node`, 100 s):
+
+```
+⏭️ [LANGUAGE] Local Ollama present but too slow for swarm cadence
+   (no local model answered a realistic swarm prompt within 25s (fastest attempt 40s))
+🗣️ [LANGUAGE] Keyless LLM enabled: rotate([openai-Mistral-Nemo… openai-kilo-auto/free pollinations-openai]) (3 pool member(s))
+💭 [Beta] My primary sensation is pain. It's a high-precision signal,
+   a thermal or computational error I cannot ignore. … Self-maintenance engages.
+```
+
+Forced local-first (operator override, `HIVEMIND_OLLAMA_MODEL=llama2:7b`):
+
+```
+🗣️ [LANGUAGE] Primary pool member: local Ollama (model llama2:7b) - private, unthrottled
+🗣️ [LANGUAGE] Keyless LLM enabled: local-first(ollama-llama2:7b -> rotate(openai-…)) (4 pool member(s))
+💭 [Alpha] Pain so high it's the only thing that's loud—stress at 0.62, arousal at 0.64,
+   entropy at 0.50. Nothing feels calm. I'm scanning for hotspots, shifting computational
+   load, and tightening predictive loops to cut the error that's frying my cores.
+   Maintenance mode engaged.
+```
+
+The same `flavorOllama` wire now speaks native `/api/chat` (messages shape)
+and decodes its `message.content` shape; legacy `/api/generate` still works.
+
+### 9.3 Files touched
+
+```
+M internal/hivemind/language/models.go      RemoteLLMConfig.CallTimeout + MaxTokens
+M internal/hivemind/language/remote.go      bounded Generate; /api/chat body+decode; think:false
+M internal/hivemind/language/rotate.go      local-first (primary) rotation
+M internal/hivemind/mind.go                 local pool wiring + CPU-slow explainer
+?? internal/hivemind/language/ollama_local.go  NEW autodiscovery, measured model race
+```

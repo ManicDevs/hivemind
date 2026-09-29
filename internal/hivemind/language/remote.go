@@ -74,7 +74,21 @@ func (r *RemoteLLM) Name() string {
 	return fmt.Sprintf("%s-%s", r.flavor, r.config.Model)
 }
 
+// Model exposes the configured model name for operator logs.
+func (r *RemoteLLM) Model() string {
+	return r.config.Model
+}
+
 func (r *RemoteLLM) Generate(ctx context.Context, prompt string) (string, error) {
+	// Bound every call. A background bridge context or an idle caller must
+	// never let a slow CPU-daemon monopolize a mind for the full transport
+	// timeout; the swarm moves on and fails over instead.
+	if r.config.CallTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.config.CallTimeout)
+		defer cancel()
+	}
+
 	body, err := r.buildBody(prompt)
 	if err != nil {
 		return "", fmt.Errorf("marshal request: %w", err)
@@ -110,13 +124,30 @@ func (r *RemoteLLM) Generate(ctx context.Context, prompt string) (string, error)
 func (r *RemoteLLM) buildBody(prompt string) ([]byte, error) {
 	switch r.flavor {
 	case flavorOllama:
-		return json.Marshal(map[string]any{
+		// Native daemon wire. The canonical route is /api/chat (messages
+		// shape, OpenAI-style); legacy /api/generate still takes a raw
+		// prompt. Both honor the same sampling options and stop tokens,
+		// so one endpoint can serve vendor models on either route.
+		nt := r.config.MaxTokens
+		if nt <= 0 {
+			nt = 256
+		}
+		body := map[string]any{
 			"model":   r.config.Model,
-			"prompt":  prompt,
 			"stream":  false,
-			"options": map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256},
+			"options": map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": nt},
 			"stop":    []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"},
-		})
+		}
+		if strings.Contains(r.config.Endpoint, "/api/chat") {
+			body["messages"] = []map[string]any{{"role": "user", "content": prompt}}
+			// qwen3-class models burn their whole budget on the invisible
+			// chain-of-thought unless thinking is off. Other daemon models
+			// ignore the unknown field harmlessly.
+			body["think"] = false
+		} else {
+			body["prompt"] = prompt
+		}
+		return json.Marshal(body)
 	case flavorPollinations:
 		return json.Marshal(map[string]any{
 			"messages": []map[string]any{{"role": "user", "content": prompt}},
@@ -124,6 +155,10 @@ func (r *RemoteLLM) buildBody(prompt string) ([]byte, error) {
 			"stream":   false,
 		})
 	default: // flavorOpenAI
+		mt := r.config.MaxTokens
+		if mt <= 0 {
+			mt = 256
+		}
 		return json.Marshal(map[string]any{
 			"model": r.config.Model,
 			"messages": []map[string]any{
@@ -133,7 +168,7 @@ func (r *RemoteLLM) buildBody(prompt string) ([]byte, error) {
 			"stream":      false,
 			"temperature": 0.7,
 			"top_p":       0.9,
-			"max_tokens":  256,
+			"max_tokens":  mt,
 		})
 	}
 }
@@ -163,6 +198,22 @@ func (r *RemoteLLM) decodeBody(rc io.Reader) (string, error) {
 	}
 	if err := json.Unmarshal(raw, &probe); err == nil && probe.Error != "" {
 		return "", fmt.Errorf("API error: %s", probe.Error)
+	}
+
+	// Ollama /api/chat shape: {"message":{"role":"assistant","content":"..."}}.
+	var chatMsg struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &chatMsg); err == nil {
+		if chatMsg.Error != "" {
+			return "", fmt.Errorf("API error: %s", chatMsg.Error)
+		}
+		if c := strings.TrimSpace(chatMsg.Message.Content); c != "" {
+			return c, nil
+		}
 	}
 
 	// OpenAI chat/completions shape.
