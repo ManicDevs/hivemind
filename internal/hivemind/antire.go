@@ -505,7 +505,17 @@ func (a *AntiRE) hardwareRegisterCheck() bool {
 // that may indicate debugger attachment. Currently a pure Go placeholder;
 // future hardening could inspect /proc/PID/environ or registry keys.
 func (a *AntiRE) environmentInspection() bool {
-	_ = a
+	debugEnvList := []string{
+		"GDB_", "LLDB_", "FRIDA_", "PTRASE", "PROMPT", "XDEBUG_CONFIG",
+		"XTRACE", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD",
+	}
+	for _, e := range os.Environ() {
+		for _, env := range debugEnvList {
+			if strings.HasPrefix(e, env) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
