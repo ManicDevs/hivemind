@@ -20,8 +20,37 @@ make stack
 curl http://localhost:8081/healthz | jq '.mesh'
 ```
 
+## Engine
+
+The `hivemind` binary is a thin shell around `internal/engine` — one call
+builds the whole universe (swarm + peer mesh + minds + overmind + health +
+telemetry), runs it under supervision, and tears it down so every soul is
+persisted on disk before anyone reports.
+
+```bash
+hivemind version                       # build/runtime info
+hivemind help                          # subcommand + flag reference
+
+hivemind                               # standalone, Alpha/Beta/Gamma
+hivemind engine -mode peer -node asia-a
+hivemind engine -config node.json      # JSON overlay config
+
+# node.json
+{ "mode":"peer", "node":"juno-north",
+  "minds":["Alpha","Beta","Gamma"],
+  "health_addr":"127.0.0.1:9090" }     # /healthz + /metrics
+
+# Legacy flags still work unchanged: hivemind -mode peer -node eu-b
+```
+
+Language is env-driven as before: the accountless keyless pool
+(OVH/Kilo/Pollinations) plus a measured local-Ollama primary
+(`HIVEMIND_OLLAMA_MODEL` forces it on a slow CPU box). Graceful shutdown
+reports engine telemetry: `📊 [ENGINE] node … stood for … thoughts, replies`.
+
 ## Architecture
 
+- **Engine** — `internal/engine` orchestration: lifecycle, config schema, telemetry
 - **28 Minds** across 7 continents (4 per region)
 - **Relay** — HTTP/MQTT bridge with TLS 1.2+ broker federation
 - **World/Fabric** — Orchestration and adaptive routing

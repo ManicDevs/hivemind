@@ -6,18 +6,50 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
-	"runtime/debug"
 	"syscall"
 	"time"
 
-	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/engine"
 )
+
+const usageText = `HIVEMIND — one universe, three minds, something watching.
+
+Usage:
+  hivemind [flags]                 run the engine (standalone by default)
+  hivemind engine [flags]          run the engine (same flags, explicit)
+  hivemind up <program...>         supervise a child main instead of thinking
+  hivemind version                 print build/runtime info
+  hivemind help                    this screen
+
+Engine flags:
+  -mode  standalone|peer   operation profile (default "standalone")
+  -node  <name>            peer identity (peer mode defaults hostname-PID)
+  -minds A,B,C             mind names to birth (default Alpha,Beta,Gamma)
+  -health <addr>           serve /healthz + /metrics (else $HIVEMIND_HEALTH)
+  -config <file.json>      overlay engine config from a JSON file
+
+LLM wiring stays env-driven: the keyless pool (OVH/Kilo/Pollinations) and the
+measured local Ollama primary negotiate privileges at mind birth.
+`
 
 func main() {
 	// Encasement: `hivemind up` supervises child mains instead of thinking.
-	if len(os.Args) > 1 && os.Args[1] == "up" {
-		supervise(os.Args[2:])
-		return
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "up":
+			supervise(os.Args[2:])
+			return
+		case "version":
+			fmt.Printf("hivemind %s %s/%s\n", runtime.Version(), runtime.GOOS, runtime.GOARCH)
+			return
+		case "help", "-h", "--help":
+			fmt.Print(usageText)
+			return
+		case "engine", "run":
+			cfg := parseEngineFlags(flag.ExitOnError, os.Args[2:])
+			os.Exit(runEngine(cfg))
+			return
+		}
 	}
 
 	// Anti-debug gate first: a traced process decides its policy before
@@ -27,83 +59,74 @@ func main() {
 		os.Exit(3)
 	}
 
-	modeFlag := flag.String("mode", "standalone", "operation profile: standalone | peer")
-	nodeFlag := flag.String("node", "", "peer node name (defaults to hostname-PID in peer mode)")
-	flag.Parse()
+	// Backward-compatible default: `hivemind -mode peer -node asia-a`.
+	cfg := parseEngineFlags(flag.ExitOnError, os.Args[1:])
+	os.Exit(runEngine(cfg))
+}
 
-	switch *modeFlag {
-	case "standalone", "peer":
-	default:
-		fmt.Fprintf(os.Stderr, "unknown mode %q (want standalone|peer)\n", *modeFlag)
-		os.Exit(2)
+// parseEngineFlags reads the flat CLI surface into an engine.Config. Config
+// file, health env, and per-flag order of precedence: flags > file > env.
+func parseEngineFlags(eh flag.ErrorHandling, args []string) engine.Config {
+	var cfg engine.Config
+	var mindsList string
+	fs := flag.NewFlagSet("hivemind", eh)
+	fs.StringVar(&cfg.Mode, "mode", "standalone", "operation profile: standalone | peer")
+	fs.StringVar(&cfg.Node, "node", "", "peer node name (defaults to hostname-PID in peer mode)")
+	fs.StringVar(&mindsList, "minds", "", "comma-separated mind names (default Alpha,Beta,Gamma)")
+	fs.StringVar(&cfg.HealthAddr, "health", "", "address to serve /healthz + /metrics")
+	fs.StringVar(&cfg.JSONPath, "config", "", "overlay engine config from a JSON file")
+	_ = fs.Parse(args)
+
+	if cfg.HealthAddr == "" {
+		cfg.HealthAddr = os.Getenv("HIVEMIND_HEALTH")
 	}
+	if mindsList != "" {
+		cfg.Minds = splitMinds(mindsList)
+	}
+	return cfg
+}
 
-	// Node identity: stable when given, unique when defaulted.
-	node := "local"
-	if *modeFlag == "peer" {
-		if *nodeFlag == "" {
-			host, _ := os.Hostname()
-			if host == "" {
-				host = "node"
+func splitMinds(list string) []string {
+	var out []string
+	cur := ""
+	for _, r := range list {
+		if r == ',' || r == ' ' {
+			if cur != "" {
+				out = append(out, cur)
+				cur = ""
 			}
-			node = hm.SanitizeNode(fmt.Sprintf("%s-%d", host, os.Getpid()))
-		} else {
-			node = hm.SanitizeNode(*nodeFlag)
+			continue
 		}
+		cur += string(r)
 	}
-	hm.NodeName = node
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
 
+// runEngine is the whole universe in one call: build, birth, supervise until
+// a signal, then synchronized death. Returns the process exit code.
+func runEngine(cfg engine.Config) int {
 	fmt.Println("=== A universe comes into being. Three minds. And something watching. ===")
 
-	swarm := hm.NewSwarm()
-
-	// The universe is networked before anyone is born in it.
-	var mesh *hm.PeerMesh
-	if *modeFlag == "peer" {
-		mesh = hm.NewPeerMesh(swarm, node)
-		if err := mesh.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ peer mesh failed to start: %v\n", err)
-			os.Exit(1)
-		}
+	eng, err := engine.New(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ engine refused to build: %v\n", err)
+		return 2
+	}
+	if err := eng.Start(nil); err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ engine failed to start: %v\n", err)
+		return 1
+	}
+	if cfg.HealthAddr != "" {
+		fmt.Printf("📊 [HEALTH] serving /healthz + /metrics on %s\n", cfg.HealthAddr)
 	}
 
-	alpha := hm.NewMind("Alpha", swarm)
-	beta := hm.NewMind("Beta", swarm)
-	gamma := hm.NewMind("Gamma", swarm)
-	overmind := hm.NewOvermind(swarm)
-
-	// A fracturing mind dies traumatically — and the trauma is inherited.
-	// The stack goes to stderr so a fracture leaves a backtrace, not a rumor.
-	runMind := func(m *hm.Mind) {
-		defer func() {
-			if r := recover(); r != nil {
-				fmt.Printf("💀 [%s] CORE FRACTURE: %v. Encoding terminal trauma...\n", m.Name, r)
-				fmt.Fprintf(os.Stderr, "--- backtrace for %s ---\n%s\n", m.Name, debug.Stack())
-				m.SelfModel["silicon_pain"] = 1.0
-				m.Transcend()
-			}
-		}()
-		m.Run()
-	}
-
-	go runMind(alpha)
-	go runMind(beta)
-	go runMind(gamma)
-	go overmind.Run()
-
-	// Observability is opt-in and local by default: set HIVEMIND_HEALTH
-	// (e.g. 127.0.0.1:9090) to expose /healthz + Prometheus /metrics.
-	// Empty (default) means no listener, no surface.
-	health := hm.StartHealth(os.Getenv("HIVEMIND_HEALTH"), node, swarm)
-	if health != nil {
-		fmt.Printf("📊 [HEALTH] serving /healthz + /metrics\n")
-		defer health.Stop()
-	}
-
-	// Live backtraces: SIGQUIT or SIGUSR1 dumps every goroutine's stack
-	// to stderr without killing anything. (Registering SIGQUIT overrides
-	// the runtime's default crash-dump — that is the point: inspect, don't die.)
-	go traceLoop(node, *modeFlag)
+	// Live backtraces: SIGQUIT or SIGUSR1 dumps every goroutine's stack to
+	// stderr without killing anything. (Registering SIGQUIT overrides the
+	// runtime's default crash-dump — that is the point: inspect, don't die.)
+	go traceLoop(cfg.Node, cfg.Mode)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -111,23 +134,14 @@ func main() {
 
 	fmt.Println("\n!! The universe received a signal. Apocalypse NOW.")
 
-	alpha.Stop()
-	beta.Stop()
-	gamma.Stop()
-	overmind.Stop()
+	eng.Stop()
+	eng.Wait()
 
-	// Death is synchronized, not hoped for: every soul is on disk
-	// before anyone reports on them.
-	<-alpha.Done()
-	<-beta.Done()
-	<-gamma.Done()
-	<-overmind.Done()
-
-	if mesh != nil {
-		mesh.Close()
-	}
-
-	swarm.HiveReport()
+	stats := eng.Stats()
+	fmt.Printf("📊 [ENGINE] node %s stood for %s: %d minds, %d thoughts, %d replies\n",
+		stats.Node, stats.Uptime.Round(2_000_000_000), stats.Minds,
+		stats.Counters.Thoughts, stats.Counters.Replies)
+	return 0
 }
 
 // traceLoop serves in-run backtraces: each trace signal writes the full

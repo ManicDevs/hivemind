@@ -1046,6 +1046,7 @@ func (m *Mind) Cycle() {
 				// behind HIVEMIND_VERBOSE meant a default stack generated
 				// real language that nobody could see — it looked broken.
 				fmt.Printf("  💭 [%s] %s\n", name, thought)
+				fireThought(NodeName, name, thought)
 			default:
 				fmt.Printf("🤐  [LANGUAGE] No thought generated for %s (empty or nil)\n", name)
 			}
@@ -1338,6 +1339,7 @@ func (m *Mind) answerPeer(orig *SecureMessage, peerID string) {
 			// read would race the ticker.
 			m.MineProofAndBroadcast("thought_reply", reply, nil)
 			fmt.Printf("  💬 [%s → %s] \"%s\"\n", name, peerID, reply)
+			fireReply(NodeName, name, peerID, reply)
 		default:
 			fmt.Printf("🤐  [LANGUAGE] Empty reply from %s to %s\n", name, peerID)
 		}
