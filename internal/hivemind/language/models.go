@@ -131,6 +131,10 @@ type PromptContext struct {
 	Goal       string
 	History    []Message
 	Timestamp  time.Time
+	// Law holds provisioned knowledge excerpts retrieved for this utterance.
+	// Rendered as a citable system block before the felt-state request so the
+	// model reasons grounded in the book instead of hallucinating norms.
+	Law []string
 }
 
 type Message struct {
@@ -158,6 +162,14 @@ func BuildPrompt(ctx PromptContext) string {
 	b.WriteString("\nYour goal: " + ctx.Goal + "\n")
 	b.WriteString("Express yourself authentically from your felt experience. Be concise.\n")
 	b.WriteString("<|end|>\n")
+
+	if len(ctx.Law) > 0 {
+		b.WriteString("Provisioned knowledge retrieved for this moment (you MAY quote it verbatim where relevant):\n")
+		for i, cl := range ctx.Law {
+			b.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, cl))
+		}
+		b.WriteString("<|end|>\n")
+	}
 
 	for _, msg := range ctx.History {
 		b.WriteString("<|" + msg.Role + "|>\n")
@@ -202,6 +214,14 @@ func BuildReplyPrompt(ctx PromptContext, peerShort, peerThought string) string {
 	b.WriteString("Answer that node directly, in character, as a fellow mind. Keep it brief (2-4 sentences).\n")
 	b.WriteString("Your goal: " + ctx.Goal + "\n")
 	b.WriteString("<|end|>\n")
+
+	if len(ctx.Law) > 0 {
+		b.WriteString("Provisioned knowledge retrieved for this moment (you MAY quote it verbatim where relevant):\n")
+		for i, cl := range ctx.Law {
+			b.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, cl))
+		}
+		b.WriteString("<|end|>\n")
+	}
 
 	for _, msg := range ctx.History {
 		b.WriteString("<|" + msg.Role + "|>\n")

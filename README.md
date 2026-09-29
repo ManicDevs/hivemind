@@ -35,13 +35,31 @@ hivemind                               # standalone, Alpha/Beta/Gamma
 hivemind engine -mode peer -node asia-a
 hivemind engine -config node.json      # JSON overlay config
 
+hivemind seed -journal data/law.journal data/law.json   # provision the lawbook
+hivemind engine -law data/law.journal   # bind law at boot (JSON: "law_journal")
+
 # node.json
 { "mode":"peer", "node":"juno-north",
   "minds":["Alpha","Beta","Gamma"],
-  "health_addr":"127.0.0.1:9090" }     # /healthz + /metrics
+  "health_addr":"127.0.0.1:9090",      # /healthz + /metrics
+  "law_journal":"data/law.journal" }   # persistent legal knowledge substrate
 
 # Legacy flags still work unchanged: hivemind -mode peer -node eu-b
 ```
+
+## Lawbook
+
+`hivemind seed` provisions legal/normative text (statutes, contract clauses)
+as a persistent, append-only journal — your own durable law. Every mind on
+every node bound to the same journal retrieves the provisions relevant to the
+moment it is thinking or being asked, and the reply prompt lets it quote them
+verbatim with audit handles (clause id, source, tag). Retrieval is honest
+pure-Go term scoring: no embeddings, no model creativity in the recall — the
+LLM reasons, the book grounds. Re-seeding is idempotent (clauses dedupe by
+derived id); an interleaved write never corrupts the book (corrupt lines are
+skipped); node death is meaningless to law — the journal reloads at every boot:
+`📜 [LAW] 8 clauses loaded from data/law.journal`. Every graceful stop reports
+how many clauses compile into the standing universe.
 
 Language is env-driven as before: the accountless keyless pool
 (OVH/Kilo/Pollinations) plus a measured local-Ollama primary

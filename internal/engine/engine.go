@@ -48,6 +48,11 @@ type Config struct {
 	// HealthAddr, when set (e.g. "127.0.0.1:9090"), serves /healthz and
 	// /metrics for this node. Empty => no listener.
 	HealthAddr string `json:"health_addr"`
+	// LawJournal binds the node's persistent lawbook journal (provisioned
+	// legal/normative clauses used to ground every thought and reply).
+	// Empty => the process default (data/law.journal); a missing file is a
+	// lawless node, not an error.
+	LawJournal string `json:"law_journal"`
 	// JSONPath, when given, loads overrides from a JSON config file before
 	// explicit field values are applied (only non-zero fields win).
 	JSONPath string `json:"-"`
@@ -131,6 +136,9 @@ func (c *Config) LoadJSON() error {
 	if fileCfg.HealthAddr != "" {
 		c.HealthAddr = fileCfg.HealthAddr
 	}
+	if fileCfg.LawJournal != "" {
+		c.LawJournal = fileCfg.LawJournal
+	}
 	return nil
 }
 
@@ -144,7 +152,10 @@ type Stats struct {
 	Minds    int
 	Overmind bool
 	Mesh     bool
-	Counters struct {
+	// LawClauses is how many provisioned provisions sit in the bound
+	// journal that grounds every utterance on this node.
+	LawClauses int
+	Counters   struct {
 		Thoughts int64
 		Replies  int64
 	}
@@ -202,6 +213,20 @@ func New(cfg Config) (*Engine, error) {
 
 	if cfg.HealthAddr != "" {
 		eng.health = hm.StartHealth(cfg.HealthAddr, cfg.Node, eng.swarm)
+	}
+
+	// Bind the lawbook journal: the node's persistent knowledge substrate.
+	// Missing journal is a lawless node, not an error; corrupt lines are
+	// skipped so an interrupted write never bricks the whole book.
+	if loaded, skipped, lerr := hm.LawLoadJournal(cfg.LawJournal); lerr != nil {
+		return nil, fmt.Errorf("engine: law journal: %w", lerr)
+	} else if loaded > 0 || skipped > 0 {
+		if skipped > 0 {
+			fmt.Printf("📜 [LAW] journal %s: %d clauses loaded, %d corrupt lines skipped\n",
+				hm.LawJournalCurrent(), loaded, skipped)
+		} else {
+			fmt.Printf("📜 [LAW] %d clauses loaded from %s\n", loaded, hm.LawJournalCurrent())
+		}
 	}
 	return eng, nil
 }
@@ -292,6 +317,7 @@ func (e *Engine) Stats() Stats {
 	}
 	s.Counters.Thoughts = e.counters["thought"]
 	s.Counters.Replies = e.counters["reply"]
+	s.LawClauses = hm.LawStats()
 	return s
 }
 

@@ -38,7 +38,7 @@ func TestNormalizeRejectsBadMode(t *testing.T) {
 func TestLoadJSONOverrides(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "node.json")
-	raw := `{"mode":"peer","node":"winterfell-alpha","minds":["Raven","Wolf"],"health_addr":"127.0.0.1:9091"}`
+	raw := `{"mode":"peer","node":"winterfell-alpha","minds":["Raven","Wolf"],"health_addr":"127.0.0.1:9091","law_journal":"/tmp/north.winterfell.journal"}`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -52,6 +52,9 @@ func TestLoadJSONOverrides(t *testing.T) {
 	}
 	if len(c.Minds) != 2 || c.Minds[1] != "Wolf" {
 		t.Errorf("minds = %v, want file's pair", c.Minds)
+	}
+	if c.LawJournal != "/tmp/north.winterfell.journal" {
+		t.Errorf("law_journal = %q, want the file's path", c.LawJournal)
 	}
 }
 

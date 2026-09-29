@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/engine"
+	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 )
 
 const usageText = `HIVEMIND — one universe, three minds, something watching.
@@ -17,6 +19,7 @@ const usageText = `HIVEMIND — one universe, three minds, something watching.
 Usage:
   hivemind [flags]                 run the engine (standalone by default)
   hivemind engine [flags]          run the engine (same flags, explicit)
+  hivemind seed <corpus.json...>   provision the persistent lawbook journal
   hivemind up <program...>         supervise a child main instead of thinking
   hivemind version                 print build/runtime info
   hivemind help                    this screen
@@ -26,7 +29,15 @@ Engine flags:
   -node  <name>            peer identity (peer mode defaults hostname-PID)
   -minds A,B,C             mind names to birth (default Alpha,Beta,Gamma)
   -health <addr>           serve /healthz + /metrics (else $HIVEMIND_HEALTH)
+  -law <journal>           bind the lawbook journal (default data/law.journal)
   -config <file.json>      overlay engine config from a JSON file
+
+Seed:
+  hivemind seed -journal data/law.journal clauses.json ...
+      clauses.json is an array of {"id","source","tag","clause"}. Every
+      provisioned clause grounds every compiled mind on every node bound
+      to the same journal; re-seeding is idempotent (clauses dedupe by
+      id, identical clause text derives a stable id).
 
 LLM wiring stays env-driven: the keyless pool (OVH/Kilo/Pollinations) and the
 measured local Ollama primary negotiate privileges at mind birth.
@@ -48,6 +59,9 @@ func main() {
 		case "engine", "run":
 			cfg := parseEngineFlags(flag.ExitOnError, os.Args[2:])
 			os.Exit(runEngine(cfg))
+			return
+		case "seed":
+			os.Exit(runSeed(os.Args[2:]))
 			return
 		}
 	}
@@ -74,6 +88,7 @@ func parseEngineFlags(eh flag.ErrorHandling, args []string) engine.Config {
 	fs.StringVar(&cfg.Node, "node", "", "peer node name (defaults to hostname-PID in peer mode)")
 	fs.StringVar(&mindsList, "minds", "", "comma-separated mind names (default Alpha,Beta,Gamma)")
 	fs.StringVar(&cfg.HealthAddr, "health", "", "address to serve /healthz + /metrics")
+	fs.StringVar(&cfg.LawJournal, "law", "", "bind the lawbook journal (default data/law.journal)")
 	fs.StringVar(&cfg.JSONPath, "config", "", "overlay engine config from a JSON file")
 	_ = fs.Parse(args)
 
@@ -138,10 +153,66 @@ func runEngine(cfg engine.Config) int {
 	eng.Wait()
 
 	stats := eng.Stats()
-	fmt.Printf("📊 [ENGINE] node %s stood for %s: %d minds, %d thoughts, %d replies\n",
+	fmt.Printf("📊 [ENGINE] node %s stood for %s: %d minds, %d thoughts, %d replies",
 		stats.Node, stats.Uptime.Round(2_000_000_000), stats.Minds,
 		stats.Counters.Thoughts, stats.Counters.Replies)
+	if stats.LawClauses > 0 {
+		fmt.Printf(", %d law clauses compiled", stats.LawClauses)
+	}
+	fmt.Println()
 	return 0
+}
+
+// runSeed provisions clauses from one or more corpus JSON files into the
+// lawbook journal. Idempotent across runs and nodes: identical clause text
+// derives a stable id, so a rebroadcast fleet counts its law once.
+func runSeed(args []string) int {
+	fs := flag.NewFlagSet("seed", flag.ExitOnError)
+	journal := fs.String("journal", "", "lawbook journal to bind (default data/law.journal)")
+	_ = fs.Parse(args)
+	files := fs.Args()
+	if len(files) == 0 {
+		fmt.Fprintln(os.Stderr, "⚠️ seed needs at least one corpus file: a JSON array of {\"source\",\"tag\",\"clause\"}")
+		return 2
+	}
+	loaded, skipped, err := hm.LawLoadJournal(*journal)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "⚠️ law journal: %v\n", err)
+		return 1
+	}
+	fmt.Printf("📜 [LAW] journal %s: %d clauses already present (%d corrupt lines skipped)\n",
+		hm.LawJournalCurrent(), loaded, skipped)
+	for _, p := range files {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ %s: %v\n", p, err)
+			return 1
+		}
+		var entries []hm.LawEntry
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ %s: %v\n", p, err)
+			return 1
+		}
+		n, perr := hm.ProvisionLawbook(entries)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "⚠️ provision: %v\n", perr)
+			return 1
+		}
+		fmt.Printf("📜 [LAW] %s: provisioned %d new clauses -> total %d on journal\n",
+			p, n, hm.LawStats())
+	}
+	for _, e := range hm.LawList() {
+		fmt.Printf("  [%-12s|%-16s] %s\n", e.ID, e.Source, clip(e.Clause, 72))
+	}
+	return 0
+}
+
+func clip(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
 }
 
 // traceLoop serves in-run backtraces: each trace signal writes the full

@@ -1030,6 +1030,7 @@ func (m *Mind) Cycle() {
 			Goal:       winner.Goal.Name,
 			History:    m.LanguageBridge.GetHistory(),
 			Timestamp:  time.Now(),
+			Law:        lawExcerptsFor(m, winner.Goal.Name),
 		}
 		name := m.Name
 		rawState := append([]float64(nil), m.Affect.RawDataState[:]...)
@@ -1324,6 +1325,7 @@ func (m *Mind) answerPeer(orig *SecureMessage, peerID string) {
 		Awe:        float64(m.Affect.Awe),
 		Entropy:    float64(m.Affect.Entropy),
 		Goal:       m.Workspace.ConsciousContent,
+		Law:        lawExcerptsFor(m, peerThought),
 		History:    m.LanguageBridge.GetHistory(),
 		Timestamp:  time.Now(),
 	}

@@ -31,3 +31,6 @@ world-report/
 # OpenCode configuration
 AGENTS.md
 .stack-state/.stack-relay.port
+
+# lawbook journal (runtime manifestation of data/law.json)
+/data/law.journal
