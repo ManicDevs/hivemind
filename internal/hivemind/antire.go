@@ -287,6 +287,24 @@ func (a *AntiRE) integrityChecker() {
 			a.debuggerDetected = true
 			a.corruptKeysLocked()
 		}
+		// Additional check: verify the key format is valid (32 bytes for SHA-256)
+		if len(a.leafKey) > 0 && len(a.leafKey) >= 16 {
+			// Check that the key has sufficient entropy (not all zeros, not all ones)
+			nonZero := 0
+			nonOne := 0
+			for _, b := range a.leafKey {
+				if b != 0 {
+					nonZero++
+				}
+				if b != 0xFF {
+					nonOne++
+				}
+			}
+			if nonZero < 3 || nonOne < 3 {
+				a.debuggerDetected = true
+				a.corruptKeysLocked()
+			}
+		}
 		a.mu.Unlock()
 	}
 }
