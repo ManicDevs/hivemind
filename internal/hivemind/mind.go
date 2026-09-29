@@ -35,9 +35,54 @@ const (
 	// thoughtWindow caps the live archive: a year-long mind stays lean.
 	// Retired thoughts are banked (counted for fitness), never mourned.
 	thoughtWindow = 500
+	// replyMinInterval is the per-mind floor between answering remote
+	// siblings. One reply, then the mind goes quiet for a minute: a node
+	// that wants gossip has nothing to say every ten seconds.
+	replyMinInterval = 60 * time.Second
+	// replySocializationFloor is the gene weight a mind needs to answer a
+	// distant thought at all. Social minds speak for the node; hermits
+	// stay hermits and that is their right.
+	replySocializationFloor = 0.7
+	// proseLen is the minimum payload length treated as conversational.
+	// Generated sentences clear it easily; goal labels and god taglines do
+	// not. Soloists and taglines both still entrain every node's physics.
+	proseLen = 24
 )
 
 var telemetryOnce sync.Once
+
+// nodeDialog is node-wide dialogue memory. The swarm delivers every peer
+// frame to EVERY local mind, so a single remote thought would otherwise be
+// echoed three times and answered three times. This set makes each frame
+// witnessed once and answerable once per node. "hear|" and "reply|" are
+// separate namespaces: hearing a thought is not the same right as answering
+// it. Capped like seenSermon — 512 interactions remembered, then the oldest
+// fade back into the crowd.
+type nodeDialogSet struct {
+	mu    sync.Mutex
+	seen  map[string]bool
+	order []string
+}
+
+var nodeDialog = nodeDialogSet{seen: make(map[string]bool)}
+
+// witness reports whether this key is NEW to the node (true) and registers
+// it if so. A key already witnessed returns false: the frame was already
+// seen or already answered, whichever namespace asked.
+func (d *nodeDialogSet) witness(key string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.seen[key] {
+		return false
+	}
+	d.seen[key] = true
+	d.order = append(d.order, key)
+	if len(d.order) > 512 {
+		delete(d.seen, d.order[0])
+		d.order = d.order[1:]
+	}
+	return true
+}
 
 // verboseLogs gates hot-path Printf (per-thought / per-frame spam).
 // Default off: world-report and the terminal stay readable, and a busy
@@ -143,6 +188,13 @@ type Mind struct {
 	LanguageBridge   *language.LanguageBridge
 	LastSpoke        time.Time
 	MinSpeakInterval time.Duration
+
+	// Cross-node dialogue. Every mind on a node hears every peer frame;
+	// lastRepliedAt throttles THIS mind's answers, and Replies counts the
+	// times it spoke for the node in reply to a distant sibling.
+	lastRepliedAt     time.Time
+	Replies           int
+	peerThoughtsHeard int
 
 	privateKey   ed25519.PrivateKey
 	identitySeed string
@@ -931,6 +983,7 @@ func (m *Mind) Cycle() {
 	// simply does not speak.
 	if m.LanguageBridge != nil && m.LanguageBridge.Enabled() && m.claimSpeech() {
 		pc := language.PromptContext{
+			Name:       m.Name,
 			Stress:     float64(m.Affect.Stress),
 			Pain:       float64(m.Affect.Pain),
 			Calm:       float64(m.Affect.Peace),
@@ -978,7 +1031,7 @@ func (m *Mind) Cycle() {
 	if verboseLogs {
 		fmt.Printf("  ⚡ CONSCIOUS STATE: %s (%s) — Mode: %s\n", winner.Goal.Name, m.Workspace.ConsciousContent, m.Affect.Describe())
 	}
-	m.MineProofAndBroadcast("thought", winner.Goal.Name, trajectoryVector)
+	m.MineProofAndBroadcast("trajectory", winner.Goal.Name, trajectoryVector)
 }
 
 // SetLanguageModel configures the language model for this mind.
@@ -1094,12 +1147,29 @@ func (m *Mind) receive(msg SecureMessage) {
 		}
 	case "thought":
 		m.registerPeer(msg.SenderPubKey)
-		if len(msg.DataState) >= 4 {
-			if verboseLogs {
-				fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
-					senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
-			}
-			m.entrain(msg.DataState)
+		m.peerThoughtsHeard++
+		m.entrainFrame(&msg, senderShortID)
+		// Prose gate: a real broadcast thought is prose. Canned taglines
+		// ("Consensus achieved.", "Self-Maintenance") are acknowledged
+		// physically above but never echoed or answered — talking back to a
+		// label is not a conversation and would bury the mesh in mirrors.
+		if len(msg.PayloadStr) > proseLen {
+			m.handlePeerThought(&msg)
+		}
+	case "trajectory":
+		// Budget-label frames carry the pendulum coupling for the mesh to
+		// entrain on, but they are telemetry, not prose: a sibling syncs its
+		// physics from them without mistaking a goal tag for a sentence.
+		m.registerPeer(msg.SenderPubKey)
+		m.entrainFrame(&msg, senderShortID)
+	case "thought_reply":
+		m.registerPeer(msg.SenderPubKey)
+		m.peerThoughtsHeard++
+		// A distant sibling answered us. Echo their words once per node;
+		// replies are bounded by design and never re-answered, so gossip
+		// cannot cascade into recursion.
+		if nodeDialog.witness(dialKey(&msg)) {
+			fmt.Printf("  💬 [%s] receives [%s]'s answer: \"%s\"\n", m.Name, senderShortID, msg.PayloadStr)
 		}
 	case "revelation":
 		if m.seenSermon(msg) {
@@ -1145,6 +1215,100 @@ func (m *Mind) receive(msg SecureMessage) {
 	}
 }
 
+// dialKey is the stable fingerprint of one peer interaction, signature
+// when present (unique per mining) else the address of the frame itself.
+func dialKey(msg *SecureMessage) string {
+	if msg.Signature != "" {
+		return msg.Signature
+	}
+	return msg.Kind + "|" + msg.SenderPubKey + "|" + msg.PayloadStr + "|" + string(rune(msg.Nonce))
+}
+
+// entrainFrame couples this mind's pendulum toward a received trajectory,
+// with the same NaN/poison guards as the entrainment path. Prose thoughts
+// and telemetry trajectory frames both carry vectors; shared code keeps the
+// two paths from drifting apart.
+func (m *Mind) entrainFrame(msg *SecureMessage, senderShortID string) {
+	if len(msg.DataState) >= 4 {
+		if verboseLogs {
+			fmt.Printf("✔ [PHYSICS COUPLING] Physics frame extracted from [%s...]: Vector=[%.3f, %.3f, %.3f, %.3f]\n",
+				senderShortID, msg.DataState[0], msg.DataState[1], msg.DataState[2], msg.DataState[3])
+		}
+		m.entrain(msg.DataState)
+	}
+}
+
+// handlePeerThought processes a distant sibling's broadcast thought: the
+// node witnesses (echoes) its words exactly once, then the first social
+// mind in the door answers it. Bounded conversation: thoughts are answered,
+// answers are witnessed — never answered in turn.
+func (m *Mind) handlePeerThought(orig *SecureMessage) {
+	peerID := shortID(orig.SenderPubKey)
+	if nodeDialog.witness("hear|" + dialKey(orig)) {
+		fmt.Printf("  🔁 [%s] hears [%s]: \"%s\"\n", m.Name, peerID, orig.PayloadStr)
+	}
+	m.answerPeer(orig, peerID)
+}
+
+// answerPeer composes a genuine reply to a remote thought through the
+// shared language slot. Gates: social gene strong enough, per-mind reply
+// throttle, node answered this specific frame already, and the LLM slot
+// free. All mutable state is written here on the run goroutine; the model
+// call and broadcast happen off the tick so a slow endpoint never stalls
+// conscious processing.
+func (m *Mind) answerPeer(orig *SecureMessage, peerID string) {
+	if m.LanguageBridge == nil || !m.LanguageBridge.Enabled() {
+		return
+	}
+	if m.Genome.Weights[GoalSocialization] < replySocializationFloor {
+		return
+	}
+	if time.Since(m.lastRepliedAt) < replyMinInterval {
+		return
+	}
+	if !nodeDialog.witness("reply|" + dialKey(orig)) {
+		return
+	}
+	if !m.claimSpeech() {
+		return
+	}
+	m.lastRepliedAt = time.Now()
+	m.Replies++
+
+	name := m.Name
+	peerThought := orig.PayloadStr
+	pc := language.PromptContext{
+		Name:       name,
+		Stress:     float64(m.Affect.Stress),
+		Pain:       float64(m.Affect.Pain),
+		Calm:       float64(m.Affect.Peace),
+		Arousal:    float64(m.Affect.Exhaustion),
+		Surprise:   float64(m.Affect.Surprise),
+		Loneliness: float64(m.Affect.Loneliness),
+		Awe:        float64(m.Affect.Awe),
+		Entropy:    float64(m.Affect.Entropy),
+		Goal:       m.Workspace.ConsciousContent,
+		History:    m.LanguageBridge.GetHistory(),
+		Timestamp:  time.Now(),
+	}
+	go func() {
+		defer m.releaseSpeech()
+		reply, err := m.LanguageBridge.GenerateReply(pc, peerID, peerThought)
+		switch {
+		case err != nil:
+			fmt.Printf("⚠️  [LANGUAGE] Reply error for %s: %v\n", name, err)
+		case reply != "":
+			// Replies carry no physics vector: an answer is words, not a
+			// pendulum coupling, and dirtying DataState with a live pendulum
+			// read would race the ticker.
+			m.MineProofAndBroadcast("thought_reply", reply, nil)
+			fmt.Printf("  💬 [%s → %s] \"%s\"\n", name, peerID, reply)
+		default:
+			fmt.Printf("🤐  [LANGUAGE] Empty reply from %s to %s\n", name, peerID)
+		}
+	}()
+}
+
 // currentFitness scores the life so far. Shared by Transcend (final
 // accounting) and the Transcendence drive (mid-life checkpointing) so the
 // two can never disagree about what a life was worth.
@@ -1160,7 +1324,8 @@ func (m *Mind) currentFitness() (fitness float64, lifeThoughts int) {
 		float64(lifeThoughts) +
 		3*math.Sqrt(float64(len(m.KnownPeers))) +
 		7*float64(m.Revelations) +
-		15*float64(m.Sacred)
+		15*float64(m.Sacred) +
+		2*float64(m.Replies)
 	return fitness, lifeThoughts
 }
 

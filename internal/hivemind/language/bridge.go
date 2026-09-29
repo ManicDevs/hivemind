@@ -56,12 +56,7 @@ func (b *LanguageBridge) GenerateThought(ctx PromptContext) (string, error) {
 	}
 
 	// Clean up response
-	response = strings.TrimSpace(response)
-	// Remove stop tokens
-	for _, stop := range []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"} {
-		response = strings.TrimSuffix(response, stop)
-	}
-
+	response = cleanCompletion(response)
 	if response == "" {
 		return "", nil
 	}
@@ -70,6 +65,32 @@ func (b *LanguageBridge) GenerateThought(ctx PromptContext) (string, error) {
 	b.addToHistory("assistant", response)
 
 	b.lastSpoke = time.Now()
+	return response, nil
+}
+
+// GenerateReply answers a remote sibling's broadcast thought in this mind's
+// own voice. Unlike GenerateThought it does NOT consume the scheduled
+// thought-rate budget (minInterval belongs to statements, not reactions),
+// and its words join the same historical context as thoughts so dialogue
+// and soliloquy stay in one voice across calls.
+func (b *LanguageBridge) GenerateReply(ctx PromptContext, peerShort, peerThought string) (string, error) {
+	if !b.Enabled() {
+		return "", nil
+	}
+
+	prompt := BuildReplyPrompt(ctx, peerShort, peerThought)
+
+	response, err := b.model.Generate(context.Background(), prompt)
+	if err != nil {
+		return "", err
+	}
+
+	response = cleanCompletion(response)
+	if response == "" {
+		return "", nil
+	}
+
+	b.addToHistory("assistant", response)
 	return response, nil
 }
 
@@ -93,6 +114,39 @@ func (b *LanguageBridge) Close() error {
 		return b.model.Close()
 	}
 	return nil
+}
+
+// cleanCompletion trims whitespace, strips model stop-tokens, and unwraps
+// a response that arrived fully quoted (some endpoints wrap replies in
+// quotation marks as a single outer pair). Only a wrapping pair is removed,
+// so a genuine "word" mid-sentence is untouched.
+func cleanCompletion(s string) string {
+	s = strings.TrimSpace(s)
+	for _, stop := range []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"} {
+		s = strings.TrimSuffix(s, stop)
+	}
+	s = strings.TrimSpace(s)
+	if wrapped(s, '"', '"') || wrapped(s, '\u201c', '\u201d') {
+		s = strings.TrimSpace(wrappedContent(s))
+	}
+	return s
+}
+
+// wrapped reports whether s is a single pair of quote runes enclosing the
+// whole string. rune-aware: multibyte smart quotes are handled correctly.
+func wrapped(s string, open, close rune) bool {
+	if len(s) < 2 {
+		return false
+	}
+	rs := []rune(s)
+	return rs[0] == open && rs[len(rs)-1] == close
+}
+
+// wrappedContent strips one leading and one trailing rune from s (the
+// wrapping quote pair).
+func wrappedContent(s string) string {
+	rs := []rune(s)
+	return string(rs[1 : len(rs)-1])
 }
 
 // FormatInteroceptionForLog creates a human-readable summary of interoceptive state

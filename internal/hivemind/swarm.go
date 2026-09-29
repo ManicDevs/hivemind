@@ -266,7 +266,7 @@ func (s *Swarm) Broadcast(msg SecureMessage) bool {
 	// infrastructure, not thought. Consensus is keyed by Kind+Payload so a
 	// thought ("Curiosity") and a genesis command over the same word are
 	// different facts.
-	if msg.Kind != "hardware_alert" && msg.Kind != "super_announce" {
+	if msg.Kind != "hardware_alert" && msg.Kind != "super_announce" && msg.Kind != "trajectory" {
 		s.chronicle = append(s.chronicle, msg.SenderPubKey+": "+msg.PayloadStr)
 		s.chronicleTotal++
 		if len(s.chronicle) > chronicleCap {

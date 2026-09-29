@@ -14,7 +14,6 @@ type RotatingLLM struct {
 	mu    sync.Mutex
 	pool  []*RemoteLLM
 	rr    int
-	bad   map[int]struct{}
 	alias []string
 }
 
@@ -24,7 +23,6 @@ type RotatingLLM struct {
 func NewRotatingLLM(models ...*RemoteLLM) *RotatingLLM {
 	r := &RotatingLLM{
 		pool:  make([]*RemoteLLM, 0, len(models)),
-		bad:   make(map[int]struct{}),
 		alias: make([]string, 0, len(models)),
 	}
 	for _, m := range models {
