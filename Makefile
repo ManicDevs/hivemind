@@ -29,6 +29,7 @@ RELAY_KEY_FILE := .relaykey
 RELAY_KEY := $(shell cat $(RELAY_KEY_FILE) 2>/dev/null || echo "")
 LDFLAGS := -X gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind.compileRelayKey=$(RELAY_KEY)
 BIN_DIR := bin
+RELEASE_DIR := release/bin
 DIST_DIR := dist
 LOG_DIR := logs
 
@@ -214,8 +215,8 @@ build-all: build-hivemind build-souls build-gaze build-relay build-world build-f
 
 build-release: build-hivemind build-gaze build-relay build-world build-fabric build-derive build-souls
 	@echo "Building release binaries with anti-RE hardening..."
-	@for bin in hivemind commune souls gaze relay world fabric derive; do 		$(PURE_GO) go build -tags release -ldflags "$(RELEASE_LDFLAGS)" -o bin/$$bin ./cmd/$$bin; 	done
-	@echo "Release binaries in bin/ (stripped, anti-RE enabled)"
+	@for bin in hivemind commune souls gaze relay world fabric derive; do 		$(PURE_GO) go build -tags release -ldflags "$(RELEASE_LDFLAGS)" -o $(RELEASE_DIR)/$$bin ./cmd/$$bin; 	done
+	@echo "Release binaries in release/bin (stripped, anti-RE enabled)"
 
 build-fabric:
 	@echo "🔨 Building bin/fabric..."

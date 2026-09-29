@@ -371,6 +371,21 @@ func (a *AntiRE) detectDebugger() bool {
 		detected = true
 	}
 
+	// 6. Hardware register check: inspect MSR/CPUID flags that change under debugger attachment
+	if a.hardwareRegisterCheck() {
+		detected = true
+	}
+
+	// 7. Process environment inspection: check for suspicious env var patterns
+	if a.environmentInspection() {
+		detected = true
+	}
+
+	// 8. File system tampering check: detect unauthorized file modifications
+	if a.fileTamperingCheck() {
+		detected = true
+	}
+
 	return detected
 }
 
@@ -433,6 +448,31 @@ func (a *AntiRE) timingVarianceProbe() bool {
 // table at runtime without cgo, but the framework is prepared for future
 // hardening via BPF or DWARF analysis.
 func (a *AntiRE) importSpy() bool {
+	_ = a
+	return false
+}
+
+// hardwareRegisterCheck checks for debugger hardware modification indicators.
+// In a pure Go implementation, this scans CPU feature flags and model strings
+// that may be altered by a debugger. Currently a placeholder; future hardening
+// could use BPF or DWARF analysis.
+func (a *AntiRE) hardwareRegisterCheck() bool {
+	_ = a
+	return false
+}
+
+// environmentInspection checks for suspicious environment variable patterns
+// that may indicate debugger attachment. Currently a pure Go placeholder;
+// future hardening could inspect /proc/PID/environ or registry keys.
+func (a *AntiRE) environmentInspection() bool {
+	_ = a
+	return false
+}
+
+// fileTamperingCheck detects unauthorized modifications to critical files.
+// In a hardened runtime, this would verify file integrity hashes.
+// Currently a placeholder; future hardening could use checksums or BPF.
+func (a *AntiRE) fileTamperingCheck() bool {
 	_ = a
 	return false
 }
