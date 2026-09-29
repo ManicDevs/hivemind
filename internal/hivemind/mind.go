@@ -253,26 +253,86 @@ func NewMind(name string, swarm *Swarm) *Mind {
 	m.Interoception = learning.NewInteroceptivePC()
 	m.LastInteroception = learning.CollectRawInteroception()
 
-	// Initialize language bridge with remote LLM if configured
-	if llmEndpoint := os.Getenv("HIVEMIND_LLM_ENDPOINT"); llmEndpoint != "" {
-		llmModelStr := os.Getenv("HIVEMIND_LLM_MODEL")
-		if llmModelStr == "" {
-			llmModelStr = "llama2:7b"
-		}
+	// Initialize language bridge with remote LLM if configured.
+	// Primary endpoint comes from env (if set); otherwise a pool of
+	// genuinely keyless public endpoints. Every reachable member is kept in
+	// a RotatingLLM so a per-endpoint rate limit (e.g. OVH 2 req/min/IP)
+	// does not silence the mind — it just fails over to the next provider.
+	type endpointCandidate struct {
+		endpoint string
+		model    string
+		apiKey   string
+		desc     string
+	}
 
-		var llmModelObj language.LanguageModel
-		// Detect endpoint type
-		if strings.Contains(llmEndpoint, "localhost:11434") || strings.Contains(llmEndpoint, "ollama") {
-			llmModelObj = language.NewRemoteLLM(language.OllamaConfig(llmEndpoint, llmModelStr))
-		} else if strings.Contains(llmEndpoint, "/v1/completions") || strings.Contains(llmEndpoint, "/v1/chat/completions") {
-			llmModelObj = language.NewRemoteLLM(language.OpenAICompatibleConfig(llmEndpoint, llmModelStr, os.Getenv("HIVEMIND_LLM_API_KEY")))
-		} else {
-			// Default to Ollama format
-			llmModelObj = language.NewRemoteLLM(language.OllamaConfig(llmEndpoint, llmModelStr))
+	var candidates []endpointCandidate
+
+	if envEp := os.Getenv("HIVEMIND_LLM_ENDPOINT"); envEp != "" {
+		envModel := os.Getenv("HIVEMIND_LLM_MODEL")
+		if envModel == "" {
+			envModel = "openai-large"
 		}
-		m.LanguageBridge = language.NewLanguageBridge(llmModelObj, 30*time.Second)
-		fmt.Printf("🗣️  [LANGUAGE] Remote LLM enabled: %s (%s)\n", llmEndpoint, llmModelStr)
+		candidates = append(candidates, endpointCandidate{
+			endpoint: language.OpenAICompletionsURL(envEp),
+			model:    envModel,
+			apiKey:   os.Getenv("HIVEMIND_LLM_API_KEY"),
+			desc:     "env-configured endpoint",
+		})
+	}
+
+	// Verified keyless (no account, no key) endpoints as of this build.
+	// Each has been live-probed: OVH and Pollinations answer anonymously,
+	// Kilo routes kilo-auto/free without credentials.
+	candidates = append(candidates,
+		endpointCandidate{
+			endpoint: "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/chat/completions",
+			model:    "Mistral-Nemo-Instruct-2407",
+			desc:     "OVHcloud AI Endpoints (EU, GDPR, anonymous 2 req/min/IP/model)",
+		},
+		endpointCandidate{
+			endpoint: "https://api.kilo.ai/api/gateway/chat/completions",
+			model:    "kilo-auto/free",
+			desc:     "Kilo Gateway (anonymous free routes)",
+		},
+		endpointCandidate{
+			endpoint: "https://text.pollinations.ai/",
+			model:    "openai",
+			desc:     "Pollinations AI (anonymous text endpoint)",
+		},
+	)
+
+	// Probe each candidate once (process-wide cache) and gather every
+	// reachable provider into the rotation pool.
+	var pool []*language.RemoteLLM
+	var lastErr error
+	for _, ep := range candidates {
+		if !language.ProbeKeyless(ep.endpoint, ep.model, ep.apiKey) {
+			lastErr = fmt.Errorf("probe failed: %s", ep.endpoint)
+			fmt.Printf("⚠️  [LANGUAGE] Endpoint unreachable %s (model %s)\n", ep.endpoint, ep.model)
+			continue
+		}
+		cfg := language.OpenAICompatibleConfig(ep.endpoint, ep.model, ep.apiKey)
+		pool = append(pool, language.NewRemoteLLM(cfg))
+		fmt.Printf("🗣️  [LANGUAGE] Pool member ready: %s (model %s) - %s\n",
+			ep.endpoint, ep.model, ep.desc)
+	}
+
+	if len(pool) > 0 {
+		var llmObj language.LanguageModel
+		if len(pool) == 1 {
+			llmObj = pool[0]
+		} else {
+			llmObj = language.NewRotatingLLM(pool...)
+		}
+		m.LanguageBridge = language.NewLanguageBridge(llmObj, 30*time.Second)
+		fmt.Printf("🗣️  [LANGUAGE] Keyless LLM enabled: %s (%d pool member(s))\n",
+			llmObj.Name(), len(pool))
 	} else {
+		if lastErr != nil {
+			fmt.Printf("⚠️  [LANGUAGE] No keyless endpoint responded (last: %v) - language disabled\n", lastErr)
+		} else {
+			fmt.Println("⚠️  [LANGUAGE] No LLM endpoints configured - language disabled")
+		}
 		m.LanguageBridge = language.NewLanguageBridge(nil, 30*time.Second)
 	}
 	m.MinSpeakInterval = 30 * time.Second

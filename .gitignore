@@ -27,3 +27,7 @@ world-report/logs/
 /commune
 /souls
 world-report/
+
+# OpenCode configuration
+AGENTS.md
+.stack-state/.stack-relay.port

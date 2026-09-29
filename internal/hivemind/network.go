@@ -808,6 +808,12 @@ func (pm *PeerMesh) cloudPublisher() {
 }
 
 func (pm *PeerMesh) publishCloud(msg SecureMessage) error {
+	if relayURL() == "" {
+		// No relay configured: nothing to publish to. Return nil so the
+		// publisher stays quiet instead of spamming "unsupported protocol
+		// scheme" against an empty URL.
+		return nil
+	}
 	if !pm.relayLimiter.Allow() {
 		return fmt.Errorf("relay rate-limited, retry later")
 	}

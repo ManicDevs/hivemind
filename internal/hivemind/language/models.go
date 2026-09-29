@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -78,13 +79,34 @@ func OllamaConfig(endpoint, model string) RemoteLLMConfig {
 	}
 }
 
+// OpenAICompatibleConfig builds a config for an OpenAI-style chat endpoint.
+// The endpoint is used exactly as given: providers differ wildly in their
+// routes (/v1/chat/completions, /v1, /api/gateway/chat/completions, plain
+// text roots), so callers must supply the complete URL. OpenAICompletionsURL
+// is offered as a convenience for building the canonical route from a bare
+// origin.
 func OpenAICompatibleConfig(endpoint, model, apiKey string) RemoteLLMConfig {
 	return RemoteLLMConfig{
-		Endpoint: endpoint + "/v1/completions",
+		Endpoint: strings.TrimSuffix(endpoint, "/"),
 		Model:    model,
 		Timeout:  300 * time.Second,
 		APIKey:   apiKey,
 	}
+}
+
+// OpenAICompletionsURL appends the canonical /v1/chat/completions route to a
+// bare origin (scheme://host[:port]) when no path is present. Providers that
+// serve a plain text root (e.g. Pollinations) are left untouched.
+func OpenAICompletionsURL(base string) string {
+	b := strings.TrimSuffix(base, "/")
+	u, err := url.Parse(b)
+	if err != nil || (u.Path != "" && u.Path != "/") {
+		return b
+	}
+	if strings.Contains(u.Host, "pollinations.ai") {
+		return b
+	}
+	return b + "/v1/chat/completions"
 }
 
 type PromptContext struct {

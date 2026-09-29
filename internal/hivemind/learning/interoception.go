@@ -248,6 +248,10 @@ func (pc *InteroceptivePC) GetPredictionErrors() map[string]float32 {
 // MSELoss therefore accumulates real gradients into Predictor/Readout. An
 // earlier revision also summed an l0 term built from two detached constants,
 // which contributed exactly zero gradient while looking like a loss term.
+//
+// Curriculum learning: LearnEvery throttles the cadence so early learning is
+// conservative; the persistent SGD optimizer (momentum survives across ticks)
+// then settles the weights as Updates accumulate.
 func (pc *InteroceptivePC) Learn(cur RawInteroception, curFeelings map[string]float32) {
 	// Throttle if the owner asked for a slower cadence than every tick.
 	if pc.LearnEvery > 1 {

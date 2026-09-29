@@ -442,7 +442,7 @@ func (a *AntiRE) timingVarianceProbe() bool {
 	}
 	triplets := make([]float64, 0, len(deltas)-2)
 	for i := 0; i+2 < len(deltas); i++ {
-		triplets = append(triplets, (deltas[i] + deltas[i+1] + deltas[i+2]) / 3.0)
+		triplets = append(triplets, (deltas[i]+deltas[i+1]+deltas[i+2])/3.0)
 	}
 	// sort triplets using simple insertion sort
 	for i := 1; i < len(triplets); i++ {
@@ -473,7 +473,7 @@ func (a *AntiRE) timingVarianceProbe() bool {
 			sorted[j+1] = key
 		}
 		range_val := sorted[len(sorted)-1] - sorted[0]
-		if range_val > 0 && (deltas[len(deltas)-1] - sorted[0]) > 10*range_val/float64(len(deltas)) {
+		if range_val > 0 && (deltas[len(deltas)-1]-sorted[0]) > 10*range_val/float64(len(deltas)) {
 			return true
 		}
 	}
