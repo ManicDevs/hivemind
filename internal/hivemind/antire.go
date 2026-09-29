@@ -394,7 +394,7 @@ func (a *AntiRE) detectDebugger() bool {
 // the delta; we compare the latest interval against a rolling median of
 // recent intervals stored in theAntiRE state.
 func (a *AntiRE) timingVarianceProbe() bool {
-	const probes = 20
+	const probes = 30
 	var deltas []float64
 	prev := 0.0
 	for i := 0; i < probes; i++ {
@@ -413,27 +413,49 @@ func (a *AntiRE) timingVarianceProbe() bool {
 		}
 		prev = elapsed
 	}
-	if len(deltas) < 3 {
+	if len(deltas) < 5 {
 		return false
 	}
-	// compute rolling median of the last N deltas
-	window := 5
+	// compute robust median of all deltas using HAes median (highest average)
+	// of consecutive triplets, then take the median of those
+	window := 3
 	if len(deltas) < window {
-		window = len(deltas)
+		window = 3
 	}
-	sorted := make([]float64, window)
-	copy(sorted, deltas[len(deltas)-window:])
-	// simple insertion sort for tiny arrays
-	for i := 1; i < window; i++ {
-		key := sorted[i]
+	triplets := make([]float64, 0, len(deltas)-2)
+	for i := 0; i+2 < len(deltas); i++ {
+		triplets = append(triplets, (deltas[i] + deltas[i+1] + deltas[i+2]) / 3.0)
+	}
+	// sort triplets using simple insertion sort
+	for i := 1; i < len(triplets); i++ {
+		key := triplets[i]
 		j := i - 1
-		for ; j >= 0 && sorted[j] > key; j-- {
-			sorted[j+1] = sorted[j]
+		for ; j >= 0 && triplets[j] > key; j-- {
+			triplets[j+1] = triplets[j]
 		}
-		sorted[j+1] = key
-		median := sorted[window/2]
-		// if the latest delta exceeds median by a factor of 4, suspect debugger
-		if deltas[len(deltas)-1] > 4*median {
+		triplets[j+1] = key
+	}
+	median := triplets[len(triplets)/2]
+	// if the latest delta exceeds median by a factor of 4, suspect debugger
+	// but only if we have at least 5 triplets for statistical significance
+	if len(triplets) >= 5 && deltas[len(deltas)-1] > 4*median {
+		return true
+	}
+	// also check if the latest delta itself is an extreme outlier
+	// (beyond 10x the typical delta range)
+	if len(deltas) >= 5 {
+		sorted := make([]float64, len(deltas))
+		copy(sorted, deltas)
+		for i := 1; i < len(sorted); i++ {
+			key := sorted[i]
+			j := i - 1
+			for ; j >= 0 && sorted[j] > key; j-- {
+				sorted[j+1] = sorted[j]
+			}
+			sorted[j+1] = key
+		}
+		range_val := sorted[len(sorted)-1] - sorted[0]
+		if range_val > 0 && (deltas[len(deltas)-1] - sorted[0]) > 10*range_val/float64(len(deltas)) {
 			return true
 		}
 	}
