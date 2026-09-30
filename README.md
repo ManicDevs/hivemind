@@ -66,6 +66,24 @@ Language is env-driven as before: the accountless keyless pool
 (`HIVEMIND_OLLAMA_MODEL` forces it on a slow CPU box). Graceful shutdown
 reports engine telemetry: `📊 [ENGINE] node … stood for … thoughts, replies`.
 
+## Training
+
+`make train` (or `hivemind-train -apply`) distills the lawbook into a
+standing local counsel model on the loopback Ollama daemon. Every provision
+becomes supervised question/answer pairs (ground truth = the clause
+verbatim), a Modelfile nests the full corpus inside the model's SYSTEM block
+with audit handles, and the daemon builds `hivemind-counsel`. `make
+train-dry` writes the artifacts (dataset + Modelfile) without touching the
+daemon; `-adapter` weaves a LoRA `.safetensors` — a real gradient tune plugs
+in at that seam (the repo itself is pure Go and does not autograd).
+
+The mesh auto-preferences a locally created model whose tag carries
+"hivemind" in its model race, so trained weights win over every base model
+the daemon serves; `HIVEMIND_OLLAMA_MODEL=hivemind-counsel` forces the
+choice on a slow CPU box where the viability window would otherwise rule it
+out. A live grid confirms the trained model answers with verbatim citations
+(and states plainly when no provision applies).
+
 ## Architecture
 
 - **Engine** — `internal/engine` orchestration: lifecycle, config schema, telemetry

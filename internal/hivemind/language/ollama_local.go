@@ -62,6 +62,8 @@ func localModelScore(name string) int {
 	switch {
 	case strings.Contains(n, "embed"), strings.Contains(n, "retrieval"):
 		return -1 // embedding/retrieval tags are not generation models
+	case strings.Contains(n, "hivemind"):
+		return 60 // distilled counsel (hivemind-train) outranks every base
 	case strings.Contains(n, "qwen3"):
 		return 50
 	case strings.Contains(n, "qwen"):

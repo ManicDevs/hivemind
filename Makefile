@@ -72,9 +72,11 @@ RELAY_URL ?= http://localhost:$(RELAY_PORT)
 
 .PHONY: all help \
 build build-hivemind build-commune build-souls build-gaze build-relay build-world build-all \
+build-hivemind-train build-train \
 fmt vet staticcheck lint tidy check \
 test test-concurrent test-race test-verbose test-full \
 audit \
+train train-dry \
 up up-nodes down restart kill rerun status \
 think think-fast think-long demo pain prove \
 	world world-down world-test \
@@ -130,6 +132,9 @@ help:
 	@printf "  \033[33m%-20s\033[0m %s\n" "test-full" "Full test suite"
 	@printf "  \033[33m%-20s\033[0m %s\n" "audit" "fmt + vet + build + tests"
 	@printf "  \033[33m%-20s\033[0m %s\n" "lint" "gofmt + vet + staticcheck"
+	@echo ""
+	@printf "  \033[32m%-20s\033[0m %s\n" "train" "Distill the lawbook into a local counsel model (ollama create)"
+	@printf "  \033[32m%-20s\033[0m %s\n" "train-dry" "Write dataset + Modelfile without creating the model"
 	@echo ""
 	@printf "  \033[34m%-20s\033[0m %s\n" "up" "Supervised mesh, N nodes"
 	@printf "  \033[34m%-20s\033[0m %s\n" "down" "Reap all hivemind, sweep sockets"
@@ -367,6 +372,21 @@ test-full: check
 
 audit: test
 	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/audit.sh
+
+# ── lawbook distillation: train a standing local counsel model ─────────────
+# Shrinks the provisioned law journal into a modelfile + supervised dataset,
+# and (train only) asks the loopback Ollama daemon to create the model. The
+# mesh auto-prefers a model whose tag carries "hivemind" in the model race.
+LAW_JOURNAL ?= data/law.journal
+TRAIN_MODEL ?= hivemind-counsel
+
+train: build-hivemind
+	@echo "⚖️  Distilling $(LAW_JOURNAL) into $(TRAIN_MODEL)…"
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go run ./cmd/hivemind-train -apply -journal $(LAW_JOURNAL) -name $(TRAIN_MODEL)
+
+train-dry: build-hivemind
+	@echo "⚖️  Dry-run: $(LAW_JOURNAL) → dataset + modelfile only"
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go run ./cmd/hivemind-train -journal $(LAW_JOURNAL) -name $(TRAIN_MODEL)
 
 up: build
 	@mkdir -p $(LOG_DIR)
