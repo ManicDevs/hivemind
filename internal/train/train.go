@@ -415,12 +415,11 @@ type Scorecard struct {
 }
 
 // ScoreGroundedness measures an answer against the whole lawbook. Grounded
-// means: the answer contains some provision verbatim (substring match of the
-// full clause), references a provision's audit handle, or reuses enough of a
-// provision's third-of-word n-grams (>=50% n-gram recall into any clause)
-// that it is recognisably quoting rather than confabulating. A model that
-// stitches clauses together with original prose still scores grounded; a
-// model that invents citations does not.
+// means the answer is recognisably corpus-supported rather than confabulated:
+// it quotes a provision verbatim, references an audit handle, cites a
+// provision's source with supporting words, or carries a contiguous run of a
+// provision's words (catching abbreviated/truncated quotes). Original-prose
+// syntheses that cite the corpus score grounded; invented citations do not.
 func ScoreGroundedness(answers []Answer, clauses []hm.LawEntry) Scorecard {
 	books := make([]map[string]bool, 0, len(clauses))
 	for _, c := range clauses {
@@ -443,6 +442,7 @@ func groundedAnswer(answer string, clauses []hm.LawEntry, books []map[string]boo
 	if ans == "" {
 		return false
 	}
+	aTok := splitWords(ans)
 	for i, c := range clauses {
 		if c.ID != "" && strings.Contains(ans, c.ID[:min(len(c.ID), 8)]) {
 			return true
@@ -450,21 +450,59 @@ func groundedAnswer(answer string, clauses []hm.LawEntry, books []map[string]boo
 		if strings.Contains(answer, c.Clause) {
 			return true
 		}
-		b := books[i]
-		if len(b) == 0 {
-			continue
-		}
-		hit := 0
-		for g := range ngramTokens(answer, 3) {
-			if b[g] {
-				hit++
+		// A synthesized answer that cites the provision by its human
+		// source ("US Const. amend. V", "Contract example §7.2") is
+		// grounded only if it also reuses some of that provision's words —
+		// citing an unrelated section at random earns nothing.
+		if c.Source != "" && strings.Contains(ans, strings.ToLower(c.Source)) {
+			if ngramOverlap(ans, books[i]) > 0 {
+				return true
 			}
 		}
-		if float64(hit)/float64(len(b)) >= 0.5 {
+		// Abbreviated or truncated quotes: a contiguous run of the
+		// provision's words is recognisable quoting even when the model
+		// gapped the middle with an ellipsis.
+		if longestCommonRun(aTok, splitWords(strings.ToLower(c.Clause))) >= minContiguousRun {
+			return true
+		}
+		// A close paraphrase that reuses at least half of a provision's
+		// distinctive trigrams is quoting in substance without the form.
+		b := books[i]
+		if len(b) > 0 && float64(ngramOverlap(ans, b))/float64(len(b)) >= 0.5 {
 			return true
 		}
 	}
 	return false
+}
+
+const minContiguousRun = 8
+
+func ngramOverlap(text string, book map[string]bool) int {
+	n := 0
+	for g := range ngramTokens(text, 3) {
+		if book[g] {
+			n++
+		}
+	}
+	return n
+}
+
+// longestCommonRun returns the length of the longest contiguous token run
+// shared by two texts — the fingerprint of an (even abbreviated) quote.
+func longestCommonRun(a, b []string) int {
+	best := 0
+	for i := 0; i < len(a); i++ {
+		for j := 0; j < len(b); j++ {
+			k := 0
+			for i+k < len(a) && j+k < len(b) && a[i+k] == b[j+k] {
+				k++
+			}
+			if k > best {
+				best = k
+			}
+		}
+	}
+	return best
 }
 
 // GroundedAnswer tells whether one answer is grounded in the lawbook, in the

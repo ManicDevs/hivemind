@@ -85,10 +85,12 @@ out. A live grid confirms the trained model answers with verbatim citations
 (and states plainly when no provision applies).
 
 Creation without verification is just a bigger hallucinator, so `make eval`
-scores groundedness live: every answer must quote a provision verbatim,
-reference its audit handle, or reuse enough (≥ half) of a provision's words
-to count as grounded — confabulated citations fail. The scorecard prints
-each verdict (`✓`/`✗`) and audits the misses. Corpus provenance is open too:
+scores groundedness live. Every answer must be recognisably corpus-supported:
+quote a provision verbatim, reference its audit handle, cite a provision's
+source with supporting words, reuse ≥ half of a provision's distinctive
+trigrams, or carry a contiguous run of its words (abbreviated quotes still
+count). Confabulated citations fail — the scorecard prints each verdict
+(`✓`/`✗`) and audits the misses. Corpus provenance is open too:
 `hivemind seed` takes a JSON array, markdown/plain text (`# heading` names
 the source, `Tag:` a line labels the next paragraph, blank lines break
 clauses), or an `http(s)://` URL fetched under a 30s budget — so the whole

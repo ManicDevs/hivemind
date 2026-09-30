@@ -188,6 +188,34 @@ func TestScoreGroundedness(t *testing.T) {
 			},
 			want: 0,
 		},
+		{
+			name: "original prose citing a source with substance is grounded",
+			answers: []Answer{
+				{Question: "q", Answer: "Per US Const. amend. V, no person shall be deprived of life, liberty, or property, without due process of law."},
+			},
+			want: 1,
+		},
+		{
+			name: "dangling source cite without substance is not grounded",
+			answers: []Answer{
+				{Question: "q", Answer: "See US Const. amend. XIV § 1. The moon is cheese."},
+			},
+			want: 0,
+		},
+		{
+			name: "abbreviated verbatim quote via contiguous run",
+			answers: []Answer{
+				{Question: "q", Answer: "The rule: 'nor deny to any person within its jurisdiction the equal protection of the laws.'"},
+			},
+			want: 1,
+		},
+		{
+			name: "invented citation is still caught",
+			answers: []Answer{
+				{Question: "q", Answer: "Article I, Section 9, Clause 2 says the sun is a motorcycle in June."},
+			},
+			want: 0,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
