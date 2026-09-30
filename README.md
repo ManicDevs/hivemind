@@ -110,7 +110,11 @@ its rebuttal travels through the language layer before a single token is
 spent: `🛡️  [LANGUAGE] Local counsel declined by groundedness gate (…) -
 cloud keyless pool stands in`. A dead daemon fails the gate **open**: stress
 must never gate a node's birth. Counts ride the shutdown telemetry
-(`counsel gate: admitted:hivemind-counsel (2/2 grounded)`).
+(`counsel gate: admitted:hivemind-counsel (2/2 grounded)`). Probe and answer
+windows are tunable: `HIVEMIND_GATE_BUDGET` (per gate probe, default 240s —
+wide enough for a cold-loading counsel) and `HIVEMIND_ANSWER_BUDGET` (per
+`/api/chat`, default 10m); both are parsed as Go durations and malformed
+values fall back to the defaults.
 
 The lawbook is deliberately open law: alongside US Constitution clauses and
 a contract example, `data/law_statutes_uk.md` supplies UK public-domain and

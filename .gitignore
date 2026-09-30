@@ -34,3 +34,6 @@ AGENTS.md
 
 # lawbook journal (runtime manifestation of data/law.json)
 /data/law.journal
+
+# release binaries are build artifacts, not sources (make release repaints them)
+/release/bin/

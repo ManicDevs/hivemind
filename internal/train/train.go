@@ -319,6 +319,13 @@ var DefaultQuestions = []string{
 // Evaluate asks the freshly created model the probe questions on the loopback
 // daemon, in the mesh's own sampling register, and times each answer.
 func Evaluate(base, model string, questions []string) ([]Answer, error) {
+	return EvaluateStreaming(base, model, questions, nil)
+}
+
+// EvaluateStreaming asks the same probes but reports each answer the moment
+// it lands, so a slow CPU daemon never looks frozen. A nil onResult just
+// evaluates quietly, which is what the pure scorer tests want.
+func EvaluateStreaming(base, model string, questions []string, onResult func(Answer)) ([]Answer, error) {
 	if !strings.HasPrefix(base, "http://") {
 		return nil, fmt.Errorf("refusing non-loopback ollama target %s", base)
 	}
@@ -328,9 +335,31 @@ func Evaluate(base, model string, questions []string) ([]Answer, error) {
 		if err != nil {
 			return answers, fmt.Errorf("evaluate %s: %w", model, err)
 		}
+		if onResult != nil {
+			onResult(a)
+		}
 		answers = append(answers, a)
 	}
 	return answers, nil
+}
+
+// answerBudget bounds one live /api/chat completion. The daemon is allowed
+// minutes under CPU pressure; an operator on fast iron can tighten it with
+// HIVEMIND_ANSWER_BUDGET (e.g. "90s"). It is deliberately the *lenient*
+// budget — evaluation may be patient, only the boot-time gate must be hard.
+const defaultAnswerBudget = 10 * time.Minute
+
+func answerBudget() time.Duration {
+	return envDuration("HIVEMIND_ANSWER_BUDGET", defaultAnswerBudget)
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return fallback
 }
 
 func ask(base, model, question string) (Answer, error) {
@@ -341,14 +370,15 @@ func ask(base, model, question string) (Answer, error) {
 		"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256, "num_ctx": 4096},
 		"stop":     []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"},
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	budget := answerBudget()
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", base+"/api/chat", bytes.NewReader(body))
 	if err != nil {
 		return Answer{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Minute}
+	client := &http.Client{Timeout: budget}
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
@@ -424,7 +454,7 @@ func GateModel(base, model string, clauses []hm.LawEntry) (bool, Scorecard, erro
 	if !served {
 		return false, Scorecard{}, ErrGateModelMissing
 	}
-	answers, err := askBounded(base, model, GateProbes, gateProbeBudget)
+	answers, err := askBounded(base, model, GateProbes, gateProbeBudget())
 	if err != nil {
 		return false, Scorecard{}, err
 	}
@@ -432,11 +462,19 @@ func GateModel(base, model string, clauses []hm.LawEntry) (bool, Scorecard, erro
 	return GateVerdict(sc), sc, nil
 }
 
-// gateProbeBudget bounds one gate probe. A CPU counsel that cannot produce
-// even a short grounded answer inside a minute is effectively unusable at
-// the swarm's cadence; burning longer on the gate is how a healthy node
-// goes cold mid-stress.
-const gateProbeBudget = 120 * time.Second
+// gateProbeBudget bounds one gate probe, dialable via HIVEMIND_GATE_BUDGET.
+// A CPU counsel on an Ollama daemon under pressure (the mesh observes real
+// loopback connection-refused moments) can take a couple of minutes per
+// grounded answer, so the default is deliberately generous: the whole point
+// of the gate is to keep a *false denial* from sending a healthy node to the
+// cloud pool. Fast iron can tighten it (e.g. "30s").
+const defaultGateProbeBudget = 240 * time.Second
+
+// gateProbeBudget returns the configured per-probe budget, deferring to the
+// environment when an operator wants a hard bound at boot time.
+func gateProbeBudget() time.Duration {
+	return envDuration("HIVEMIND_GATE_BUDGET", defaultGateProbeBudget)
+}
 
 func reachableDaemon(base string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

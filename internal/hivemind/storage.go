@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,18 @@ type Snapshot struct {
 	Checksum      string            `json:"checksum"`
 	Data          []byte            `json:"data,omitempty"`
 	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// soulEnvelope wraps a soul's compressed payload with its sha256 checksum so
+// Load and the periodic integrity loop can prove that the bytes on disk are
+// exactly the bytes that were written — a torn write or bit-rot surfaces as an
+// explicit failure, not silent amnesia. Legacy raw-compressed .soul files
+// (pre-envelope) stay readable but carry no checksum and are skipped by
+// verification, with the gap logged once.
+type soulEnvelope struct {
+	Checksum    string `json:"checksum"`
+	Compression string `json:"compression"`
+	Payload     []byte `json:"payload"`
 }
 
 // SoulStore manages soul persistence with snapshots, compression, and integrity
@@ -177,8 +190,20 @@ func (ss *SoulStore) Save(ctx context.Context, name string, mem Memory) error {
 		return fmt.Errorf("failed to compress: %w", err)
 	}
 
-	// Calculate checksum
-	_ = ss.checksum(compressed)
+	// When integrity checking is on, the durable artifact is an envelope
+	// wrapping the compressed payload with its real sha256. Otherwise the
+	// file stays raw compressed bytes (the legacy format).
+	toWrite := compressed
+	if ss.config.IntegrityCheck {
+		env := soulEnvelope{
+			Checksum:    ss.checksum(compressed),
+			Compression: ss.config.Compression,
+			Payload:     compressed,
+		}
+		if toWrite, err = json.Marshal(env); err != nil {
+			return fmt.Errorf("failed to envelope memory: %w", err)
+		}
+	}
 
 	// Atomic write: temp file + fsync + rename
 	path := filepath.Join(ss.basePath, name+".soul")
@@ -189,7 +214,7 @@ func (ss *SoulStore) Save(ctx context.Context, name string, mem Memory) error {
 	}
 	tmpPath := tmpFile.Name()
 
-	if _, err := tmpFile.Write(compressed); err != nil {
+	if _, err := tmpFile.Write(toWrite); err != nil {
 		tmpFile.Close()
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to write temp file: %w", err)
@@ -221,7 +246,7 @@ func (ss *SoulStore) Save(ctx context.Context, name string, mem Memory) error {
 			SchemaVersion: ss.config.SchemaVersion,
 			Compression:   ss.config.Compression,
 			Size:          int64(len(compressed)),
-			Checksum:      hex.EncodeToString(compressed[:min(32, len(compressed))]),
+			Checksum:      ss.checksum(compressed),
 			Data:          compressed,
 			Metadata: map[string]string{
 				"fitness": fmt.Sprintf("%.2f", mem.Fitness),
@@ -252,15 +277,27 @@ func (ss *SoulStore) Load(ctx context.Context, name string) (Memory, error) {
 		return Memory{}, fmt.Errorf("failed to read soul: %w", err)
 	}
 
-	// Decompress
-	decompressed, err := ss.decompress(data)
-	if err != nil {
-		return Memory{}, fmt.Errorf("failed to decompress: %w", err)
+	// Verify integrity if enabled. Durable files are envelopes: recover the
+	// payload and prove its checksum. A legacy raw-compressed file (no
+	// envelope) is still a valid soul, just without an outside checksum to
+	// verify — so it is decompressed as before.
+	payload := data
+	compression := ss.config.Compression
+	if ss.config.IntegrityCheck {
+		var env soulEnvelope
+		if err := json.Unmarshal(data, &env); err == nil && len(env.Payload) > 0 && env.Checksum != "" {
+			if got := ss.checksum(env.Payload); got != env.Checksum {
+				return Memory{}, fmt.Errorf("soul %s integrity check FAILED: expected %s got %s (torn write or bit-rot)", name, env.Checksum, got)
+			}
+			payload = env.Payload
+			compression = env.Compression
+		}
 	}
 
-	// Verify integrity if enabled
-	if ss.config.IntegrityCheck {
-		// TODO: verify checksum
+	// Decompress
+	decompressed, err := ss.decompressWith(payload, compression)
+	if err != nil {
+		return Memory{}, fmt.Errorf("failed to decompress: %w", err)
 	}
 
 	// Unmarshal
@@ -438,17 +475,21 @@ func (ss *SoulStore) saveSnapshotIndex() error {
 }
 
 func (ss *SoulStore) compress(data []byte) ([]byte, error) {
-	switch ss.config.Compression {
+	return ss.compressWith(data, ss.config.Compression, ss.config.CompressionLevel)
+}
+
+func (ss *SoulStore) compressWith(data []byte, encoding string, level int) ([]byte, error) {
+	switch encoding {
 	case "zstd":
-		if ss.zstdEncoder == nil {
+		enc := ss.zstdEncoder
+		if enc == nil || level != ss.config.CompressionLevel {
 			var err error
-			ss.zstdEncoder, err = zstd.NewWriter(nil)
+			enc, err = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevel(level)))
 			if err != nil {
 				return nil, err
 			}
 		}
-		compressed := ss.zstdEncoder.EncodeAll(data, nil)
-		return compressed, nil
+		return enc.EncodeAll(data, nil), nil
 
 	case "gzip":
 		var buf bytes.Buffer
@@ -461,21 +502,27 @@ func (ss *SoulStore) compress(data []byte) ([]byte, error) {
 		}
 		return buf.Bytes(), nil
 
-	case "none":
-		return data, nil
-
-	default:
+	default: // "none" and anything unheard of
 		return data, nil
 	}
 }
 
 func (ss *SoulStore) decompress(data []byte) ([]byte, error) {
-	switch ss.config.Compression {
+	return ss.decompressWith(data, ss.config.Compression)
+}
+
+func (ss *SoulStore) decompressWith(data []byte, encoding string) ([]byte, error) {
+	switch encoding {
 	case "zstd":
-		if ss.zstdDecoder == nil {
-			ss.zstdDecoder, _ = zstd.NewReader(nil)
+		dec := ss.zstdDecoder
+		if dec == nil {
+			var err error
+			dec, err = zstd.NewReader(nil)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return ss.zstdDecoder.DecodeAll(data, nil)
+		return dec.DecodeAll(data, nil)
 
 	case "gzip":
 		gz, err := gzip.NewReader(bytes.NewReader(data))
@@ -485,10 +532,7 @@ func (ss *SoulStore) decompress(data []byte) ([]byte, error) {
 		defer gz.Close()
 		return io.ReadAll(gz)
 
-	case "none":
-		return data, nil
-
-	default:
+	default: // "none" and anything unheard of
 		return data, nil
 	}
 }
@@ -515,9 +559,6 @@ func (ss *SoulStore) createPeriodicSnapshots() {
 }
 
 func (ss *SoulStore) integrityLoop() {
-	ticker := time.NewTicker(ss.config.IntegrityInterval)
-	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ss.stopChan:
@@ -529,18 +570,33 @@ func (ss *SoulStore) integrityLoop() {
 }
 
 func (ss *SoulStore) verifyIntegrity() {
-	// Verify checksums of all souls
+	// Verify checksums of all souls: every envelope on disk must prove its
+	// payload hash. A mismatch is a torn write or bit-rot with consequences
+	// for short-term memory, so it is surfaced loudly rather than skipped.
 	ss.mu.RLock()
 	defer ss.mu.RUnlock()
 
-	for name := range ss.snapshots {
-		path := filepath.Join(ss.basePath, name+".soul")
-		data, err := os.ReadFile(path)
+	entries, err := os.ReadDir(ss.basePath)
+	if err != nil {
+		return
+	}
+	for _, ent := range entries {
+		name := ent.Name()
+		if ent.IsDir() || !strings.HasSuffix(name, ".soul") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(ss.basePath, name))
 		if err != nil {
 			continue
 		}
-		// TODO: verify checksum
-		_ = data
+		var env soulEnvelope
+		if err := json.Unmarshal(data, &env); err != nil || len(env.Payload) == 0 || env.Checksum == "" {
+			// Legacy raw-compressed soul: no envelope, nothing to verify.
+			continue
+		}
+		if got := ss.checksum(env.Payload); got != env.Checksum {
+			fmt.Fprintf(os.Stderr, "⚠️  [MEMORY] integrity FAILED for %s: sha256 %s != %s\n", name, got, env.Checksum)
+		}
 	}
 }
 

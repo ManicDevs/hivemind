@@ -281,7 +281,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("capability.issuer", "hivemind")
 	v.SetDefault("capability.default_ttl", "1h")
 	v.SetDefault("capability.max_ttl", "24h")
-	v.SetDefault("capability.rotation_interval", "90d")
+	v.SetDefault("capability.rotation_interval", "2160h") // 90 days; "90d" is not a Go duration and viper will not decode it
 	v.SetDefault("capability.revocation_check", true)
 
 	v.SetDefault("rpc.enabled", true)

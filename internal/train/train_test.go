@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
 )
@@ -325,4 +326,29 @@ func equalStrings(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestBudgetDefaultsAndEnv(t *testing.T) {
+	if got := gateProbeBudget(); got != defaultGateProbeBudget {
+		t.Fatalf("gate budget default = %v, want %v", got, defaultGateProbeBudget)
+	}
+	if got := answerBudget(); got != defaultAnswerBudget {
+		t.Fatalf("answer budget default = %v, want %v", got, defaultAnswerBudget)
+	}
+
+	t.Setenv("HIVEMIND_GATE_BUDGET", "90s")
+	if got := gateProbeBudget(); got != 90*time.Second {
+		t.Fatalf("gate budget override = %v, want 90s", got)
+	}
+
+	t.Setenv("HIVEMIND_ANSWER_BUDGET", "45s")
+	if got := answerBudget(); got != 45*time.Second {
+		t.Fatalf("answer budget override = %v, want 45s", got)
+	}
+
+	// A malformed override must fall back, never panic or zero the bound.
+	t.Setenv("HIVEMIND_GATE_BUDGET", "soon")
+	if got := gateProbeBudget(); got != defaultGateProbeBudget {
+		t.Fatalf("malformed override must fall back, got %v", got)
+	}
 }

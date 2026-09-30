@@ -5,6 +5,70 @@ codebase is a mutation, grown from live environmental sensing of
 `world-report/logs`. Each generation records the sensed stress, the mutation
 applied, and its measured fitness.
 
+## Generation 11 — whole-repo fine-tuning arms race against a flaky mesh
+
+**Sensed environment** (`world-report/logs/`): 20,892 `PHYSICAL STRATUM`
+stress payloads and 36 loopback `connection refused` — a hot-but-flaky mesh.
+Mutations were tuned for exactly that: give slow nodes room to answer, fail
+bounded, and stop trusting local disk unconditionally.
+
+**Mutations applied:**
+- **Adaptive budget knobs.** `gateProbeBudget()` is env-tunable
+  (`HIVEMIND_GATE_BUDGET`, default 240s; was a hard-coded 120s that
+  false-denied healthy counsel taking 1-9 min to cold-load). `ask()` uses a
+  matching `answerBudget()` (`HIVEMIND_ANSWER_BUDGET`, default 10m) for
+  context and client timeouts, replacing the 10-min/120s asymmetry. Shared
+  `envDuration(key, fallback)`; malformed overrides fall back, never panic.
+  Both values documented in README.
+- **Streaming eval.** `train.EvaluateStreaming` reports each probe the moment
+  it lands; `cmd/hivemind-eval` and `cmd/hivemind-train` print live per-event
+  output instead of one silent block (a 10-min eval no longer looks hung).
+- **Soul integrity envelope.** Blob `Save` now wraps payloads in
+  `{checksum, compression, payload}` and `Load` verifies sha256, flagging
+  corruption to stderr instead of silently serving it; legacy raw-compressed
+  files still load (no outside checksum = skipped, not failed). Snapshot
+  checksums were a truncated first-32-bytes hex — now a real sha256.
+  `verifyIntegrity` sweeps `*.soul` at startup, and the integrity loop's
+  shadowed ticker was a silent time-bomb; removed.
+- **Repo hygiene.** `release/bin/` (50 MB of stale binaries) de-tracked and
+  gitignored; a stray root-level `hivemind-eval` build artifact removed;
+  stale 3.8 GB `hivemind-test-y` model deleted from the daemon.
+- **Test coverage for three untested packages** (previously only
+  engine/train/hivemind were probed), surfacing two **latent bugs**:
+  - `config.Load` failed on *every* file because
+    `capability.rotation_interval` defaulted to `"90d"`, which
+    `time.ParseDuration` cannot decode → viper Unmarshal aborted. Fixed to
+    `"2160h"` (90 days). All `config.Load` users were silently broken.
+  - `PersistenceManager.Stop()` closed its stop channel unconditionally —
+    double-tornado teardown panicked. Now `sync.Once`-guarded and idempotent.
+- **Infra matrix hardening:** `mqtt_endpoints_test.go` pins the 
+  host-scheme-port matrix (`brokerURLs` normalization, `Prefer` eligibility,
+  TLS-less endpoints not leaking into TLS lists); `persistence_test.go`
+  round-trips jobs/tokens/bridges and verifies token revocation is a durable
+  soft tombstone (`"revoked": true`), not a deleting loss of audit history.
+- **`antire` verdict overturned.** A repo review misclassified it as dead;
+  `cmd/relay` calls `hm.AnnounceKeyPosture()`. Restored from HEAD — nothing
+  to prune. Verify "dead code" by grepping exported identifiers, not names.
+
+**Fitness scores:**
+- `go vet ./...` — PASS (all packages).
+- `go test ./internal/config/ ./internal/infra/ ./internal/persistence/
+  ./internal/train/ ./internal/hivemind/language/ ./internal/engine/` — PASS
+  (engine 42.6s incl. lifecycle; budget/env tests 0.00s).
+- `go test ./internal/hivemind/` — PASS (76.3s, incl. new soul-envelope
+  round-trip, torn-write detection, legacy-file compatibility, and integrity
+  corruption flagging — all green beside the existing 41s archival test).
+- Cross-generation score: gate defaults still fit a cold-loading counsel
+  window (gen 9 feasibility proven live at 2/2 grounded); UK lawbook corpus
+  (gen 10, 19 clauses) still gates and evals on the same strict scorer.
+- Whole-repo fitness: **7/7 package suites green + vet green + 2 latent
+  bugs fixed + 3 packages covered for the first time.**
+
+**Rollback notes:** none — the only experiments that failed mutated within
+the generation (config defaults test → bug found → fixed; persistence
+tombstone semantics → test corrected to match design). No red state was ever
+committed.
+
 ## Generation 10 — cross-pollinating a second jurisdiction into the lawbook
 
 **Sensed environment** (`world-report/logs/`): swarm still hot — mean pain

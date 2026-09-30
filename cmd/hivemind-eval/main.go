@@ -43,7 +43,12 @@ func run() int {
 	}
 
 	fmt.Printf("⚖️  [EVAL] interrogating %s against %d provisions from %s\n", model, len(clauses), journal)
-	answers, err := train.Evaluate(ollama, model, questions)
+	// Ask in the streaming register: each answer prints the moment it lands,
+	// so a slow CPU daemon never looks frozen for ten minutes.
+	var answers []train.Answer
+	answers, err = train.EvaluateStreaming(ollama, model, questions, func(a train.Answer) {
+		fmt.Printf(" Q%d (%s)\n", len(answers)+1, a.Duration.Round(100_000_000))
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  evaluation failed: %v\n", err)
 		fmt.Fprintf(os.Stderr, "   (run  hivemind-train -apply  first, or check the daemon on %s)\n", ollama)

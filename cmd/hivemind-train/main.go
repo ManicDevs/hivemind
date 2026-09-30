@@ -88,15 +88,15 @@ func run() int {
 	}
 	if len(q) > 0 {
 		fmt.Printf("   evaluating %s live (%d probes) …\n", opt.ModelName, len(q))
-		answers, err := train.Evaluate(opt.OllamaBase, opt.ModelName, q)
+		answers, err := train.EvaluateStreaming(opt.OllamaBase, opt.ModelName, q, func(a train.Answer) {
+			fmt.Printf("\n   Q: %s\n", a.Question)
+			fmt.Printf("   A: %s\n   (%s)\n", a.Answer, a.Duration.Round(100_000_000))
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "⚠️  evaluation: %v\n", err)
 			return 1
 		}
-		for _, a := range answers {
-			fmt.Printf("\n   Q: %s\n", a.Question)
-			fmt.Printf("   A: %s\n   (%s)\n", a.Answer, a.Duration.Round(100_000_000))
-		}
+		fmt.Printf("\n   round complete: %d probes\n", len(answers))
 	}
 
 	fmt.Printf("\n🎓 [TRAIN] point the mesh at the trained weights:\n")

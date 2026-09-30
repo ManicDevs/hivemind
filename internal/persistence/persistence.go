@@ -14,6 +14,7 @@ import (
 // PersistenceManager handles persistent storage for various components
 type PersistenceManager struct {
 	mu           sync.RWMutex
+	stopOnce     sync.Once
 	dataDir      string
 	cronPath     string
 	tokensPath   string
@@ -85,12 +86,18 @@ func NewPersistenceManager(config PersistenceConfig) (*PersistenceManager, error
 }
 
 // Stop stops the persistence manager
+// Stop shuts down background loops and flushes. It is idempotent: agents
+// tear down in unpredictable orders, and a second Stop must be a no-op,
+// not a close-of-closed-channel panic.
 func (pm *PersistenceManager) Stop() error {
-	close(pm.stopChan)
-	if pm.syncTicker != nil {
-		pm.syncTicker.Stop()
-	}
-	return pm.Flush()
+	pm.stopOnce.Do(func() {
+		close(pm.stopChan)
+		if pm.syncTicker != nil {
+			pm.syncTicker.Stop()
+		}
+		_ = pm.Flush()
+	})
+	return nil
 }
 
 // Flush writes all dirty data to disk
