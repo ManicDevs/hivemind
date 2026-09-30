@@ -90,7 +90,10 @@ quote a provision verbatim, reference its audit handle, cite a provision's
 source with supporting words, reuse ≥ half of a provision's distinctive
 trigrams, or carry a contiguous run of its words (abbreviated quotes still
 count). Confabulated citations fail — the scorecard prints each verdict
-(`✓`/`✗`) and audits the misses. Corpus provenance is open too:
+(`✓`/`✗`) and audits the misses. A `⚠ MIS-CITE` verdict catches the subtle
+case where a grounded answer echoes one provision while attributing it to a
+different one (e.g. quoting the equal-protection clause under "Article I,
+Section 9"). Corpus provenance is open too:
 `hivemind seed` takes a JSON array, markdown/plain text (`# heading` names
 the source, `Tag:` a line labels the next paragraph, blank lines break
 clauses), or an `http(s)://` URL fetched under a 30s budget — so the whole

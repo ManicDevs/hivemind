@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -438,17 +439,25 @@ func ScoreGroundedness(answers []Answer, clauses []hm.LawEntry) Scorecard {
 }
 
 func groundedAnswer(answer string, clauses []hm.LawEntry, books []map[string]bool) bool {
+	ok, _ := groundedWhere(answer, clauses, books)
+	return ok
+}
+
+// groundedWhere is the shared verdict core, returning the index of the
+// provision whose substance the answer echoes — so a caller can adjudicate
+// whether the answer *cited* that same provision.
+func groundedWhere(answer string, clauses []hm.LawEntry, books []map[string]bool) (bool, int) {
 	ans := strings.ToLower(strings.TrimSpace(answer))
 	if ans == "" {
-		return false
+		return false, -1
 	}
 	aTok := splitWords(ans)
 	for i, c := range clauses {
 		if c.ID != "" && strings.Contains(ans, c.ID[:min(len(c.ID), 8)]) {
-			return true
+			return true, i
 		}
 		if strings.Contains(answer, c.Clause) {
-			return true
+			return true, i
 		}
 		// A synthesized answer that cites the provision by its human
 		// source ("US Const. amend. V", "Contract example §7.2") is
@@ -456,23 +465,23 @@ func groundedAnswer(answer string, clauses []hm.LawEntry, books []map[string]boo
 		// citing an unrelated section at random earns nothing.
 		if c.Source != "" && strings.Contains(ans, strings.ToLower(c.Source)) {
 			if ngramOverlap(ans, books[i]) > 0 {
-				return true
+				return true, i
 			}
 		}
 		// Abbreviated or truncated quotes: a contiguous run of the
 		// provision's words is recognisable quoting even when the model
 		// gapped the middle with an ellipsis.
 		if longestCommonRun(aTok, splitWords(strings.ToLower(c.Clause))) >= minContiguousRun {
-			return true
+			return true, i
 		}
 		// A close paraphrase that reuses at least half of a provision's
 		// distinctive trigrams is quoting in substance without the form.
 		b := books[i]
 		if len(b) > 0 && float64(ngramOverlap(ans, b))/float64(len(b)) >= 0.5 {
-			return true
+			return true, i
 		}
 	}
-	return false
+	return false, -1
 }
 
 const minContiguousRun = 8
@@ -508,9 +517,102 @@ func longestCommonRun(a, b []string) int {
 // GroundedAnswer tells whether one answer is grounded in the lawbook, in the
 // same register the scorecard uses — exposed so a CLI can stamp each verdict.
 func GroundedAnswer(a Answer, clauses []hm.LawEntry) bool {
+	ok, _ := groundedFor(a, clauses)
+	return ok
+}
+
+// Provenance returns the Source of the provision whose substance an answer
+// echoes, or "" when the answer is ungrounded — the ground truth an
+// adjudicator compares citations against.
+func Provenance(a Answer, clauses []hm.LawEntry) string {
+	_, i := groundedFor(a, clauses)
+	if i < 0 {
+		return ""
+	}
+	return clauses[i].Source
+}
+
+func groundedFor(a Answer, clauses []hm.LawEntry) (bool, int) {
 	books := make([]map[string]bool, 0, len(clauses))
 	for _, c := range clauses {
 		books = append(books, ngramTokens(c.Clause, 3))
 	}
-	return groundedAnswer(a.Answer, clauses, books)
+	return groundedWhere(a.Answer, clauses, books)
+}
+
+var (
+	romanAmendRe = regexp.MustCompile(`(?i)(?:^|[^a-z])amend\.?\s*([ivx]+)(?:[^a-z]|$)`)
+	sectionRe    = regexp.MustCompile(`(?i)(?:§|s\.\s*|section|sec\.)\s*([0-9]+(?:\.[0-9]+)?)`)
+)
+
+// citeSignatures answers an answer carries: normalized amendment slots
+// ("amend.xiv") and section slots ("sec.9", "sec.7.2") — cast out of both
+// abbreviated ("amend. V", "§7.2") and spelled-out ("Article I, Section 9")
+// legal citation.
+func citeSignatures(text string) []string {
+	s := strings.ToLower(text)
+	var out []string
+	for _, m := range romanAmendRe.FindAllStringSubmatch(s, -1) {
+		out = append(out, "amend."+m[1])
+	}
+	for _, m := range sectionRe.FindAllStringSubmatch(s, -1) {
+		out = append(out, "sec."+m[1])
+	}
+	return dedupeStrings(out)
+}
+
+// provenanceSignatures casts a provision's Source into the same cite slots,
+// e.g. "US Const. amend. XIV § 1" → [amend.xiv sec.1].
+func provenanceSignatures(src string) []string {
+	s := strings.ToLower(src)
+	var out []string
+	for _, m := range romanAmendRe.FindAllStringSubmatch(s, -1) {
+		out = append(out, "amend."+m[1])
+	}
+	for _, m := range sectionRe.FindAllStringSubmatch(s, -1) {
+		out = append(out, "sec."+m[1])
+	}
+	return dedupeStrings(out)
+}
+
+// Miscite adjudicates citation honesty: when a grounded answer leans on
+// exactly one visible citation, that citation must belong to the provision
+// whose substance the answer actually echoes. A bare-citation-free answer,
+// or a multi-cite survey (the model surveying several provisions correctly),
+// is not a miscite. Returns a human warning or "".
+func Miscite(a Answer, clauses []hm.LawEntry) string {
+	ok, i := groundedFor(a, clauses)
+	if !ok {
+		return ""
+	}
+	cites := citeSignatures(a.Answer)
+	if len(cites) != 1 {
+		return ""
+	}
+	own := provenanceSignatures(clauses[i].Source)
+	if len(own) > 0 && !containsString(own, cites[0]) {
+		return fmt.Sprintf("⚠ MIS-CITE: cites %q while echoing %q", cites[0], clauses[i].Source)
+	}
+	return ""
+}
+
+func dedupeStrings(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func containsString(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }

@@ -51,6 +51,7 @@ func run() int {
 	}
 
 	score := train.ScoreGroundedness(answers, clauses)
+	misciteCount := 0
 	for i, a := range answers {
 		mark := "✗"
 		if train.GroundedAnswer(a, clauses) {
@@ -58,10 +59,17 @@ func run() int {
 		}
 		fmt.Printf("\n %s Q%d: %s\n", mark, i+1, a.Question)
 		fmt.Printf("   A: %s\n   (%s)\n", a.Answer, a.Duration.Round(100_000_000))
+		if w := train.Miscite(a, clauses); w != "" {
+			misciteCount++
+			fmt.Printf("   %s\n", w)
+		}
 	}
 
 	fmt.Printf("\n📊 [EVAL] grounded %d/%d (%.0f%%)\n",
 		score.Grounded, score.Total, pct(score.Grounded, score.Total))
+	if misciteCount > 0 {
+		fmt.Printf("   ⚠ %d grounded answer(s) carry a citation that contradicts the text they echo\n", misciteCount)
+	}
 	if len(score.Ungrounded) > 0 {
 		fmt.Printf("   ungrounded answers to audit:\n")
 		for _, u := range score.Ungrounded {
