@@ -112,6 +112,16 @@ cloud keyless pool stands in`. A dead daemon fails the gate **open**: stress
 must never gate a node's birth. Counts ride the shutdown telemetry
 (`counsel gate: admitted:hivemind-counsel (2/2 grounded)`).
 
+The lawbook is deliberately open law: alongside US Constitution clauses and
+a contract example, `data/law_statutes_uk.md` supplies UK public-domain and
+Open-Government-Licence instruments — Magna Carta 1297 cl. 29 (due process),
+Bill of Rights 1689 (suspending laws, crown levies, parliamentary speech),
+Act of Settlement 1701, and Human Rights Act 1998 s. 3 / Sch. 1 arts. 9-10
+(exact text; © Crown / OGL v3.0 for the HRA provisions). Seeding every
+source file grows one shared multi-jurisdiction book: 19 clauses in, and
+`hivemind-counsel` is retrained and re-evaluated across the whole corpus, so
+a single counsel answers from both the US and UK provisions.
+
 ## Architecture
 
 - **Engine** — `internal/engine` orchestration: lifecycle, config schema, telemetry

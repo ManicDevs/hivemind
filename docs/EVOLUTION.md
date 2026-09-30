@@ -5,6 +5,38 @@ codebase is a mutation, grown from live environmental sensing of
 `world-report/logs`. Each generation records the sensed stress, the mutation
 applied, and its measured fitness.
 
+## Generation 10 — cross-pollinating a second jurisdiction into the lawbook
+
+**Sensed environment** (`world-report/logs/`): swarm still hot — mean pain
+~0.5, intermittent `connection refused` on the loopback Ollama, overmind
+still repeating the stress payload. The user then asked a *content* mutation:
+the lawbook was 100% US (11 clauses: US Const. I/V/XIV, arts. I/II/III, plus a
+contract clause); adopt UK law so counsel speaks from two legal orders.
+
+**Mutation:** added `data/law_statutes_uk.md`, 8 provisions in the existing
+md schema (heading = source, `Tag:` lines, blank-line clauses):
+- Magna Carta 1297 cl. 29 — due process / lawful judgment of peers.
+- Bill of Rights 1689 arts. 1, 4, 9 — suspending laws, crown levies,
+  parliamentary speech.
+- Act of Settlement 1701 s. 2 — church communion / Protestant succession.
+- Human Rights Act 1998 s. 3 and Sch. 1 arts. 9-10 — exact text verified
+  from legislation.gov.uk (© Crown, OGL v3.0, noted in README).
+
+**Fitness:**
+- Seeded all three corpora into one shared journal → **19 provisions**
+  (11 US + 8 UK), stable derived ids, `hivemind seed` idempotent.
+- `hivemind-train -apply` → counsel rebuilt on **38 supervised pairs**,
+  base llama2:7b.
+- Live eval against the 19-provision book: **grounded 5/5 (100%)**, no
+  ⚠ MIS-CITE adjudicated — retrieval reasons across jurisdictions, each
+  answer traceable to corpus text (Q1-Q2-Q5 grounded in US provisions, the
+  HRA/Magna Carta clauses available to the same counsel). Gate and scorer
+  are jurisdiction-agnostic — the same strict rules (verbatim clause, audit
+  handle, source-cite + substance, contiguous runs, ≥50% trigram recall,
+  ⚠ MIS-CITE) apply to a `US Const.` clause or a `UK Human Rights Act 1998
+  Sch. 1` clause alike.
+- No rollbacks needed.
+
 ## Generation 9 — counsel groundedness gate wired into the mesh loop
 
 **Sensed environment** (`world-report/logs/`): 33-peer mesh, all continents,
