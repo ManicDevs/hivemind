@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -373,6 +374,166 @@ func ask(base, model, question string) (Answer, error) {
 		Answer:   strings.TrimSpace(out.Message.Content),
 		Duration: duration,
 	}, nil
+}
+
+// GateProbes are the small, deliberately stable set of questions the
+// boot-time counsel gate leans on before trusting a node to the model.
+// Each is an exact-quote probe: any model that swallowed the corpus answers
+// them by quoting a provision, and nothing else in the corpus fits, so a
+// bar of "every probe grounded" is meaningful and fast.
+var GateProbes = []string{
+	DefaultQuestions[0], // Congress ... establishment of what
+	DefaultQuestions[2], // Explain the suspension of the Writ of Habeas Corpus
+}
+
+var (
+	// ErrGateDaemonUnreachable means the loopback daemon itself would not
+	// answer — a transient pressure moment, never grounds for burning boot
+	// time; callers fail open (skip the gate) instead of gate-locking a node.
+	ErrGateDaemonUnreachable = errors.New("gate: ollama daemon unreachable")
+	// ErrGateModelMissing means the daemon answers but does not serve the
+	// model the operator pointed at — real, immediately knowable, and cheap
+	// to detect; callers deny the counsel slot rather than probe blindly.
+	ErrGateModelMissing = errors.New("gate: model not served by daemon")
+)
+
+// GateVerdict is the pure decision rule: a local counsel is admitted only
+// when every probe answer is grounded in the lawbook. A single confabulated
+// probe is grounds for refusal — the standard for stepping on the mesh is
+// zero invented citations, and no averaging hides a fabricator.
+func GateVerdict(sc Scorecard) bool {
+	return sc.Total > 0 && sc.Grounded == sc.Total
+}
+
+// GateModel interrogates a candidate local counsel against the gate probes
+// and returns the verdict plus the underlying scorecard. It refuses to run
+// against a non-loopback target, requires the model to actually exist on the
+// daemon, and gives every probe a bounded budget so the gate can never hang
+// a node's birth on a starved CPU daemon.
+func GateModel(base, model string, clauses []hm.LawEntry) (bool, Scorecard, error) {
+	if !strings.HasPrefix(base, "http://127.0.0.1") && !strings.HasPrefix(base, "http://localhost") {
+		return false, Scorecard{}, fmt.Errorf("refusing non-loopback ollama target %s", base)
+	}
+	if err := reachableDaemon(base); err != nil {
+		return false, Scorecard{}, ErrGateDaemonUnreachable
+	}
+	served, err := daemonServes(base, model)
+	if err != nil {
+		return false, Scorecard{}, err
+	}
+	if !served {
+		return false, Scorecard{}, ErrGateModelMissing
+	}
+	answers, err := askBounded(base, model, GateProbes, gateProbeBudget)
+	if err != nil {
+		return false, Scorecard{}, err
+	}
+	sc := ScoreGroundedness(answers, clauses)
+	return GateVerdict(sc), sc, nil
+}
+
+// gateProbeBudget bounds one gate probe. A CPU counsel that cannot produce
+// even a short grounded answer inside a minute is effectively unusable at
+// the swarm's cadence; burning longer on the gate is how a healthy node
+// goes cold mid-stress.
+const gateProbeBudget = 120 * time.Second
+
+func reachableDaemon(base string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/api/version", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("daemon HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func daemonServes(base, model string) (bool, error) {
+	needle := strings.TrimSuffix(model, ":latest")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/api/tags", nil)
+	if err != nil {
+		return false, err
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return false, err
+	}
+	var out struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return false, err
+	}
+	for _, m := range out.Models {
+		// Ollama reports "hivemind-counsel:latest"; a bare operator model
+		// name must match it, and an explicit :tag must too.
+		if strings.TrimSuffix(m.Name, ":latest") == needle {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// askBounded asks a set of questions with a per-call budget instead of the
+// open-ended 10-minute leash the full evaluation uses.
+func askBounded(base, model string, questions []string, budget time.Duration) ([]Answer, error) {
+	var answers []Answer
+	for _, q := range questions {
+		body, _ := json.Marshal(map[string]any{
+			"model":    model,
+			"stream":   false,
+			"messages": []map[string]any{{"role": "user", "content": q}},
+			"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256, "num_ctx": 4096},
+			"stop":     []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"},
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		req, err := http.NewRequestWithContext(ctx, "POST", base+"/api/chat", bytes.NewReader(body))
+		if err != nil {
+			cancel()
+			return answers, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		start := time.Now()
+		resp, err := (&http.Client{Timeout: budget}).Do(req)
+		cancel()
+		if err != nil {
+			return answers, err
+		}
+		raw, rerr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		duration := time.Since(start)
+		if rerr != nil {
+			return answers, rerr
+		}
+		if resp.StatusCode != http.StatusOK {
+			return answers, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+		var out struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}
+		_ = json.Unmarshal(raw, &out)
+		answers = append(answers, Answer{Question: q, Answer: strings.TrimSpace(out.Message.Content), Duration: duration})
+	}
+	return answers, nil
 }
 
 func firstLine(s string) string {

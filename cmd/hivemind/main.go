@@ -160,6 +160,9 @@ func runEngine(cfg engine.Config) int {
 	if stats.LawClauses > 0 {
 		fmt.Printf(", %d law clauses compiled", stats.LawClauses)
 	}
+	if stats.Gate != "" {
+		fmt.Printf(", counsel gate: %s (%d/%d grounded)", stats.Gate, stats.GateGrounded, stats.GateTotal)
+	}
 	fmt.Println()
 	return 0
 }

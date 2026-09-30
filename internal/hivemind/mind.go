@@ -315,10 +315,26 @@ func NewMind(name string, swarm *Swarm) *Mind {
 	m.LastInteroception = learning.CollectRawInteroception()
 
 	// Initialize language bridge with remote LLM if configured.
-	// Primary endpoint comes from env (if set); otherwise a pool of
-	// genuinely keyless public endpoints. Every reachable member is kept in
-	// a RotatingLLM so a per-endpoint rate limit (e.g. OVH 2 req/min/IP)
-	// does not silence the mind — it just fails over to the next provider.
+	// HIVEMIND_LLM_DISABLE=1 makes a node wholly silent and offline-safe
+	// (nothing probed, nothing dialed): the honest way to run a mind with
+	// no network at all — useful for hermetic tests and bare-metal grids.
+	if os.Getenv("HIVEMIND_LLM_DISABLE") == "1" {
+		m.LanguageBridge = language.NewLanguageBridge(nil, 30*time.Second)
+	} else {
+		m.initLLM()
+	}
+	m.MinSpeakInterval = 30 * time.Second
+
+	m.inbox = swarm.Join(m.PubKeyStr)
+	return m
+}
+
+// initLLM builds the rotating keyless pool and attaches the language bridge.
+// HIVEMIND_LLM_ENDPOINT adds a caller-specific candidate; the verified
+// keyless endpoints follow; a loopback Ollama counsel becomes the primary
+// voice when present — and is refused before any token is spent if the
+// boot-time groundedness gate declined it.
+func (m *Mind) initLLM() {
 	type endpointCandidate struct {
 		endpoint string
 		model    string
@@ -391,6 +407,13 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		language.WarmLocalOllama(lllm)
 		fmt.Printf("🗣️  [LANGUAGE] Primary pool member: local Ollama (model %s) - private, unthrottled\n",
 			lllm.Model())
+	} else if reason := language.DeclinedCounselReason(); reason != "" {
+		// The boot-time groundedness gate refused the local counsel: its
+		// answers were not provably grounded in the lawbook. Say why, and
+		// let the cloud keyless pool stand in rather than trusting an
+		// unverified voice with the swarm.
+		fmt.Printf("🛡️  [LANGUAGE] Local counsel declined by groundedness gate (%s) - cloud keyless pool stands in\n",
+			reason)
 	} else if language.LocalOllamaPresent() {
 		// The daemon answered /api/tags but none of its models could serve a
 		// realistic swarm prompt inside the viability window (typical on a
@@ -422,10 +445,6 @@ func NewMind(name string, swarm *Swarm) *Mind {
 		}
 		m.LanguageBridge = language.NewLanguageBridge(nil, 30*time.Second)
 	}
-	m.MinSpeakInterval = 30 * time.Second
-
-	m.inbox = swarm.Join(m.PubKeyStr)
-	return m
 }
 
 // CollectInteroception reads real hardware telemetry for interoceptive processing.

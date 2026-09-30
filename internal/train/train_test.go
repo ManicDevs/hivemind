@@ -295,6 +295,26 @@ func TestMisciteAdjudication(t *testing.T) {
 	}
 }
 
+func TestGateVerdict(t *testing.T) {
+	cases := []struct {
+		name     string
+		sc       Scorecard
+		wantPass bool
+	}{
+		{"all probes grounded", Scorecard{Total: 2, Grounded: 2}, true},
+		{"empty regime refuses", Scorecard{Total: 0, Grounded: 0}, false},
+		{"single confabulation refuses", Scorecard{Total: 2, Grounded: 1}, false},
+		{"single probe that grounds admits", Scorecard{Total: 1, Grounded: 1}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := GateVerdict(tc.sc); got != tc.wantPass {
+				t.Errorf("GateVerdict(%+v) = %v, want %v", tc.sc, got, tc.wantPass)
+			}
+		})
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

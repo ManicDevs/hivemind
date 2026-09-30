@@ -99,6 +99,19 @@ the source, `Tag:` a line labels the next paragraph, blank lines break
 clauses), or an `http(s)://` URL fetched under a 30s budget — so the whole
 pipeline runs from statute text to measured counsel on one machine.
 
+The scorecard is not just a lab tool: `make eval`'s scorer doubles as a
+boot-time **counsel groundedness gate**. With `HIVEMIND_GROUNDING_GATE=1` the
+engine, before any mind is born, asks the configured counsel two lawbook
+questions and requires every probe to ground (strict admission, no averaging).
+Admission logs its fitness — `🛡️  [GATE] counsel hivemind-counsel admitted
+(grounded 2/2) - fit to speak for the swarm` — and the trained counsel becomes
+the primary voice. A model the daemon does not serve is denied up front and
+its rebuttal travels through the language layer before a single token is
+spent: `🛡️  [LANGUAGE] Local counsel declined by groundedness gate (…) -
+cloud keyless pool stands in`. A dead daemon fails the gate **open**: stress
+must never gate a node's birth. Counts ride the shutdown telemetry
+(`counsel gate: admitted:hivemind-counsel (2/2 grounded)`).
+
 ## Architecture
 
 - **Engine** — `internal/engine` orchestration: lifecycle, config schema, telemetry

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/language"
 )
 
 func TestNormalizeDefaults(t *testing.T) {
@@ -119,5 +121,49 @@ func TestLifecycle(t *testing.T) {
 	case <-eng.Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("engine did not finish stopping")
+	}
+}
+
+// TestCounselGateFailsOpenOnDeadDaemon: with HIVEMIND_OLLAMA_MODEL set to
+// anything and the gate on, a daemon that will not answer must not stall or
+// gate-lock the universe — the gate skips and the node is still born. This
+// is the stress adaptation: pressure on the loopback daemon is never grounds
+// for a node to go cold. Minds are suppressed so the test exercises the gate
+// alone; pool construction is covered by the language-package tests.
+func TestCounselGateFailsOpenOnDeadDaemon(t *testing.T) {
+	t.Setenv("HIVEMIND_OLLAMA_MODEL", "hivemind-counsel")
+	t.Setenv("HIVEMIND_OLLAMA_ENDPOINT", "http://127.0.0.1:1") // nothing listens
+	t.Setenv("HIVEMIND_LLM_DISABLE", "1")                      // node stays silent; pool never dials a grid
+	t.Setenv("HIVEMIND_GROUNDING_GATE", "1")
+	eng, err := New(Config{Mode: "standalone", Minds: []string{""}})
+	if err != nil {
+		t.Fatalf("new with gate + dead daemon must not error: %v", err)
+	}
+	// Not Start()ed, so never Stop()ed: the universe was never born, and
+	// stop would hang waiting on minds that never ran.
+	if eng.gateState != "" {
+		t.Errorf("gateState = %q, want empty (failing open)", eng.gateState)
+	}
+	// The decline flag must not be set by a merely-unreachable daemon: the
+	// pool keeps its default logic.
+	if language.DeclinedCounselReason() != "" {
+		t.Errorf("dead daemon must not decline counsel, got %q", language.DeclinedCounselReason())
+	}
+}
+
+// TestCounselGateSkipsWithoutCounsel covers the no-hivemind-model case: the
+// gate has no candidate to interrogate and says so, without touching a pool.
+func TestCounselGateSkipsWithoutCounsel(t *testing.T) {
+	t.Setenv("HIVEMIND_OLLAMA_MODEL", "")
+	t.Setenv("HIVEMIND_OLLAMA_ENDPOINT", "http://127.0.0.1:1")
+	t.Setenv("HIVEMIND_LLM_DISABLE", "1")
+	t.Setenv("HIVEMIND_GROUNDING_GATE", "1")
+	eng, err := New(Config{Mode: "standalone", Minds: []string{""}})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	// Not Start()ed, so never Stop()ed (see sibling test comment).
+	if eng.gateState != "" {
+		t.Errorf("gateState = %q, want empty", eng.gateState)
 	}
 }

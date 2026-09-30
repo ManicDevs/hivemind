@@ -280,11 +280,65 @@ func LocalOllamaPresent() bool {
 	return localOllamaPresent
 }
 
+// OllamaBase exposes the resolved local daemon base URL to callers that need
+// to speak to it directly (the counsel gate, for instance).
+func OllamaBase() string { return localOllamaBase() }
+
+// declinedCounselReason, when set by the boot-time groundedness gate, is why
+// the local counsel may not become a primary voice this process. The gate
+// answers once per process (like localModel); the pool consults it here so a
+// denied counsel is refused before any of its tokens are spent.
+var (
+	declineMu       sync.RWMutex
+	declinedCounsel string
+)
+
+// SetDeclineCounsel records a groundedness-gate refusal for this process.
+// NewLocalOllama honors it: a counsel that failed its gate is treated as
+// absent, and the cloud pool stands in.
+func SetDeclineCounsel(reason string) {
+	declineMu.Lock()
+	declinedCounsel = reason
+	declineMu.Unlock()
+}
+
+// DeclinedCounselReason returns why the local counsel is declined, or "".
+func DeclinedCounselReason() string {
+	declineMu.RLock()
+	defer declineMu.RUnlock()
+	return declinedCounsel
+}
+
+// CounselCandidate resolves the model a counsel gate should interrogate: an
+// explicit HIVEMIND_OLLAMA_MODEL wins outright; otherwise the first tag on
+// the daemon whose name carries the distilled-counsel "hivemind" stamp. It
+// never triggers the full model race — the gate answers cheaply off the tag
+// list, one request, no slow probes.
+func CounselCandidate() (string, bool) {
+	if m := os.Getenv("HIVEMIND_OLLAMA_MODEL"); m != "" {
+		return m, true
+	}
+	tags, err := fetchOllamaTags(localOllamaBase())
+	if err != nil {
+		return "", false
+	}
+	for _, t := range tags {
+		if strings.Contains(strings.ToLower(t), "hivemind") {
+			return t, true
+		}
+	}
+	return "", false
+}
+
 // NewLocalOllama wires a RemoteLLM to a private loopback Ollama daemon when
 // one answers /api/tags with a model that can serve a real swarm prompt in
 // time. An error here means the local daemon is absent, unusable, or too slow
-// for the swarm's cadence — the cloud keyless pool is used instead.
+// for the swarm's cadence — the cloud keyless pool is used instead. A
+// counsel denied by the groundedness gate is refused up front.
 func NewLocalOllama() (*RemoteLLM, error) {
+	if reason := DeclinedCounselReason(); reason != "" {
+		return nil, fmt.Errorf("local counsel refused by groundedness gate: %s", reason)
+	}
 	if !localOllamaLoopback() {
 		return nil, fmt.Errorf("refusing non-loopback ollama target %s", localOllamaBase())
 	}

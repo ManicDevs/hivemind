@@ -19,6 +19,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"runtime/debug"
@@ -26,6 +27,8 @@ import (
 	"time"
 
 	hm "gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind"
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/hivemind/language"
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/train"
 )
 
 // DefaultMindNames is the canonical trinity when Config.Minds is empty.
@@ -53,6 +56,15 @@ type Config struct {
 	// Empty => the process default (data/law.journal); a missing file is a
 	// lawless node, not an error.
 	LawJournal string `json:"law_journal"`
+	// GroundednessGate, when enabled, interrogates the local counsel
+	// against the lawbook at boot and refuses to grant an unproven voice a
+	// primary slot: the node stays on the cloud keyless pool, loudly,
+	// instead of trusting caveated fluency. Opt-in (env
+	// HIVEMIND_GROUNDING_GATE=1 works too) because it is deliberately
+	// strict — every probe must come back grounded — and it spends two
+	// bounded probes before the universe is born. A dead daemon fails the
+	// gate open, never stalls birth.
+	GroundednessGate bool `json:"groundedness_gate"`
 	// JSONPath, when given, loads overrides from a JSON config file before
 	// explicit field values are applied (only non-zero fields win).
 	JSONPath string `json:"-"`
@@ -107,6 +119,12 @@ func (c *Config) Normalize() error {
 	if c.Mode == "standalone" && c.Node == "" {
 		c.Node = "local"
 	}
+	if !c.GroundednessGate {
+		switch os.Getenv("HIVEMIND_GROUNDING_GATE") {
+		case "1", "true", "TRUE":
+			c.GroundednessGate = true
+		}
+	}
 	return nil
 }
 
@@ -139,6 +157,9 @@ func (c *Config) LoadJSON() error {
 	if fileCfg.LawJournal != "" {
 		c.LawJournal = fileCfg.LawJournal
 	}
+	if fileCfg.GroundednessGate {
+		c.GroundednessGate = true
+	}
 	return nil
 }
 
@@ -155,7 +176,14 @@ type Stats struct {
 	// LawClauses is how many provisioned provisions sit in the bound
 	// journal that grounds every utterance on this node.
 	LawClauses int
-	Counters   struct {
+	// Gate is the counsel groundedness-gate verdict: a model name prefixed
+	// "admitted:" or "denied:", or "" when no counsel was visible to gate.
+	Gate string
+	// GateGrounded/GateTotal are the underlying probe counts behind the
+	// verdict, so an admitted counsel shows its proof and a denied one its
+	// shame honestly.
+	GateGrounded, GateTotal int
+	Counters                struct {
 		Thoughts int64
 		Replies  int64
 	}
@@ -178,7 +206,9 @@ type Engine struct {
 	overmind *hm.Overmind
 	health   *hm.HealthServer
 
-	counters map[string]int64
+	gateState               string
+	gateGrounded, gateTotal int
+	counters                map[string]int64
 }
 
 // New validates the config, builds the un-run universe (swarm, mesh handle,
@@ -202,6 +232,33 @@ func New(cfg Config) (*Engine, error) {
 		eng.mesh = hm.NewPeerMesh(eng.swarm, cfg.Node)
 	}
 
+	// Bind the lawbook journal: the node's persistent knowledge substrate.
+	// Missing journal is a lawless node, not an error; corrupt lines are
+	// skipped so an interrupted write never bricks the whole book. This
+	// must land before the minds so the groundedness gate has clauses to
+	// measure against — and the gate must land before any mind is born so a
+	// declined counsel can be refused before its pool exists.
+	if loaded, skipped, lerr := hm.LawLoadJournal(cfg.LawJournal); lerr != nil {
+		return nil, fmt.Errorf("engine: law journal: %w", lerr)
+	} else if loaded > 0 || skipped > 0 {
+		if skipped > 0 {
+			fmt.Printf("📜 [LAW] journal %s: %d clauses loaded, %d corrupt lines skipped\n",
+				hm.LawJournalCurrent(), loaded, skipped)
+		} else {
+			fmt.Printf("📜 [LAW] %d clauses loaded from %s\n", loaded, hm.LawJournalCurrent())
+		}
+	}
+
+	// The groundedness gate: before any mind is born with a local counsel
+	// as primary voice, prove that counsel actually answers out of the
+	// lawbook. Deliberately opt-in and deliberately strict (every probe must
+	// ground). A dead daemon fails the gate open — stress must never gate a
+	// node's birth — and the verdict lands before the minds build their
+	// pools, so a denied counsel is refused up front.
+	if cfg.GroundednessGate {
+		eng.runCounselGate()
+	}
+
 	for _, name := range cfg.Minds {
 		eng.minds = append(eng.minds, hm.NewMind(name, eng.swarm))
 	}
@@ -214,21 +271,46 @@ func New(cfg Config) (*Engine, error) {
 	if cfg.HealthAddr != "" {
 		eng.health = hm.StartHealth(cfg.HealthAddr, cfg.Node, eng.swarm)
 	}
-
-	// Bind the lawbook journal: the node's persistent knowledge substrate.
-	// Missing journal is a lawless node, not an error; corrupt lines are
-	// skipped so an interrupted write never bricks the whole book.
-	if loaded, skipped, lerr := hm.LawLoadJournal(cfg.LawJournal); lerr != nil {
-		return nil, fmt.Errorf("engine: law journal: %w", lerr)
-	} else if loaded > 0 || skipped > 0 {
-		if skipped > 0 {
-			fmt.Printf("📜 [LAW] journal %s: %d clauses loaded, %d corrupt lines skipped\n",
-				hm.LawJournalCurrent(), loaded, skipped)
-		} else {
-			fmt.Printf("📜 [LAW] %d clauses loaded from %s\n", loaded, hm.LawJournalCurrent())
-		}
-	}
 	return eng, nil
+}
+
+// runCounselGate interrogates the local counsel against the bound lawbook.
+func (e *Engine) runCounselGate() {
+	clauses := hm.LawList()
+	if len(clauses) == 0 {
+		fmt.Println("⚖️  [GATE] skipped: no provisions to ground against - seed the lawbook first")
+		return
+	}
+	model, ok := language.CounselCandidate()
+	if !ok {
+		fmt.Println("⚖️  [GATE] skipped: no local counsel (no hivemind-tag model, no HIVEMIND_OLLAMA_MODEL)")
+		return
+	}
+	fmt.Printf("🛡️  [GATE] probing %s against %d provisions (strict: all probes must ground)…\n",
+		model, len(clauses))
+	passed, sc, gerr := train.GateModel(language.OllamaBase(), model, clauses)
+	e.gateGrounded, e.gateTotal = sc.Grounded, sc.Total
+	switch {
+	case errors.Is(gerr, train.ErrGateDaemonUnreachable):
+		// The daemon is under pressure or briefly down. Fail open: never
+		// stall the universe on a probe, never lock the pool by proxy.
+		fmt.Printf("⚖️  [GATE] skipped: daemon unreachable (%v) - staying on default pool logic\n", gerr)
+	case gerr != nil:
+		// The daemon answers but the pointed-at counsel is missing or
+		// failed its probes — that is a real, answerable verdict.
+		language.SetDeclineCounsel(fmt.Sprintf("%s (%v)", model, gerr))
+		e.gateState = "denied:" + model
+		fmt.Printf("🛡️  [GATE] counsel %s DENIED (%v) - cloud keyless pool stands in\n", model, gerr)
+	case passed:
+		e.gateState = "admitted:" + model
+		fmt.Printf("🛡️  [GATE] counsel %s admitted (grounded %d/%d) - fit to speak for the swarm\n",
+			model, sc.Grounded, sc.Total)
+	default:
+		language.SetDeclineCounsel(fmt.Sprintf("%s grounded %d/%d", model, sc.Grounded, sc.Total))
+		e.gateState = "denied:" + model
+		fmt.Printf("🛡️  [GATE] counsel %s DENIED (grounded %d/%d) - confabulation is grounds for silence\n",
+			model, sc.Grounded, sc.Total)
+	}
 }
 
 // Start launches the universe and returns once every unit is born. The mesh
@@ -318,6 +400,8 @@ func (e *Engine) Stats() Stats {
 	s.Counters.Thoughts = e.counters["thought"]
 	s.Counters.Replies = e.counters["reply"]
 	s.LawClauses = hm.LawStats()
+	s.Gate = e.gateState
+	s.GateGrounded, s.GateTotal = e.gateGrounded, e.gateTotal
 	return s
 }
 
