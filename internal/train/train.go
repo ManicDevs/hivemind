@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -175,7 +176,7 @@ func RenderModelfile(entries []hm.LawEntry, base, name, adapter string) string {
 	fmt.Fprintf(&b, "FROM %s\n", base)
 	b.WriteString("\nPARAMETER temperature 0.7\n")
 	b.WriteString("PARAMETER top_p 0.9\n")
-	b.WriteString("PARAMETER num_ctx 4096\n")
+	b.WriteString(fmt.Sprintf("PARAMETER num_ctx %d\n", modelContext()))
 	b.WriteString("PARAMETER num_predict 256\n")
 	if adapter != "" {
 		b.WriteString("\nADAPTER " + adapter + "\n")
@@ -192,6 +193,25 @@ func first8(id string) string {
 	}
 	return id
 }
+
+// modelContext returns the context window every counsel call and the baked
+// Modelfile run at. The window has to fit the whole lawbook: a book that
+// outgrows 4096 (llama2's native window) must raise this or the farthest
+// provisions fall out of attention and the counsel mis-answers. Env-tunable
+// so operators can keep the book whole without recompiling; 4096 is the
+// baseline that generations 8-10 were distilled and measured at.
+func modelContext() int {
+	if v := strings.TrimSpace(os.Getenv("HIVEMIND_NUM_CTX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 4096 {
+			return n
+		}
+	}
+	return 4096
+}
+
+// ModelContext is the exported form of modelContext, used by the CLI to build
+// the structured /api/create parameters exactly as the rendered Modelfile.
+func ModelContext() int { return modelContext() }
 
 // WriteDataset persists records as JSONL.
 func WriteDataset(path string, recs []Record) error {
@@ -367,7 +387,7 @@ func ask(base, model, question string) (Answer, error) {
 		"model":    model,
 		"stream":   false,
 		"messages": []map[string]any{{"role": "user", "content": question}},
-		"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256, "num_ctx": 4096},
+		"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256, "num_ctx": modelContext()},
 		"stop":     []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"},
 	})
 	budget := answerBudget()
@@ -538,7 +558,7 @@ func askBounded(base, model string, questions []string, budget time.Duration) ([
 			"model":    model,
 			"stream":   false,
 			"messages": []map[string]any{{"role": "user", "content": q}},
-			"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256, "num_ctx": 4096},
+			"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 256, "num_ctx": modelContext()},
 			"stop":     []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"},
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), budget)

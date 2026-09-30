@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,21 @@ const defaultLocalOllama = "http://127.0.0.1:11434"
 // prompts are deliberately concise; a private CPU box that might deliver
 // only a handful of tokens a second must not be asked for a wall of text.
 const localMaxTokens = 128
+
+// localContextWindow is the context the local counsel is dialed at. A counsel
+// distilled over the full two-jurisdiction lawbook needs its trained window
+// (HIVEMIND_NUM_CTX) or the farthest provisions slide out of attention and
+// the groundedness the lawbook gate guards is silently lost. The operator
+// must run the mesh at the same window the counsel was created with; 4096 is
+// the floor and the pre-full-book default.
+func localContextWindow() int {
+	if v := strings.TrimSpace(os.Getenv("HIVEMIND_NUM_CTX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 4096 {
+			return n
+		}
+	}
+	return 4096
+}
 
 // localViableWindow is the longest a local completion may take and still sit
 // at the front of the pool. The swarm's first genuine thought should not
@@ -156,7 +172,7 @@ func probeLocalCompletes(base, model string) (time.Duration, bool) {
 		"model":    model,
 		"stream":   false,
 		"think":    false,
-		"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 64, "num_ctx": 2048},
+		"options":  map[string]any{"temperature": 0.7, "top_p": 0.9, "num_predict": 64, "num_ctx": localContextWindow()},
 		"stop":     []string{"<|end|>", "<|endoftext|>", "<|user|>", "<|assistant|>", "<|system|>"},
 		"messages": []map[string]any{{"role": "user", "content": swarmShapedPrompt()}},
 	})

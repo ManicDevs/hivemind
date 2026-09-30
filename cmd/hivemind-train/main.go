@@ -73,7 +73,7 @@ func run() int {
 	if err := train.CreateModel(opt.OllamaBase, opt.ModelName, train.CreateOptions{
 		From:       opt.BaseModel,
 		System:     train.SystemBlock(clauses),
-		Parameters: map[string]any{"temperature": 0.7, "top_p": 0.9, "num_ctx": 4096, "num_predict": 256},
+		Parameters: map[string]any{"temperature": 0.7, "top_p": 0.9, "num_ctx": train.ModelContext(), "num_predict": 256},
 		Adapter:    opt.Adapter,
 		Legacy:     modelfile,
 	}); err != nil {

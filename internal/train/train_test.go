@@ -352,3 +352,24 @@ func TestBudgetDefaultsAndEnv(t *testing.T) {
 		t.Fatalf("malformed override must fall back, got %v", got)
 	}
 }
+
+func TestModelContext(t *testing.T) {
+	if got := modelContext(); got != 4096 {
+		t.Fatalf("default context = %d, want 4096", got)
+	}
+	t.Setenv("HIVEMIND_NUM_CTX", "8192")
+	if got := modelContext(); got != 8192 {
+		t.Fatalf("context override = %d, want 8192", got)
+	}
+	if got := ModelContext(); got != 8192 {
+		t.Fatalf("exported wrapper must see the same knob, got %d", got)
+	}
+	t.Setenv("HIVEMIND_NUM_CTX", "1024") // beneath llama2's native floor
+	if got := modelContext(); got != 4096 {
+		t.Fatalf("context below floor must clamp to default, got %d", got)
+	}
+	t.Setenv("HIVEMIND_NUM_CTX", "lots")
+	if got := modelContext(); got != 4096 {
+		t.Fatalf("malformed context must fall back, got %d", got)
+	}
+}

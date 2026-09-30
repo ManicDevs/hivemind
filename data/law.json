@@ -1,8 +1,103 @@
 [
   {
+    "source": "US Const. Preamble",
+    "tag": "union, justice",
+    "clause": "We the People of the United States, in Order to form a more perfect Union, establish Justice, insure domestic Tranquility, provide for the common defence, promote the general Welfare, and secure the Blessings of Liberty to ourselves and our Posterity, do ordain and establish this Constitution for the United States of America."
+  },
+  {
+    "source": "US Const. art. I § 1",
+    "tag": "legislative power",
+    "clause": "All legislative Powers herein granted shall be vested in a Congress of the United States, which shall consist of a Senate and House of Representatives."
+  },
+  {
+    "source": "US Const. art. I § 7 cl. 2",
+    "tag": "presentment, veto",
+    "clause": "Every Bill which shall have passed the House of Representatives and the Senate shall, before it become a Law, be presented to the President of the United States; if he approve he shall sign it, but if not he shall return it, with his Objections, to that House in which it shall have originated; and if after such Reconsideration two thirds of that House shall agree to pass the Bill, it shall be sent, together with the Objections, to the other House, by which it shall likewise be reconsidered, and if approved by two thirds of that House, it shall become a Law."
+  },
+  {
+    "source": "US Const. art. I § 8 cl. 18",
+    "tag": "necessary and proper",
+    "clause": "The Congress shall have Power to make all Laws which shall be necessary and proper for carrying into Execution the foregoing Powers, and all other Powers vested by this Constitution in the Government of the United States, or in any Department or Officer thereof."
+  },
+  {
+    "source": "US Const. art. I § 8 cl. 3",
+    "tag": "commerce",
+    "clause": "The Congress shall have Power To regulate Commerce with foreign Nations, and among the several States, and with the Indian Tribes."
+  },
+  {
+    "source": "US Const. art. I § 9 cl. 2",
+    "tag": "habeas corpus",
+    "clause": "The Privilege of the Writ of Habeas Corpus shall not be suspended, unless when in Cases of Rebellion or Invasion the public Safety may require it."
+  },
+  {
+    "source": "US Const. art. I § 9 cl. 3",
+    "tag": "attainder, ex post facto",
+    "clause": "No Bill of Attainder or ex post facto Law shall be passed."
+  },
+  {
+    "source": "US Const. art. I § 10 cl. 1",
+    "tag": "state limits, contracts",
+    "clause": "No State shall enter into any Treaty, Alliance, or Confederation; grant Letters of Marque and Reprisal; coin Money; emit Bills of Credit; make any Thing but gold and silver Coin a Tender in Payment of Debts; pass any Bill of Attainder, ex post facto Law, or Law impairing the Obligation of Contracts, or grant any Title of Nobility."
+  },
+  {
+    "source": "US Const. art. II § 1 cl. 1",
+    "tag": "executive power",
+    "clause": "The executive Power shall be vested in a President of the United States of America."
+  },
+  {
+    "source": "US Const. art. II § 2 cl. 1",
+    "tag": "commander in chief, pardon",
+    "clause": "The President shall be Commander in Chief of the Army and Navy of the United States, and of the Militia of the several States, when called into the actual Service of the United States; and he shall have Power to grant Reprieves and Pardons for Offences against the United States, except in Cases of Impeachment."
+  },
+  {
+    "source": "US Const. art. III § 1",
+    "tag": "judicial tenure",
+    "clause": "The Judges, both of the supreme and inferior Courts, shall hold their Offices during good Behaviour, and shall, at stated Times, receive for their Services, a Compensation, which shall not be diminished during their Continuance in Office."
+  },
+  {
+    "source": "US Const. art. III § 3 cl. 1",
+    "tag": "treason",
+    "clause": "Treason against the United States shall consist only in levying War against them, or in adhering to their Enemies, giving them Aid and Comfort. No Person shall be convicted of Treason unless on the Testimony of two Witnesses to the same overt Act, or on Confession in open Court."
+  },
+  {
+    "source": "US Const. art. II § 4",
+    "tag": "impeachment",
+    "clause": "The President, Vice President and all civil Officers of the United States, shall be removed from Office on Impeachment for, and Conviction of, Treason, Bribery, or other high Crimes and Misdemeanors."
+  },
+  {
+    "source": "US Const. art. IV § 4",
+    "tag": "republican government",
+    "clause": "The United States shall guarantee to every State in this Union a Republican Form of Government, and shall protect each of them against Invasion; and on Application of the Legislature, or of the Executive (when the Legislature cannot be convened) against domestic Violence."
+  },
+  {
+    "source": "US Const. art. VI cl. 2",
+    "tag": "supremacy",
+    "clause": "This Constitution, and the Laws of the United States which shall be made in Pursuance thereof, and all Treaties made, or which shall be made, under the Authority of the United States, shall be the supreme Law of the Land; and the Judges in every State shall be bound thereby, any Thing in the Constitution or Laws of any State to the Contrary notwithstanding."
+  },
+  {
+    "source": "US Const. art. VI cl. 3",
+    "tag": "oath, religious test",
+    "clause": "The Senators and Representatives before mentioned, and the Members of the several State Legislatures, and all executive and judicial Officers, both of the United States and of the several States, shall be bound by Oath or Affirmation, to support this Constitution; but no religious Test shall ever be required as a Qualification to any Office or public Trust under the United States."
+  },
+  {
     "source": "US Const. amend. I",
     "tag": "religion/speech",
     "clause": "Congress shall make no law respecting an establishment of religion, or prohibiting the free exercise thereof; or abridging the freedom of speech, or of the press; or the right of the people peaceably to assemble, and to petition the Government for a redress of grievances."
+  },
+  {
+    "source": "US Const. amend. II",
+    "tag": "militia, arms",
+    "clause": "A well regulated Militia, being necessary to the security of a free State, the right of the people to keep and bear Arms, shall not be infringed."
+  },
+  {
+    "source": "US Const. amend. III",
+    "tag": "quartering",
+    "clause": "No Soldier shall, in time of peace be quartered in any house, without the consent of the Owner, nor in time of war, but in a manner to be prescribed by law."
+  },
+  {
+    "source": "US Const. amend. IV",
+    "tag": "searches, warrants",
+    "clause": "The right of the people to be secure in their persons, houses, papers, and effects, against unreasonable searches and seizures, shall not be violated, and no Warrants shall issue, but upon probable cause, supported by Oath or affirmation, and particularly describing the place to be searched, and the persons or things to be seized."
   },
   {
     "source": "US Const. amend. V",
@@ -10,19 +105,69 @@
     "clause": "No person shall be held to answer for a capital, or otherwise infamous crime, unless on a presentment or indictment of a Grand Jury. Nor shall any person be subject for the same offence to be twice put in jeopardy of life or limb. Nor be deprived of life, liberty, or property, without due process of law; nor shall private property be taken for public use, without just compensation."
   },
   {
-    "source": "US Const. art. I § 9",
-    "tag": "habeas corpus",
-    "clause": "The Privilege of the Writ of Habeas Corpus shall not be suspended, unless when in Cases of Rebellion or Invasion the public Safety may require it."
+    "source": "US Const. amend. VI",
+    "tag": "speedy trial, counsel",
+    "clause": "In all criminal prosecutions, the accused shall enjoy the right to a speedy and public trial, by an impartial jury of the State and district wherein the crime shall have been committed; to be informed of the nature and cause of the accusation; to be confronted with the witnesses against him; to have compulsory process for obtaining witnesses in his favor, and to have the Assistance of Counsel for his defence."
   },
   {
-    "source": "US Const. art. I § 8",
-    "tag": "commerce",
-    "clause": "The Congress shall have Power To regulate Commerce with foreign Nations, and among the several States, and with the Indian Tribes."
+    "source": "US Const. amend. VIII",
+    "tag": "bail, punishments",
+    "clause": "Excessive bail shall not be required, nor excessive fines imposed, nor cruel and unusual punishments inflicted."
+  },
+  {
+    "source": "US Const. amend. X",
+    "tag": "reserved powers",
+    "clause": "The powers not delegated to the United States by the Constitution, nor prohibited by it to the States, are reserved to the States respectively, or to the people."
+  },
+  {
+    "source": "US Const. amend. XIII § 1",
+    "tag": "abolition",
+    "clause": "Neither slavery nor involuntary servitude, except as a punishment for crime whereof the party shall have been duly convicted, shall exist within the United States, or any place subject to their jurisdiction."
   },
   {
     "source": "US Const. amend. XIV § 1",
     "tag": "equal protection",
     "clause": "No State shall make or enforce any law which shall abridge the privileges or immunities of citizens of the United States; nor shall any State deprive any person of life, liberty, or property, without due process of law; nor deny to any person within its jurisdiction the equal protection of the laws."
+  },
+  {
+    "source": "US Const. amend. XV § 1",
+    "tag": "voting, race",
+    "clause": "The right of citizens of the United States to vote shall not be denied or abridged by the United States or by any State on account of race, color, or previous condition of servitude."
+  },
+  {
+    "source": "US Const. amend. XIX",
+    "tag": "voting, sex",
+    "clause": "The right of citizens of the United States to vote shall not be denied or abridged by the United States or by any State on account of sex."
+  },
+  {
+    "source": "US Civil Rights Act 1964 § 201(a)",
+    "tag": "public accommodations",
+    "clause": "All persons shall be entitled to the full and equal enjoyment of the goods, services, facilities, privileges, advantages, and accommodations of any place of public accommodation, without discrimination or segregation on the ground of race, color, religion, or national origin."
+  },
+  {
+    "source": "US Civil Rights Act 1964 § 703(a)(1)",
+    "tag": "employment discrimination",
+    "clause": "It shall be an unlawful employment practice for an employer to fail or refuse to hire or to discharge any individual, or otherwise to discriminate against any individual with respect to his compensation, terms, conditions, or privileges of employment, because of such individual's race, color, religion, sex, or national origin."
+  },
+  {
+    "source": "US Voting Rights Act 1965 § 2",
+    "tag": "voting, race",
+    "clause": "No voting qualification or prerequisite to voting, or standard, practice, or procedure shall be imposed or applied by any State or political subdivision in a manner which results in a denial or abridgement of the right of any citizen of the United States to vote on account of race or color."
+  },
+  {
+    "source": "US Sherman Act 1890 § 1",
+    "tag": "antitrust, restraint",
+    "clause": "Every contract, combination in the form of trust or otherwise, or conspiracy, in restraint of trade or commerce among the several States, or with foreign nations, is declared to be illegal."
+  },
+  {
+    "source": "US Sherman Act 1890 § 2",
+    "tag": "antitrust, monopoly",
+    "clause": "Every person who shall monopolize, or attempt to monopolize, or combine or conspire with any other person or persons, to monopolize any part of the trade or commerce among the several States, or with foreign nations, shall be deemed guilty of a felony."
+  },
+  {
+    "source": "US Administrative Procedure Act § 706(2)(A)",
+    "tag": "judicial review, agency",
+    "clause": "The reviewing court shall hold unlawful and set aside agency action, findings, and conclusions found to be arbitrary, capricious, an abuse of discretion, or otherwise not in accordance with law."
   },
   {
     "source": "Contract example §3.1",

@@ -46,8 +46,10 @@ func run() int {
 	// Ask in the streaming register: each answer prints the moment it lands,
 	// so a slow CPU daemon never looks frozen for ten minutes.
 	var answers []train.Answer
+	answered := 0
 	answers, err = train.EvaluateStreaming(ollama, model, questions, func(a train.Answer) {
-		fmt.Printf(" Q%d (%s)\n", len(answers)+1, a.Duration.Round(100_000_000))
+		answered++
+		fmt.Printf(" Q%d (%s)\n", answered, a.Duration.Round(100_000_000))
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "⚠️  evaluation failed: %v\n", err)

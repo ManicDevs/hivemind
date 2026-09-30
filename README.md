@@ -116,15 +116,36 @@ wide enough for a cold-loading counsel) and `HIVEMIND_ANSWER_BUDGET` (per
 `/api/chat`, default 10m); both are parsed as Go durations and malformed
 values fall back to the defaults.
 
-The lawbook is deliberately open law: alongside US Constitution clauses and
-a contract example, `data/law_statutes_uk.md` supplies UK public-domain and
-Open-Government-Licence instruments — Magna Carta 1297 cl. 29 (due process),
-Bill of Rights 1689 (suspending laws, crown levies, parliamentary speech),
-Act of Settlement 1701, and Human Rights Act 1998 s. 3 / Sch. 1 arts. 9-10
-(exact text; © Crown / OGL v3.0 for the HRA provisions). Seeding every
-source file grows one shared multi-jurisdiction book: 19 clauses in, and
-`hivemind-counsel` is retrained and re-evaluated across the whole corpus, so
-a single counsel answers from both the US and UK provisions.
+The lawbook is deliberately open law — the full organic library of two
+systems in one book. `data/law.json` carries the US Constitution (Preamble
+through the Articles, every ratified amendment from the Bill of Rights to the
+XIII/XIV/XV and XIX, plus the founding statutes: Civil Rights Act 1964
+Titles II and VII, Voting Rights Act 1965, Sherman Act, and the
+Administrative Procedure Act) and a contract example. `data/law_statutes_uk.md`
+carries the UK instruments — Magna Carta 1297 cll. 1 & 29, the Petition of
+Right 1628, Habeas Corpus Act 1679, the complete Bill of Rights 1689
+(articles 1-9 and 11-12, era spelling), Act of Settlement 1701 ss. 1-4, the
+Act of Union 1707, the Parliament Acts 1911/1949, the Representation of the
+People Acts 1918/1928, the Human Rights Act 1998 (s. 3, s. 4, s. 6 and
+Schedule 1 arts. 6, 8, 9, 10, 11, 14; © Crown / OGL v3.0), and the
+Constitutional Reform Act 2005 s. 3. Seeding every source file grows one
+shared book — 72 provisions — and `hivemind-counsel` is retrained and
+re-evaluated across the whole corpus, so a single counsel answers from both
+the US and UK provisions.
+
+A book that large outgrows llama2's native window, so the counsel is created
+and dialed at the same context: `HIVEMIND_NUM_CTX` (default **4096**, raised
+to **8192** for the full book; values below 4096 or malformed fall back).
+Every consumer reads the same knob — `hivemind-train` creation, the
+evaluation/duel harness, and the mesh's own local-counsel calls — so the
+groundedness the gate measures is the groundedness the swarm speaks with.
+Re-create the model whenever the corpus or the window changes.
+
+The two systems are cross-examined head-to-head with
+`hivemind-eval -probes …`: US-anchored and UK-anchored questions are each
+scored against the whole book, and *clash* probes demand both jurisdictions
+in one answer (establishment of religion, the bearing of arms) so the scorer
+punishes a counsel that reaches across the Atlantic for the wrong provision.
 
 ## Architecture
 
