@@ -9,13 +9,18 @@ package hivemind
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 )
 
@@ -248,6 +253,143 @@ func LawRetrieve(query string, k int) []LawExcerpt {
 func lawID(clause string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(clause)))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+// LawSourceFileKind classifies a seed path that LawParseFile understands.
+type LawSourceFileKind int
+
+const (
+	// LawJSON is an array of {id,source,tag,clause} objects.
+	LawJSON LawSourceFileKind = iota
+	// LawMarkdown is a light clause markup (see LawParseMarkdown).
+	LawMarkdown
+	// LawRemote is an http(s) URL fetched then parsed as clause text.
+	LawRemote
+)
+
+// ClassifyLawPath returns the parse kind for a seed argument. Unknown local
+// extensions are treated as markdown so a plain .txt statute still seeds.
+func ClassifyLawPath(p string) LawSourceFileKind {
+	if strings.HasPrefix(p, "http://") || strings.HasPrefix(p, "https://") {
+		return LawRemote
+	}
+	switch strings.ToLower(filepath.Ext(p)) {
+	case ".json":
+		return LawJSON
+	case ".md", ".markdown", ".txt":
+		return LawMarkdown
+	}
+	return LawMarkdown
+}
+
+// LawParseFile turns any supported seed input into provisions: JSON arrays
+// are decoded directly; markdown/text follows the light heading/Tag/paragraph
+// layout below; http(s) URLs are fetched (30s budget, redirects followed) and
+// parsed as clause text.
+func LawParseFile(p string, maxClauses int) ([]LawEntry, error) {
+	var raw []byte
+	switch ClassifyLawPath(p) {
+	case LawRemote:
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, "GET", p, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "hivemind-lawbook/1.0")
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("fetch %s: %w", p, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("fetch %s: HTTP %d", p, resp.StatusCode)
+		}
+		if raw, err = io.ReadAll(resp.Body); err != nil {
+			return nil, err
+		}
+	case LawJSON:
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		raw = data
+	default:
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil, err
+		}
+		raw = data
+	}
+
+	switch ClassifyLawPath(p) {
+	case LawJSON:
+		var entries []LawEntry
+		if err := json.Unmarshal(raw, &entries); err != nil {
+			return nil, fmt.Errorf("%s: %w", p, err)
+		}
+		return trimClauses(entries, maxClauses), nil
+	default:
+		return LawParseText(string(raw), filepath.Base(p), maxClauses)
+	}
+}
+
+func trimClauses(entries []LawEntry, max int) []LawEntry {
+	if max <= 0 || len(entries) <= max {
+		return entries
+	}
+	return entries[:max]
+}
+
+// LawParseText is the plain/markdown clause grammar, deliberately light so
+// a statute pasted from most sources seeds without surgery:
+//
+//	# Arbitrary Act of 1984            — a `#`/`##` heading opens a source
+//	Tag: privacy, records              — a Tag: line sets the current tag
+//
+//	Any paragraph of provisions        — blank-line separated paragraphs
+//	becomes one clause each.           — become clauses (source+tag current)
+//
+// Something you want kept as one...    — blockquotes read the same way.
+// Anything before a source heading lands under the file name.
+func LawParseText(text, fallbackSource string, maxClauses int) ([]LawEntry, error) {
+	source := fallbackSource
+	tag := ""
+	var entries []LawEntry
+	var buf []string
+	flush := func() {
+		clause := strings.Join(buf, " ")
+		clause = strings.TrimSpace(strings.Trim(clause, "*-_>`"))
+		if clause != "" {
+			entries = append(entries, LawEntry{Source: source, Tag: tag, Clause: clause})
+		}
+		buf = buf[:0]
+	}
+	scan := bufio.NewScanner(strings.NewReader(text))
+	scan.Buffer(make([]byte, 1<<20), 1<<20)
+	for scan.Scan() {
+		line := strings.TrimSpace(scan.Text())
+		switch {
+		case line == "":
+			flush()
+		case strings.HasPrefix(line, "#"):
+			flush()
+			if h := strings.TrimSpace(strings.TrimLeft(line, "#")); h != "" {
+				source = h
+			}
+		case strings.HasPrefix(strings.ToLower(line), "tag:"):
+			flush()
+			tag = strings.TrimSpace(line[4:])
+		default:
+			buf = append(buf, line)
+		}
+	}
+	if err := scan.Err(); err != nil {
+		return nil, err
+	}
+	flush()
+	out := trimClauses(entries, maxClauses)
+	return out, nil
 }
 
 // lawExcerptsFor retrieves the top knowledge excerpts for a mind's current

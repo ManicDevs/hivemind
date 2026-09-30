@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -33,11 +32,13 @@ Engine flags:
   -config <file.json>      overlay engine config from a JSON file
 
 Seed:
-  hivemind seed -journal data/law.journal clauses.json ...
-      clauses.json is an array of {"id","source","tag","clause"}. Every
-      provisioned clause grounds every compiled mind on every node bound
-      to the same journal; re-seeding is idempotent (clauses dedupe by
-      id, identical clause text derives a stable id).
+  hivemind seed -journal data/law.journal data.json statute.md https://…/statute.txt
+      Accepted sources: a JSON array of {"id","source","tag","clause"};
+      markdown/plain text (# headings name a source, "Tag:" lines tag the
+      next paragraph, blank-line paragraphs become clauses); or an http(s)
+      URL of clause text (fetched, 30s budget). Every provisioned clause
+      grounds every compiled mind on every node bound to the same journal;
+      re-seeding is idempotent (identical clause text derives a stable id).
 
 LLM wiring stays env-driven: the keyless pool (OVH/Kilo/Pollinations) and the
 measured local Ollama primary negotiate privileges at mind birth.
@@ -183,19 +184,9 @@ func runSeed(args []string) int {
 	fmt.Printf("📜 [LAW] journal %s: %d clauses already present (%d corrupt lines skipped)\n",
 		hm.LawJournalCurrent(), loaded, skipped)
 	for _, p := range files {
-		raw, err := os.ReadFile(p)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ %s: %v\n", p, err)
-			return 1
-		}
-		var entries []hm.LawEntry
-		if err := json.Unmarshal(raw, &entries); err != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ %s: %v\n", p, err)
-			return 1
-		}
-		n, perr := hm.ProvisionLawbook(entries)
+		n, perr := seedOne(p)
 		if perr != nil {
-			fmt.Fprintf(os.Stderr, "⚠️ provision: %v\n", perr)
+			fmt.Fprintf(os.Stderr, "⚠️ %s: %v\n", p, perr)
 			return 1
 		}
 		fmt.Printf("📜 [LAW] %s: provisioned %d new clauses -> total %d on journal\n",
@@ -205,6 +196,21 @@ func runSeed(args []string) int {
 		fmt.Printf("  [%-12s|%-16s] %s\n", e.ID, e.Source, clip(e.Clause, 72))
 	}
 	return 0
+}
+
+// seedOne pulls a single seed input (JSON array, markdown/text, or an
+// http(s) URL of statute text) into the lawbook. Idempotent across runs and
+// nodes: identical clause text derives a stable id, so a rebroadcast fleet
+// counts its law once.
+func seedOne(p string) (int, error) {
+	entries, err := hm.LawParseFile(p, 0)
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return 0, nil
+	}
+	return hm.ProvisionLawbook(entries)
 }
 
 func clip(s string, n int) string {

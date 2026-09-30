@@ -196,8 +196,8 @@ func TestLawExcerptsForEmptyMind(t *testing.T) {
 type lawEchoStub struct{}
 
 func (lawEchoStub) Generate(_ context.Context, prompt string) (string, error) { return prompt, nil }
-func (lawEchoStub) Name() string                                             { return "lawEchoStub" }
-func (lawEchoStub) Close() error                                             { return nil }
+func (lawEchoStub) Name() string                                              { return "lawEchoStub" }
+func (lawEchoStub) Close() error                                              { return nil }
 
 // A peer question is answered through the same production path a live node
 // uses: answerPeer mines the question into LawRetrieve, the retrieved
@@ -244,5 +244,112 @@ func TestAnswerPeerGroundsReplyInLawbook(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("no reply frame arrived on the swarm")
+	}
+}
+
+func TestLawParseTextGrammar(t *testing.T) {
+	src := `# US Const. amend. I
+Tag: religion, speech
+
+Congress shall make no law respecting an establishment of religion.
+
+or abridging the freedom of speech, or of the press.
+
+# Uniform Time Act
+Tag: time limits
+
+Claims arising under this act shall be brought within three years.`
+	entries, err := LawParseText(src, "fallback.txt", 0)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("parsed %d clauses, want 3: %+v", len(entries), entries)
+	}
+	if entries[0].Source != "US Const. amend. I" {
+		t.Errorf("first source = %q", entries[0].Source)
+	}
+	if entries[0].Tag != "religion, speech" {
+		t.Errorf("first tag = %q", entries[0].Tag)
+	}
+	if !strings.Contains(entries[0].Clause, "establishment of religion") ||
+		!strings.Contains(entries[1].Clause, "freedom of speech") {
+		t.Errorf("clause split wrong: %q / %q", entries[0].Clause, entries[1].Clause)
+	}
+	if entries[2].Source != "Uniform Time Act" || entries[2].Tag != "time limits" ||
+		!strings.Contains(entries[2].Clause, "within three years") {
+		t.Errorf("second source block wrong: %+v", entries[2])
+	}
+}
+
+func TestLawParseTextFallbackSourceAndBlockquotes(t *testing.T) {
+	src := `> Title preamble kept as text.
+
+The receiving party must keep all records confidential for three years.
+
+> A second clause in blockquote form.`
+	entries, err := LawParseText(src, "contract.txt", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("parsed %d, want 3", len(entries))
+	}
+	if entries[0].Source != "contract.txt" {
+		t.Errorf("fallback source %q, want contract.txt", entries[0].Source)
+	}
+	if entries[0].Clause == entries[1].Clause || entries[1].Clause == entries[2].Clause {
+		t.Fatal("paragraphs collapsed into one clause")
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Clause, ">") || strings.HasPrefix(e.Clause, "#") {
+			t.Errorf("marker leaked into clause: %q", e.Clause)
+		}
+	}
+}
+
+func TestLawParseFileDispatchesByExtension(t *testing.T) {
+	dir := t.TempDir()
+	wantClause := "nor deny any person equal protection of the laws."
+	jsonFile := filepath.Join(dir, "corpus.json")
+	if err := os.WriteFile(jsonFile, []byte(`[{"source":"X","tag":"eq","clause":"`+wantClause+`"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mdFile := filepath.Join(dir, "corpus.md")
+	if err := os.WriteFile(mdFile, []byte("# Statute\nTag: eq\n\n"+wantClause+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fromJSON, err := LawParseFile(jsonFile, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fromJSON) != 1 || fromJSON[0].Clause != wantClause || fromJSON[0].Source != "X" {
+		t.Fatalf("json dispatch wrong: %+v", fromJSON)
+	}
+	fromMD, err := LawParseFile(mdFile, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fromMD) != 1 || fromMD[0].Source != "Statute" {
+		t.Fatalf("md dispatch wrong: %+v", fromMD)
+	}
+
+	if got := ClassifyLawPath("https://example.com/x.md"); got != LawRemote {
+		t.Errorf("url classified %d, want LawRemote", got)
+	}
+	if got := ClassifyLawPath(filepath.Join(dir, "y.unknown")); got != LawMarkdown {
+		t.Errorf("unknown ext classified %d, want LawMarkdown", got)
+	}
+}
+
+func TestLawParseTextMaxClauses(t *testing.T) {
+	src := "A.\n\nB.\n\nC.\n"
+	entries, err := LawParseText(src, "f", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("maxClauses=2 yielded %d entries", len(entries))
 	}
 }

@@ -380,3 +380,99 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// ngramTokens splits text into a set of lowercase alphanumeric n-grams used
+// both for provenance scoring and (implicitly) for how well an answer
+// reuses a provision's words, not just its sentence shape.
+func ngramTokens(text string, n int) map[string]bool {
+	toks := splitWords(text)
+	if len(toks) == 0 {
+		return nil
+	}
+	out := make(map[string]bool)
+	for i := 0; i+n <= len(toks); i++ {
+		out[strings.Join(toks[i:i+n], " ")] = true
+	}
+	if out == nil {
+		out = map[string]bool{}
+	}
+	return out
+}
+
+// UngroundedAnswer is one evaluation answer that neither quoted any
+// provision verbatim nor reused enough of any provision's words to count as
+// grounded — surfaced for audit, not silently averaged away.
+type UngroundedAnswer struct {
+	Question string
+	Answer   string
+}
+
+// Scorecard reports how many live answers were grounded in provisioned text.
+type Scorecard struct {
+	Total      int
+	Grounded   int
+	Ungrounded []UngroundedAnswer
+}
+
+// ScoreGroundedness measures an answer against the whole lawbook. Grounded
+// means: the answer contains some provision verbatim (substring match of the
+// full clause), references a provision's audit handle, or reuses enough of a
+// provision's third-of-word n-grams (>=50% n-gram recall into any clause)
+// that it is recognisably quoting rather than confabulating. A model that
+// stitches clauses together with original prose still scores grounded; a
+// model that invents citations does not.
+func ScoreGroundedness(answers []Answer, clauses []hm.LawEntry) Scorecard {
+	books := make([]map[string]bool, 0, len(clauses))
+	for _, c := range clauses {
+		books = append(books, ngramTokens(c.Clause, 3))
+	}
+	var sc Scorecard
+	sc.Total = len(answers)
+	for _, a := range answers {
+		if groundedAnswer(a.Answer, clauses, books) {
+			sc.Grounded++
+			continue
+		}
+		sc.Ungrounded = append(sc.Ungrounded, UngroundedAnswer{Question: a.Question, Answer: a.Answer})
+	}
+	return sc
+}
+
+func groundedAnswer(answer string, clauses []hm.LawEntry, books []map[string]bool) bool {
+	ans := strings.ToLower(strings.TrimSpace(answer))
+	if ans == "" {
+		return false
+	}
+	for i, c := range clauses {
+		if c.ID != "" && strings.Contains(ans, c.ID[:min(len(c.ID), 8)]) {
+			return true
+		}
+		if strings.Contains(answer, c.Clause) {
+			return true
+		}
+		b := books[i]
+		if len(b) == 0 {
+			continue
+		}
+		hit := 0
+		for g := range ngramTokens(answer, 3) {
+			if b[g] {
+				hit++
+			}
+		}
+		if float64(hit)/float64(len(b)) >= 0.5 {
+			return true
+		}
+	}
+	return false
+}
+
+// GroundedAnswer tells whether one answer is grounded in the lawbook, in the
+// same register the scorecard uses — exposed so a CLI can stamp each verdict.
+func GroundedAnswer(a Answer, clauses []hm.LawEntry) bool {
+	books := make([]map[string]bool, 0, len(clauses))
+	for _, c := range clauses {
+		books = append(books, ngramTokens(c.Clause, 3))
+	}
+	return groundedAnswer(a.Answer, clauses, books)
+}

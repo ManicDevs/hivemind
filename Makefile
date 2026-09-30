@@ -76,7 +76,7 @@ build-hivemind-train build-train \
 fmt vet staticcheck lint tidy check \
 test test-concurrent test-race test-verbose test-full \
 audit \
-train train-dry \
+train train-dry eval \
 up up-nodes down restart kill rerun status \
 think think-fast think-long demo pain prove \
 	world world-down world-test \
@@ -135,6 +135,7 @@ help:
 	@echo ""
 	@printf "  \033[32m%-20s\033[0m %s\n" "train" "Distill the lawbook into a local counsel model (ollama create)"
 	@printf "  \033[32m%-20s\033[0m %s\n" "train-dry" "Write dataset + Modelfile without creating the model"
+	@printf "  \033[32m%-20s\033[0m %s\n" "eval" "Score counsel groundedness vs the lawbook (live, honest)"
 	@echo ""
 	@printf "  \033[34m%-20s\033[0m %s\n" "up" "Supervised mesh, N nodes"
 	@printf "  \033[34m%-20s\033[0m %s\n" "down" "Reap all hivemind, sweep sockets"
@@ -387,6 +388,13 @@ train: build-hivemind
 train-dry: build-hivemind
 	@echo "⚖️  Dry-run: $(LAW_JOURNAL) → dataset + modelfile only"
 	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go run ./cmd/hivemind-train -journal $(LAW_JOURNAL) -name $(TRAIN_MODEL)
+
+# eval: score how grounded the trained counsel really is. Every live answer
+# must quote a provision, cite its audit handle, or reuse enough of a
+# provision's words — confabulated citations fail the scorecard.
+eval: build-hivemind
+	@echo "⚖️  Scoring groundedness of $(TRAIN_MODEL) against $(LAW_JOURNAL)…"
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go run ./cmd/hivemind-eval -journal $(LAW_JOURNAL) -model $(TRAIN_MODEL)
 
 up: build
 	@mkdir -p $(LOG_DIR)

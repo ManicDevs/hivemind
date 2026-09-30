@@ -144,3 +144,69 @@ func TestWriteArtifactsCreateDirs(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestScoreGroundedness(t *testing.T) {
+	equalProtection := "nor deny to any person within its jurisdiction the equal protection of the laws."
+
+	cases := []struct {
+		name    string
+		answers []Answer
+		want    int
+	}{
+		{
+			name: "verbatim quote is grounded",
+			answers: []Answer{
+				{Question: "q", Answer: equalProtection},
+			},
+			want: 1,
+		},
+		{
+			name: "audit handle counts",
+			answers: []Answer{
+				{Question: "q", Answer: "See handle 11111111 above."},
+			},
+			want: 1,
+		},
+		{
+			name: "close paraphrase reuses the provision's words",
+			answers: []Answer{
+				{Question: "q", Answer: "A State may not deny to any person the equal protection of the laws."},
+			},
+			want: 1,
+		},
+		{
+			name: "invention is caught",
+			answers: []Answer{
+				{Question: "q", Answer: "The moon is made of cheese and no clause anywhere says otherwise."},
+			},
+			want: 0,
+		},
+		{
+			name: "empty answer is never grounded",
+			answers: []Answer{
+				{Question: "q", Answer: "  "},
+			},
+			want: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clauses := []hm.LawEntry{
+				{ID: "111111111111", Source: "US Const. amend. XIV", Clause: equalProtection},
+				{ID: "222222222222", Source: "US Const. amend. V", Clause: "nor be deprived of life, liberty, or property, without due process of law."},
+			}
+			sc := ScoreGroundedness(tc.answers, clauses)
+			if sc.Grounded != tc.want {
+				t.Errorf("grounded = %d, want %d (ungrounded: %+v)", sc.Grounded, tc.want, sc.Ungrounded)
+			}
+			// The per-answer verdict used by the CLI must agree, so the
+			// stamp on the screen never contradicts the scorecard.
+			if len(tc.answers) > 0 {
+				ga := GroundedAnswer(tc.answers[0], clauses)
+				if ga != (tc.want == 1) {
+					t.Errorf("GroundedAnswer = %v, want %v", ga, tc.want == 1)
+				}
+			}
+		})
+	}
+}
