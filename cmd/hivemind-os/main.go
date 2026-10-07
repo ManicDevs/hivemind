@@ -49,7 +49,11 @@ func run(platformName string, healthOnly bool, runFor time.Duration, heapLimit i
 	case "host":
 		p = platform.NewHost(os.Stdout, heapLimit)
 	case "fake":
-		p = platform.NewFake(heapLimit)
+		f := platform.NewFake(heapLimit)
+		// Tee to stdout: without this the fake console is a black hole and the
+		// operator sees no banner and no boot report at all.
+		f.MirrorTo(os.Stdout)
+		p = f
 	default:
 		return fmt.Errorf("unknown platform %q: want host or fake", platformName)
 	}
@@ -78,6 +82,11 @@ func run(platformName string, healthOnly bool, runFor time.Duration, heapLimit i
 	}
 
 	if healthOnly {
+		// Let the modules' Run goroutines actually start before sampling. A
+		// snapshot taken the instant Boot returns reports an empty heap because
+		// the goroutines have not been scheduled yet -- a true value, but a
+		// misleading one to read.
+		time.Sleep(settleDelay)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(sys.Health())
@@ -146,6 +155,21 @@ func (m *platformModule) Init(ctx context.Context, h kernel.Host) error {
 func (m *platformModule) Run(ctx context.Context) error {
 	t := time.NewTicker(500 * time.Millisecond)
 	defer t.Stop()
+	// Scratch memory, taken from the kernel's Host rather than from make().
+	//
+	// This exists to keep the Host.Heap() wiring honest under real execution: a
+	// module that never allocates would leave the heap line in the health
+	// snapshot permanently zero, so a broken Heap() would never be noticed.
+	// Holding the block rather than discarding it means the accounting reflects
+	// genuine live memory.
+	scratch, ok := m.h.Heap().Alloc(scratchBytes)
+	if !ok {
+		// A refusal is the allocator working, not a failure: the ceiling may be
+		// deliberately small.
+		m.h.Logger().Info("scratch refused at ceiling", "requested", scratchBytes)
+	}
+	defer m.h.Heap().Free(scratch)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -161,6 +185,15 @@ func (m *platformModule) Run(ctx context.Context) error {
 		}
 	}
 }
+
+// scratchBytes is the platform module's working set. Small on purpose: the point
+// is to hold real memory, not to measure throughput.
+const scratchBytes = 4096
+
+// settleDelay is how long -health waits for module goroutines to be scheduled
+// before sampling. It is a sampling concern, not a correctness one: the wiring is
+// proven deterministically by TestOSWiresSubstrateHeapToModules.
+const settleDelay = 100 * time.Millisecond
 
 func (m *platformModule) Stop(ctx context.Context) error {
 	m.h.Logger().Info("platform module offline")

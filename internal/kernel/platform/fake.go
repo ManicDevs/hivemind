@@ -2,6 +2,7 @@ package platform
 
 import (
 	"context"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +64,14 @@ func (f *Fake) ResetCount() int {
 // Out returns the captured console, so a test can assert on output directly.
 func (f *Fake) Out() *Buffer { return f.console }
 
+// MirrorTo tees console output to w while still capturing it, so the fake
+// substrate is watchable by a human as well as assertable by a test.
+func (f *Fake) MirrorTo(w io.Writer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.console.Mirror = w
+}
+
 // Advance moves the fake clock forward.
 func (f *Fake) Advance(d time.Duration) { f.clock.Advance(d) }
 
@@ -73,6 +82,12 @@ type Buffer struct {
 	// Flushed counts Flush calls, so a test can assert a buffered console was
 	// flushed rather than relying on process exit to do it.
 	Flushed int
+	// Mirror, when set, receives a copy of everything written.
+	//
+	// Without it a fake console is a black hole: output is captured for
+	// assertions but invisible to a human. Running hivemind-os with
+	// -platform fake and seeing no banner is exactly the gap this closes.
+	Mirror io.Writer
 }
 
 func NewBuffer() *Buffer { return &Buffer{} }
@@ -81,14 +96,24 @@ func (b *Buffer) Name() string { return "buffer" }
 
 func (b *Buffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	mirror := b.Mirror
+	b.buf.Write(p)
+	b.mu.Unlock()
+	if mirror != nil {
+		return mirror.Write(p)
+	}
+	return len(p), nil
 }
 
 func (b *Buffer) WriteString(s string) (int, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.WriteString(s)
+	mirror := b.Mirror
+	b.buf.WriteString(s)
+	b.mu.Unlock()
+	if mirror != nil {
+		return io.WriteString(mirror, s)
+	}
+	return len(s), nil
 }
 
 func (b *Buffer) Flush() error {

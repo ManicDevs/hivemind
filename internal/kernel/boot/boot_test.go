@@ -256,3 +256,64 @@ func (m *hungryModule) Init(ctx context.Context, h kernel.Host) error {
 
 func (m *hungryModule) Run(ctx context.Context) error  { return nil }
 func (m *hungryModule) Stop(ctx context.Context) error { return nil }
+
+// TestOSWiresSubstrateHeapToModules is the proof that a module's scratch memory
+// is accounted against the platform, not against a private Go-heap fallback.
+//
+// Found by running the OS rather than by reading it: the health snapshot
+// reported zero live bytes while the process was demonstrably holding memory,
+// because boot.New had never connected Platform.Heap() to the kernel. The OS
+// layer owns both sides, so it is the only place the two can be joined.
+func TestOSWiresSubstrateHeapToModules(t *testing.T) {
+	f := platform.NewFake(1 << 20)
+	k := kernel.New()
+
+	// A module that allocates a known amount from its Host and holds it.
+	const want = 8192
+	k.MustRegister(kernel.Descriptor{
+		Name:         "scratch",
+		Capabilities: []kernel.Capability{kernel.CapLog},
+	}, func(h kernel.Host) kernel.Module { return &scratchModule{bytes: want, ready: make(chan struct{})} })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := New(ctx, Config{Platform: f, Kernel: k}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the module to have allocated rather than sleeping a fixed time:
+	// a sleep would make this a flake waiting to happen.
+	// (The fake clock does not drive Run, so the channel is the sync point.)
+
+	s := f.Heap().Stats()
+	if s.AllocCount == 0 {
+		t.Fatalf("no allocation reached the substrate allocator: %+v", s)
+	}
+	if s.LiveBytes < want {
+		t.Errorf("live bytes = %d, want at least %d", s.LiveBytes, want)
+	}
+	if s.PeakBytes < want {
+		t.Errorf("peak bytes = %d, want at least %d", s.PeakBytes, want)
+	}
+}
+
+// scratchModule allocates once from its Host and announces it.
+type scratchModule struct {
+	bytes int
+	ready chan struct{}
+}
+
+func (m *scratchModule) Init(ctx context.Context, h kernel.Host) error {
+	b, ok := h.Heap().Alloc(m.bytes)
+	if !ok {
+		close(m.ready)
+		return nil
+	}
+	// Deliberately leaked: the point is that the bytes stay live and counted.
+	_ = b
+	close(m.ready)
+	return nil
+}
+
+func (m *scratchModule) Run(ctx context.Context) error  { <-ctx.Done(); return nil }
+func (m *scratchModule) Stop(ctx context.Context) error { return nil }

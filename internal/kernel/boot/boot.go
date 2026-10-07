@@ -102,6 +102,15 @@ func New(ctx context.Context, cfg Config) (*System, error) {
 	}
 	p, k := cfg.Platform, cfg.Kernel
 
+	// Connect the substrate to the kernel before anything starts.
+	//
+	// Without this the kernel falls back to its own Go-heap scratch allocator,
+	// so a module's working set is invisible to the platform's accounting: the
+	// health snapshot reports zero live bytes while the process is demonstrably
+	// holding memory. The OS layer owns both sides, so it is the only place
+	// where this can be wired correctly.
+	k.Memory = p.Heap()
+
 	// Reset before anything else: a console must be live before the banner, and
 	// a kernel must not start against uninitialised substrate.
 	if err := p.Reset(ctx); err != nil {
