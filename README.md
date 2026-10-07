@@ -150,10 +150,24 @@ punishes a counsel that reaches across the Atlantic for the wrong provision.
 ## Architecture
 
 - **Engine** — `internal/engine` orchestration: lifecycle, config schema, telemetry
+- **Persistence** — `internal/persistence`: soul blobs, tokens, bridges + the
+  apex `KernelMemory` epigenetic ledger
+- **Apex hyperkernel** — `internal/{consensus,netmesh,jit,migration,hive,gofer,
+  dispatcher,platform}`: raft-style quarantine consensus, AES-GCM mesh
+  telemetry, autonomous JIT stubs, encrypted live-migration packaging, sibling
+  intelligence, HMAC capability tokens, and the syscall dispatcher. Bootstrapped
+  during engine start (`bootstrapApexKernel`, sandboxed under `data/apex`);
+  failures are logged, never fatal to the mesh.
 - **28 Minds** across 7 continents (4 per region)
 - **Relay** — HTTP/MQTT bridge with TLS 1.2+ broker federation
 - **World/Fabric** — Orchestration and adaptive routing
 - **Gaze** — Real-time dashboard and telemetry
+- **bininspect** — `bininspect/` is a self-contained nested module (standard
+  library only) for static anti-analysis triage of PE and ELF binaries: section
+  entropy, W+X memory, header anomalies, anti-debug and process-injection
+  imports, VM/sandbox fingerprinting, stalling and timing checks, direct system
+  calls, and API hashing. It reads binaries and never executes them. See
+  [bininspect/README.md](bininspect/README.md).
 
 ## Documentation
 

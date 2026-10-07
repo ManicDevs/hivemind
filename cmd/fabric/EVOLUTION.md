@@ -1,5 +1,10 @@
 # fabric — Mutational Adaptation Pipeline
 
+Package-local execution record for `cmd/fabric`, as AGENTS.md §2.4 requires.
+Generation numbers here are unique to this file and start at 1; the
+repository-wide ledger is [`docs/EVOLUTION.md`](../../docs/EVOLUTION.md), whose
+generations are numbered independently and are not comparable to these.
+
 **Generation Number:** 2
 **Fitness Score:** 9/10 — all checks green except `go test -race`, which cannot execute here (no C toolchain in this Flatpak runtime; no package manager to install one). Proof substituted with mutation-tested concurrency tests. Detail in §3.
 

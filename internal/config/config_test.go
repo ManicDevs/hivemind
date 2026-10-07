@@ -74,10 +74,10 @@ node:
 
 func TestValidateRejectsBadValues(t *testing.T) {
 	paths := []string{
-		"node:\n  max_peers: -1\n",          // non-positive peers
-		"mesh:\n  port: 70000\n",             // out of range port
-		"storage:\n  max_blob_size: 0\n",     // non-positive blob
-		"compute:\n  max_cpu_percent: 101\n", // out of range cpu
+		"node:\n  max_peers: -1\n",                        // non-positive peers
+		"mesh:\n  port: 70000\n",                          // out of range port
+		"storage:\n  max_blob_size: 0\n",                  // non-positive blob
+		"compute:\n  max_cpu_percent: 101\n",              // out of range cpu
 		"health:\n  enabled: true\n  listen_addr: \"\"\n", // health on but address explicit-blanked
 	}
 	for i, content := range paths {
