@@ -1,6 +1,7 @@
 package bininspect
 
 import (
+	"context"
 	"debug/pe"
 	"encoding/binary"
 	"errors"
@@ -63,6 +64,9 @@ type peAnalysis struct {
 	rsrc io.ReaderAt
 	size int64
 	warn func(format string, args ...any)
+	// st carries cancellation and warning state. A pointer so both survive
+	// across the whole analysis without being threaded through every helper.
+	st *internalState
 }
 
 // rvaToOffset maps a relative virtual address to a file offset using the
@@ -108,7 +112,7 @@ func (p *peAnalysis) readAt(off int64, buf []byte) error {
 // and header anomaly checks. Import-derived findings depend on the import
 // directory resolving; when it does not, the reason is recorded in Stats.Warnings
 // rather than silently omitted.
-func analyzePE(rsrc io.ReaderAt, size int64, name string, modTime time.Time, st *internalState) (*Report, error) {
+func analyzePE(ctx context.Context, rsrc io.ReaderAt, size int64, name string, modTime time.Time, st *internalState) (*Report, error) {
 	f, err := pe.NewFile(rsrc)
 	if err != nil {
 		return nil, fmt.Errorf("pe: %w", err)
@@ -120,7 +124,7 @@ func analyzePE(rsrc io.ReaderAt, size int64, name string, modTime time.Time, st 
 		return nil, fmt.Errorf("pe identity: %w", err)
 	}
 
-	a := &peAnalysis{file: f, rsrc: rsrc, size: size}
+	a := &peAnalysis{file: f, rsrc: rsrc, size: size, st: st}
 	a.warn = func(format string, args ...any) {
 		st.warnf("pe: "+format, args...)
 	}
@@ -172,6 +176,11 @@ func (p *peAnalysis) sections() ([]SectionReport, int) {
 	out := make([]SectionReport, 0, len(p.file.Sections))
 	parsed := 0
 	for _, s := range p.file.Sections {
+		// Poll cancellation at section granularity: frequent enough to bound a
+		// scan, cheap enough to be free.
+		if p.st != nil && p.st.cancelled() {
+			break
+		}
 		flags := s.Characteristics
 		sec := SectionReport{
 			Name:        s.Name,
@@ -428,9 +437,18 @@ func (a *peAnalysis) findings(rep *Report, opts Options) []Finding {
 	// Whole-image marker sweep catches PE images where a marker sits outside a
 	// recognisable data section.
 	if opts.FullStringScan {
-		if buf := readRange(a.rsrc, 0, min64(a.size, opts.MaxScanBytes)); len(buf) > 0 {
-			f, _ := ScanVMMarkers(buf)
-			out = append(out, f...)
+		// The whole-image sweep is the most expensive stage, so it is guarded
+		// rather than assumed to finish. A cancelled scan still returns the
+		// findings gathered so far, with a warning marking them partial — a
+		// partial report beats an error for a triage pipeline.
+		switch {
+		case a.st != nil && a.st.cancelled():
+			a.warn("analysis cancelled during scan; findings are partial")
+		default:
+			if buf := readRange(a.rsrc, 0, min64(a.size, opts.MaxScanBytes)); len(buf) > 0 {
+				f, _ := ScanVMMarkers(buf)
+				out = append(out, f...)
+			}
 		}
 	}
 
@@ -652,6 +670,9 @@ func (a *peAnalysis) byteScanFindings(rep *Report) []Finding {
 		if !s.Execute || s.Size == 0 {
 			continue
 		}
+		if a.st != nil && a.st.cancelled() {
+			break
+		}
 		if s.Offset+s.Size > rep.Identity.Size {
 			continue
 		}
@@ -794,6 +815,9 @@ func (a *peAnalysis) markerFindings() []Finding {
 	for _, s := range a.file.Sections {
 		if s.Size == 0 || int64(s.Offset+s.Size) > a.size {
 			continue
+		}
+		if a.st != nil && a.st.cancelled() {
+			break
 		}
 		// Skip executable sections; markers live in data.
 		if s.Characteristics&scnMemExecute != 0 {

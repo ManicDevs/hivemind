@@ -1,6 +1,9 @@
 package bininspect
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // BenchmarkShannonEntropy measures the entropy hot loop. It is O(n) over the
 // input with a fixed 256-bucket histogram, so cost is dominated by memory
@@ -34,7 +37,7 @@ func BenchmarkAnalyzePE(b *testing.B) {
 	a := New(Options{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := a.AnalyzeBytes(img, "bench.exe"); err != nil {
+		if _, err := a.AnalyzeBytes(context.Background(), img, "bench.exe"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -46,7 +49,7 @@ func BenchmarkAnalyzeELF(b *testing.B) {
 	a := New(Options{})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := a.AnalyzeBytes(img, "bench.elf"); err != nil {
+		if _, err := a.AnalyzeBytes(context.Background(), img, "bench.elf"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -59,7 +62,7 @@ func BenchmarkAnalyzeFastPath(b *testing.B) {
 	a := New(Options{DisableByteScan: true})
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := a.AnalyzeBytes(img, "bench.exe"); err != nil {
+		if _, err := a.AnalyzeBytes(context.Background(), img, "bench.exe"); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -73,7 +76,7 @@ func BenchmarkAnalyzeParallel(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if _, err := a.AnalyzeBytes(img, "bench.exe"); err != nil {
+			if _, err := a.AnalyzeBytes(context.Background(), img, "bench.exe"); err != nil {
 				b.Fatal(err)
 			}
 		}

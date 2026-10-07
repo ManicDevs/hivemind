@@ -32,7 +32,7 @@ import "github.com/hivemind/bininspect"
 ```go
 a := bininspect.New(bininspect.Options{})
 
-rep, err := a.AnalyzePath("suspicious.exe")
+rep, err := a.AnalyzePath(ctx, "suspicious.exe")
 if err != nil {
     return err
 }
@@ -55,11 +55,82 @@ for _, action := range rep.Risk.RecommendedActions {
 For bytes already in hand:
 
 ```go
-rep, err := a.AnalyzeBytes(image, "upload.bin")
+rep, err := a.AnalyzeBytes(ctx, image, "upload.bin")
 ```
 
 Format is detected from file content, never from the extension, so a renamed
 sample is still classified correctly.
+
+---
+
+## Cancellation and deadlines
+
+Every entry point takes a `context.Context` first, because scanning a large
+image with `FullStringScan` set is long enough that a caller needs a bound.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+rep, err := a.AnalyzeReaderAt(ctx, r, size, "sample.bin", modTime)
+// err == context.DeadlineExceeded if the scan outran the deadline
+```
+
+Cancellation is polled at section granularity inside the scan loops, so a
+cancelled context returns in microseconds rather than finishing the work. A scan
+cancelled partway through still returns the findings gathered so far, with a
+warning marking them partial — a partial report carries real signal to a triage
+pipeline, whereas an error discards it.
+
+---
+
+## Exporting for SIEM ingestion
+
+`ExportJSON` is the supported serialisation path, so no consumer has to
+reconstruct either the struct shape or the envelope.
+
+```go
+payload, err := rep.ExportJSON()
+```
+
+Output is a self-describing envelope:
+
+```json
+{
+  "schema_version": "1",
+  "generator": "bininspect/1",
+  "format": "pe",
+  "exported_at": "2026-10-07T12:00:00Z",
+  "report": { "...": "..." }
+}
+```
+
+Options for finer control:
+
+```go
+rep.ExportJSONWith(bininspect.ExportOptions{
+    Indent:           false,  // pretty-print (roughly doubles the bytes)
+    Envelope:         true,   // false = bare Report, for a pinned consumer
+    ExportedAt:       "",     // omitted when zero, keeping output deterministic
+    IncludeZeroScore: false,  // see below
+})
+```
+
+Guarantees, each covered by a test:
+
+- **Deterministic.** Byte-identical across repeated calls, so a golden file or a
+  content hash over an event works. Compact output carries no trailing newline.
+- **`omitempty` is honoured.** A minimal report does not ship a wall of
+  null-valued keys, which is index overhead in most pipelines. Required fields —
+  and the booleans `is_library` / `stripped`, so `false` stays distinguishable
+  from absent — are always emitted.
+- **No HTML escaping.** A Windows path or a marker string containing `<`, `>`,
+  or `&` survives intact.
+- **Zero-risk is refused by default.** "Analysed, nothing found" and "never
+  analysed" must not look identical in a pipeline, so the first requires
+  `IncludeZeroScore: true` and says so in the error.
+
+`SchemaFields()` derives the field list by reflection, so the documented shape
+cannot drift from the struct.
 
 ---
 
@@ -198,7 +269,7 @@ a consumer reading the serialised JSON cannot mistake it for a trust anchor.
 
 ## Tests
 
-32 tests, ~81% statement coverage, standard library only.
+45 tests, ~82% statement coverage, standard library only.
 
 Both format parsers are exercised against **byte-exact hand-built PE32+ and ELF64
 images** (`pe_fixture_test.go`, `elf_fixture_test.go`) rather than mocks or
@@ -254,6 +325,12 @@ executable sections; marker scanning to data sections.
 
 ## Limits worth stating
 
+- **This library does not inspect the host.** It answers "does *this binary*
+  contain anti-analysis capability?" by reading a file. It does not answer "is
+  *this machine* a VM or sandbox right now?", which requires live hardware
+  probing (CPUID, ACPI, timing) rather than file parsing. The two are separate
+  products; conflating them would also forfeit the property that analysis is
+  hermetic and reproducible.
 - **No disassembly.** Byte-pattern matching cannot follow control flow, so a
   syscall reached through obfuscated dispatch may be missed.
 - **ELF symbol names are not resolved.** `debug/elf` does not decode the

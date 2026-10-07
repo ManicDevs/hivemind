@@ -2,6 +2,7 @@ package bininspect
 
 import (
 	"bytes"
+	"context"
 	"debug/elf"
 	"errors"
 	"fmt"
@@ -51,6 +52,17 @@ type internalState struct {
 	warnings []string
 	start    time.Time
 	opts     Options
+	// ctx carries cancellation into the per-section and per-byte scan loops.
+	// A large image with FullStringScan set can take long enough that a caller
+	// needs a deadline, and a scan that ignores cancellation cannot be bounded.
+	ctx context.Context
+}
+
+// cancelled reports whether the caller has given up. Scanning loops poll this
+// at section granularity, which is frequent enough to bound a scan without
+// costing measurable time.
+func (s *internalState) cancelled() bool {
+	return s.ctx != nil && s.ctx.Err() != nil
 }
 
 func (s *internalState) warnf(format string, args ...any) {
@@ -99,7 +111,7 @@ func (a *Analyzer) Options() Options { return a.opts }
 // The file is opened once and read through a single handle, so the bytes hashed
 // are the same bytes parsed — there is no time-of-check/time-of-use window
 // between identity and content.
-func (a *Analyzer) AnalyzePath(path string) (*Report, error) {
+func (a *Analyzer) AnalyzePath(ctx context.Context, path string) (*Report, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("bininspect: open %s: %w", path, err)
@@ -116,13 +128,13 @@ func (a *Analyzer) AnalyzePath(path string) (*Report, error) {
 
 	name := fi.Name()
 	modTime := fi.ModTime()
-	return a.AnalyzeReaderAt(f, fi.Size(), name, modTime)
+	return a.AnalyzeReaderAt(ctx, f, fi.Size(), name, modTime)
 }
 
 // AnalyzeBytes analyses an in-memory image. Convenient for engines that already
 // hold the bytes.
-func (a *Analyzer) AnalyzeBytes(b []byte, name string) (*Report, error) {
-	return a.AnalyzeReaderAt(bytes.NewReader(b), int64(len(b)), name, time.Time{})
+func (a *Analyzer) AnalyzeBytes(ctx context.Context, b []byte, name string) (*Report, error) {
+	return a.AnalyzeReaderAt(ctx, bytes.NewReader(b), int64(len(b)), name, time.Time{})
 }
 
 // AnalyzeReaderAt analyses an image through any io.ReaderAt.
@@ -132,7 +144,13 @@ func (a *Analyzer) AnalyzeBytes(b []byte, name string) (*Report, error) {
 //
 // This is the single entry point both format-specific analyzers are dispatched
 // from, which keeps format detection in exactly one place.
-func (a *Analyzer) AnalyzeReaderAt(r io.ReaderAt, size int64, name string, modTime time.Time) (*Report, error) {
+func (a *Analyzer) AnalyzeReaderAt(ctx context.Context, r io.ReaderAt, size int64, name string, modTime time.Time) (*Report, error) {
+	if ctx == nil {
+		return nil, errors.New("bininspect: nil context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if r == nil {
 		return nil, errors.New("bininspect: nil reader")
 	}
@@ -140,7 +158,7 @@ func (a *Analyzer) AnalyzeReaderAt(r io.ReaderAt, size int64, name string, modTi
 		return nil, errors.New("bininspect: empty input")
 	}
 
-	st := &internalState{start: time.Now(), opts: a.opts}
+	st := &internalState{start: time.Now(), opts: a.opts, ctx: ctx}
 
 	magic, err := readMagic(r, size)
 	if err != nil {
@@ -150,12 +168,12 @@ func (a *Analyzer) AnalyzeReaderAt(r io.ReaderAt, size int64, name string, modTi
 	var rep *Report
 	switch {
 	case isPEMagic(magic):
-		rep, err = analyzePE(r, size, name, modTime, st)
+		rep, err = analyzePE(ctx, r, size, name, modTime, st)
 		if err != nil {
 			return nil, err
 		}
 	case isELFMagic(magic):
-		rep, err = analyzeELF(r, size, name, modTime, st)
+		rep, err = analyzeELF(ctx, r, size, name, modTime, st)
 		if err != nil {
 			return nil, err
 		}
@@ -248,13 +266,13 @@ func min64(a, b int64) int64 {
 }
 
 // AnalyzeFile is a convenience wrapper that analyses path with default options.
-func AnalyzeFile(path string) (*Report, error) {
-	return New(Options{}).AnalyzePath(path)
+func AnalyzeFile(ctx context.Context, path string) (*Report, error) {
+	return New(Options{}).AnalyzePath(ctx, path)
 }
 
 // AnalyzeBytes analyses an in-memory image with default options.
-func AnalyzeBytes(b []byte, name string) (*Report, error) {
-	return New(Options{}).AnalyzeBytes(b, name)
+func AnalyzeBytes(ctx context.Context, b []byte, name string) (*Report, error) {
+	return New(Options{}).AnalyzeBytes(ctx, b, name)
 }
 
 // ensure elf is referenced even when the ELF analyzer is compiled out in a

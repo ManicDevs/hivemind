@@ -1,6 +1,7 @@
 package bininspect
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -11,7 +12,7 @@ import (
 // analyzePEFixture is a helper that analyses a fixture image with default options.
 func analyzePEFixture(t *testing.T, opts peFixtureOptions) *Report {
 	t.Helper()
-	rep, err := New(Options{}).AnalyzeBytes(buildPE(opts), "fixture.exe")
+	rep, err := New(Options{}).AnalyzeBytes(context.Background(), buildPE(opts), "fixture.exe")
 	if err != nil {
 		t.Fatalf("AnalyzeBytes(PE): %v", err)
 	}
@@ -20,7 +21,7 @@ func analyzePEFixture(t *testing.T, opts peFixtureOptions) *Report {
 
 func analyzeELFFixture(t *testing.T, opts elfFixtureOptions) *Report {
 	t.Helper()
-	rep, err := New(Options{}).AnalyzeBytes(buildELF(opts), "fixture.elf")
+	rep, err := New(Options{}).AnalyzeBytes(context.Background(), buildELF(opts), "fixture.elf")
 	if err != nil {
 		t.Fatalf("AnalyzeBytes(ELF): %v", err)
 	}
@@ -203,7 +204,7 @@ func TestPEHeaderAnomalies(t *testing.T) {
 func TestPEDisableByteScan(t *testing.T) {
 	img := buildPE(defaultPEFixture())
 
-	full, err := New(Options{}).AnalyzeBytes(img, "full.exe")
+	full, err := New(Options{}).AnalyzeBytes(context.Background(), img, "full.exe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +212,7 @@ func TestPEDisableByteScan(t *testing.T) {
 		t.Fatal("baseline fixture should detect a direct syscall")
 	}
 
-	fast, err := New(Options{DisableByteScan: true}).AnalyzeBytes(img, "fast.exe")
+	fast, err := New(Options{DisableByteScan: true}).AnalyzeBytes(context.Background(), img, "fast.exe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +274,7 @@ func TestELFStaticLinkingIsNoted(t *testing.T) {
 // recorded, and the format is reported as unknown.
 func TestUnknownFormatIsReportedNotPanicked(t *testing.T) {
 	junk := []byte("this is not a binary, it is a text file about binaries")
-	rep, err := New(Options{}).AnalyzeBytes(junk, "notes.txt")
+	rep, err := New(Options{}).AnalyzeBytes(context.Background(), junk, "notes.txt")
 	if err != nil {
 		t.Fatalf("AnalyzeBytes on non-binary failed: %v", err)
 	}
@@ -296,21 +297,27 @@ func TestUnknownFormatIsReportedNotPanicked(t *testing.T) {
 // panic.
 func TestMalformedInputIsRejected(t *testing.T) {
 	a := New(Options{})
-	if _, err := a.AnalyzeReaderAt(nil, 10, "x", zeroTime); err == nil {
+	ctx := context.Background()
+	if _, err := a.AnalyzeReaderAt(ctx, nil, 10, "x", zeroTime); err == nil {
 		t.Error("nil reader accepted")
 	}
-	if _, err := a.AnalyzeBytes(nil, "empty"); err == nil {
+	if _, err := a.AnalyzeBytes(ctx, nil, "empty"); err == nil {
 		t.Error("empty input accepted")
 	}
 	// A truncated PE header: MZ present but nothing usable after it.
 	truncated := []byte{'M', 'Z', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-	if _, err := a.AnalyzeBytes(truncated, "trunc.exe"); err == nil {
+	if _, err := a.AnalyzeBytes(ctx, truncated, "trunc.exe"); err == nil {
 		t.Error("truncated PE accepted without error")
 	}
 	// A truncated ELF header.
 	truncElf := []byte{0x7F, 'E', 'L', 'F', 2, 1, 1}
-	if _, err := a.AnalyzeBytes(truncElf, "trunc.elf"); err == nil {
+	if _, err := a.AnalyzeBytes(ctx, truncElf, "trunc.elf"); err == nil {
 		t.Error("truncated ELF accepted without error")
+	}
+	// A nil context must be rejected rather than panic: ctx is now required for
+	// cancellation, and a nil one would panic on the first ctx.Err() call.
+	if _, err := a.AnalyzeBytes(nil, []byte("MZ data here to pass the size check"), "nilctx"); err == nil {
+		t.Error("nil context accepted")
 	}
 }
 
@@ -325,7 +332,7 @@ func TestMalformedImportDirectoryIsBounded(t *testing.T) {
 	putUint32(dd[0:], 0x7F000000)
 	putUint32(dd[4:], 0x40)
 
-	rep, err := New(Options{}).AnalyzeBytes(img, "badimports.exe")
+	rep, err := New(Options{}).AnalyzeBytes(context.Background(), img, "badimports.exe")
 	if err != nil {
 		t.Fatalf("a malformed import table must not fail the whole analysis: %v", err)
 	}
@@ -353,7 +360,7 @@ func TestAnalyzerIsThreadSafe(t *testing.T) {
 	peImg := buildPE(defaultPEFixture())
 	elfImg := buildELF(defaultELFFixture())
 
-	baseline, err := a.AnalyzeBytes(peImg, "baseline.exe")
+	baseline, err := a.AnalyzeBytes(context.Background(), peImg, "baseline.exe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +383,7 @@ func TestAnalyzerIsThreadSafe(t *testing.T) {
 			} else {
 				img, name = elfImg, "concurrent.elf"
 			}
-			rep, err := a.AnalyzeBytes(img, name)
+			rep, err := a.AnalyzeBytes(context.Background(), img, name)
 			if err != nil {
 				errs <- err
 				return
@@ -482,7 +489,7 @@ func TestOptionsAreCopied(t *testing.T) {
 // TestZeroValueOptionsAreSafe verifies a caller can construct an Analyzer-like
 // usage with no configuration at all.
 func TestZeroValueOptionsAreSafe(t *testing.T) {
-	rep, err := AnalyzeBytes(buildPE(defaultPEFixture()), "zero.exe")
+	rep, err := AnalyzeBytes(context.Background(), buildPE(defaultPEFixture()), "zero.exe")
 	if err != nil {
 		t.Fatalf("package-level AnalyzeBytes failed: %v", err)
 	}

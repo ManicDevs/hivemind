@@ -1,6 +1,7 @@
 package bininspect
 
 import (
+	"context"
 	"debug/elf"
 	"fmt"
 	"io"
@@ -27,7 +28,7 @@ import (
 //   - opcode scanning of executable segments for direct system calls, which is
 //     especially relevant on ELF where the syscall convention is direct;
 //   - marker scanning for hypervisor and sandbox strings.
-func analyzeELF(rsrc io.ReaderAt, size int64, name string, modTime time.Time, st *internalState) (*Report, error) {
+func analyzeELF(ctx context.Context, rsrc io.ReaderAt, size int64, name string, modTime time.Time, st *internalState) (*Report, error) {
 	f, err := elf.NewFile(rsrc)
 	if err != nil {
 		return nil, fmt.Errorf("elf: %w", err)
@@ -39,7 +40,7 @@ func analyzeELF(rsrc io.ReaderAt, size int64, name string, modTime time.Time, st
 		return nil, fmt.Errorf("elf identity: %w", err)
 	}
 
-	a := &elfAnalysis{file: f, rsrc: rsrc, size: size}
+	a := &elfAnalysis{file: f, rsrc: rsrc, size: size, st: st}
 	a.warn = func(format string, args ...any) { st.warnf("elf: "+format, args...) }
 	opts := st.opts
 
@@ -69,11 +70,16 @@ func analyzeELF(rsrc io.ReaderAt, size int64, name string, modTime time.Time, st
 		findings = append(findings, a.byteScanFindings(rep)...)
 		findings = append(findings, a.markerFindings()...)
 	}
-	if opts.FullStringScan {
+	if opts.FullStringScan && !st.cancelled() {
 		if buf := readRange(rsrc, 0, min64(size, opts.MaxScanBytes)); len(buf) > 0 {
 			fs, _ := ScanVMMarkers(buf)
 			findings = append(findings, fs...)
 		}
+	} else if opts.FullStringScan {
+		// Cancelled mid-analysis. The report is still returned, with a warning,
+		// rather than discarding the findings gathered so far — a partial report
+		// is more useful to a triage pipeline than an error.
+		st.warnf("analysis cancelled during scan; findings are partial")
 	}
 
 	rep.Findings = findings
@@ -88,6 +94,7 @@ type elfAnalysis struct {
 	rsrc io.ReaderAt
 	size int64
 	warn func(format string, args ...any)
+	st   *internalState
 }
 
 // elfArchName renders a human-readable architecture string.
@@ -121,6 +128,9 @@ func (a *elfAnalysis) sections() ([]SectionReport, int) {
 	out := make([]SectionReport, 0, len(a.file.Sections))
 	parsed := 0
 	for _, s := range a.file.Sections {
+		if a.st != nil && a.st.cancelled() {
+			break
+		}
 		// SHT_NOBITS sections (BSS) occupy no file bytes, so there is nothing
 		// to measure; report them as empty rather than reading past the file.
 		if s.Type == elf.SHT_NOBITS {
@@ -398,6 +408,9 @@ func (a *elfAnalysis) byteScanFindings(rep *Report) []Finding {
 		if p.Type != elf.PT_LOAD || p.Flags&elf.PF_X == 0 || p.Filesz == 0 {
 			continue
 		}
+		if a.st != nil && a.st.cancelled() {
+			break
+		}
 		if int64(p.Off+p.Filesz) > a.size {
 			continue
 		}
@@ -430,6 +443,9 @@ func (a *elfAnalysis) markerFindings() []Finding {
 	for _, s := range a.file.Sections {
 		if s.Type == elf.SHT_NOBITS || s.FileSize == 0 {
 			continue
+		}
+		if a.st != nil && a.st.cancelled() {
+			break
 		}
 		if s.Flags&elf.SHF_EXECINSTR != 0 {
 			continue

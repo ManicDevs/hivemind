@@ -219,7 +219,7 @@ type RiskAssessment struct {
 	RecommendedActions []string `json:"recommended_actions"`
 }
 
-// Report is the unified output of an analysis.
+// Report is the unified output of an analysis. See UnifiedReport for the alias.
 type Report struct {
 	// Format is "pe", "elf", or "unknown".
 	Format string `json:"format"`
@@ -242,6 +242,11 @@ type Report struct {
 	Risk      RiskAssessment         `json:"risk"`
 	Stats     AnalysisStats          `json:"stats"`
 }
+
+// UnifiedReport is an alias for Report, provided for callers that name their
+// ingestion type after the payload. It carries identical fields and methods; a
+// value of either type satisfies both names.
+type UnifiedReport = Report
 
 // ImportedLibrary is a resolved module name from the import table.
 type ImportedLibrary struct {
