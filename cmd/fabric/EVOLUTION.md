@@ -5,8 +5,62 @@ Generation numbers here are unique to this file and start at 1; the
 repository-wide ledger is [`docs/EVOLUTION.md`](../../docs/EVOLUTION.md), whose
 generations are numbered independently and are not comparable to these.
 
-**Generation Number:** 2
-**Fitness Score:** 9/10 — all checks green except `go test -race`, which cannot execute here (no C toolchain in this Flatpak runtime; no package manager to install one). Proof substituted with mutation-tested concurrency tests. Detail in §3.
+**Generation Number:** 3
+**Fitness Score:** 10/10 — the race detector now runs. See Generation 3.
+
+## Generation 3 — the race detector, unlocked without a system compiler
+
+**Sensed environment:** unchanged and still cold, but the *verification*
+environment was the real constraint. Generations 1 and 2 both closed with
+`go test -race` unmet: the detector needs cgo, this box is a Flatpak runtime
+(`Freedesktop SDK 25.08`) with no `gcc`/`clang`/`tcc` and no package manager
+(`apt-get`, `pacman`, `apk`, `dnf` all absent). That left four commits'
+concurrency claims resting on logic and leak-tests alone.
+
+**Mutations applied:**
+
+- **`scripts/race.sh`.** A self-contained toolchain in a temp directory: no
+  system install, no residue beyond a deletable directory. Three things were
+  needed to make `-race` link:
+  1. `CC` must be a `zig cc` shim, because Go probes the compiler with
+     `$(CC) -E` and therefore never reaches zig's `cc` subcommand on its own.
+  2. zig does not export `__popcountdi2`, which Go's race runtime links
+     against. A two-function compiler-rt substitute is compiled and passed via
+     `CGO_LDFLAGS`.
+  3. `-linkmode=external` — Go's internal linker cannot resolve symbols from a
+     cgo archive; the external linker can.
+  If a real `gcc` is present the script detects it and uses it, so this is a
+  fallback, not a requirement.
+- The script defaults to `./...` rather than passing an empty package list,
+  which would otherwise have tested the repo root — not a Go package.
+
+**Measured, both modules:**
+
+| check | result |
+|---|---|
+| `./scripts/race.sh` (hivemind, 15 suites) | PASS — race-clean |
+| `./scripts/race.sh` (bininspect) | PASS — race-clean |
+| `internal/fabricsim` under `-race` | PASS (226s, ~3.5x the non-race cost) |
+| `internal/hivemind` under `-race` | PASS (105s) |
+| `cmd/fabric` under `-race` | PASS (1.3s) |
+
+The generations 1 and 2 substitute evidence — the exact-baseline goroutine-leak
+test and the 6,400-iteration limiter contention test — is now backed by the real
+detector rather than standing in for it.
+
+**Defect caught in the tooling while writing it:** the first version of
+`race.sh` ran bare `go test` when given no arguments, which tested the repo root
+and failed with `setup failed`. Only visible by actually running the script
+end to end; `bash -n` would not have caught it.
+
+**Fitness Score: 10/10.** No outstanding deduction.
+
+**Next mutation (Gen 4):** the sensor is still absent. With the fabric now
+emitting `node_id`, `peer`, `loss`, and per-hop backoff as slog fields, the
+cross-pollination target remains `auth_fail` versus `probes`: a node whose
+authentication failures climb while its probes stall is rotating its hourly key
+against a peer that has not, and that is now a two-field query over real logs
+once the stack is up.
 
 ## Generation 2 — full standard: budgets, typed context, bounded fan-out
 
