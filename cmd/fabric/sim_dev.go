@@ -14,7 +14,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -114,9 +114,11 @@ func startFabricSim(ctx context.Context, f *fabric, self NodeID) {
 
 	go func() {
 		if err := eng.Run(ctx); err != nil && err != context.Canceled {
-			log.Printf("[sim] %v", err)
+			slog.Default().ErrorContext(ctx, "simulator stopped",
+				slog.Any("error", err))
 		}
 	}()
-	log.Printf("[sim] adversarial matrix enabled: %d nodes, seed=%d",
-		eng.Topology().Len(), seed)
+	slog.Default().InfoContext(ctx, "adversarial matrix enabled",
+		slog.Int("nodes", eng.Topology().Len()),
+		slog.Uint64("seed", seed))
 }

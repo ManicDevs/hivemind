@@ -3,9 +3,16 @@
 // superpeer — no edges). Physical topology: FABRIC_ALLOW_WIDE=1
 // FABRIC_CONTINENTS=7 FABRIC_TIERS=4 (28 nodes).
 //
-// Pure Go (CGO_ENABLED=0). Standard library + golang.org/x/crypto only.
-// No external clouds, no central middlemen: every hop is a direct mTLS
+// Pure Go (CGO_ENABLED=0). Standard library + golang.org/x/crypto + x/sync
+// only. No external clouds, no central middlemen: every hop is a direct mTLS
 // stream over loopback.
+//
+// Concurrency: the node runs one errgroup supervisor. Every long-lived loop —
+// key rotation, metrics, traffic, accept, and each peer's read/write pair — is
+// a member, so the first error cancels the siblings and g.Wait() is the real
+// drain barrier before the process exits. Observability: every line is
+// structured slog carrying node_id/peer/loss attributes, so a cross-continent
+// sweep for latency or refused connections is a filter, not a regex.
 //
 // Build:
 //
@@ -42,7 +49,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"math/big"
 	mrand "math/rand"
@@ -57,6 +64,7 @@ import (
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
+	"golang.org/x/sync/errgroup"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -152,7 +160,10 @@ var (
 func loadContinents() int {
 	n := envClamp("FABRIC_CONTINENTS", 2, 1, 7)
 	if n > 2 && os.Getenv("FABRIC_ALLOW_WIDE") != "1" {
-		log.Printf("fabric: FABRIC_CONTINENTS=%d clamped to 2 (dev single-box); set FABRIC_ALLOW_WIDE=1 only on physical servers", n)
+		newLogger(nil).Warn("continent count clamped for single-box dev",
+			slog.Int("requested", n),
+			slog.Int("active", 2),
+			slog.String("unlock_env", "FABRIC_ALLOW_WIDE"))
 		return 2
 	}
 	return n
@@ -699,7 +710,7 @@ func newPeer(id NodeID, addr string) *peer {
 		id:     id,
 		addr:   addr,
 		weight: atomic.Uint64{},
-		sendCh: make(chan []byte, 64),
+		sendCh: make(chan []byte, peerQueueDepth),
 		closed: make(chan struct{}),
 	}
 	p.weight.Store(math.Float64bits(weightInit))
@@ -794,6 +805,18 @@ type fabric struct {
 	// present, in every build, and holds nothing synthetic.
 	tel *telemetry
 
+	// log is the node's structured logger. Every line carries node_id; calls
+	// add peer / weight / loss attrs. nil-safe: (f.log or slog.Default()).
+	log *slog.Logger
+
+	// grp supervises every long-lived loop in the node. The first error cancels
+	// the rest and g.Wait() is the drain barrier before shutdown returns.
+	grp *errgroup.Group
+
+	// limiter bounds simultaneously served inbound mTLS streams, so a peer
+	// that accepts faster than we can hand off cannot grow the process.
+	limiter *streamLimiter
+
 	// simGate, when non-nil, is a development-build hook that lets the
 	// adversarial matrix stop real traffic when it reaches its fail-closed
 	// seal. It is nil in a release build, where no simulator exists and the node
@@ -808,6 +831,8 @@ func newFabric(id *identity) (*fabric, error) {
 		id:      id,
 		peers:   make(map[NodeID]*peer),
 		reverse: make(map[NodeID]NodeID),
+		log:     newLogger(&id.self),
+		limiter: newStreamLimiter(maxConcurrentStreams),
 	}
 	k, err := deriveHourlyKeys(id.seed, currentHour())
 	if err != nil {
@@ -817,20 +842,60 @@ func newFabric(id *identity) (*fabric, error) {
 	return f, nil
 }
 
+// logger returns the node's structured logger, never nil.
+func (f *fabric) logger() *slog.Logger {
+	if f.log == nil {
+		return slog.Default()
+	}
+	return f.log
+}
+
+// start binds the supervisor group to the node's lifetime context. Every
+// long-lived loop is registered here, so cancellation reaches all of them and
+// g.Wait() reports the first real failure.
+//
+// The node's logger is bound into the group context, so every loop resolves it
+// with loggerFrom(ctx) and its lines carry node_id without each loop having to
+// remember to add it.
+func (f *fabric) start() {
+	f.grp, f.ctx = errgroup.WithContext(WithLogger(f.ctx, f.logger()))
+}
+
+// spawn registers a long-lived loop with the supervisor.
+func (f *fabric) spawn(fn func(context.Context) error) {
+	f.grp.Go(func() error { return fn(f.ctx) })
+}
+
+// Wait blocks until every supervised loop has returned, returning the first
+// non-nil error (context cancellation is not a failure).
+func (f *fabric) Wait() error {
+	err := f.grp.Wait()
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
 func (f *fabric) currentKeys() *hourKeys { return f.keys.Load() }
 
 // keyRotator swaps keys on the hour boundary.
-func (f *fabric) keyRotator(ctx context.Context) {
+//
+// Mutation: this used time.After inside the loop, allocating a fresh timer
+// every minute for the lifetime of the process. A ticker with a deferred Stop
+// allocates once.
+func (f *fabric) keyRotator(ctx context.Context) error {
+	t := time.NewTicker(keyCheckInterval)
+	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(time.Minute):
+			return nil
+		case <-t.C:
 			h := currentHour()
 			if f.currentKeys().hour != h {
 				if k, err := deriveHourlyKeys(f.id.seed, h); err == nil {
 					f.keys.Store(k)
-					log.Printf("[keys] rotated to hour %d", h)
+					f.logger().InfoContext(ctx, "keys rotated", slog.Int64("hour", h))
 				}
 			}
 		}
@@ -838,7 +903,7 @@ func (f *fabric) keyRotator(ctx context.Context) {
 }
 
 // getOrCreatePeer lazily dials and registers an outgoing stream.
-func (f *fabric) getOrCreatePeer(dst NodeID) (*peer, error) {
+func (f *fabric) getOrCreatePeer(ctx context.Context, dst NodeID) (*peer, error) {
 	if dst == f.id.self {
 		return nil, errors.New("self")
 	}
@@ -860,17 +925,17 @@ func (f *fabric) getOrCreatePeer(dst NodeID) (*peer, error) {
 	p.tel = f.tel
 	f.tel.recordPeerAdded()
 
-	d := &net.Dialer{Timeout: 3 * time.Second}
-	raw, err := d.DialContext(f.ctx, "tcp", addr)
+	d := &net.Dialer{Timeout: dialTimeout}
+	raw, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("dial %s: %w", addr, err)
 	}
 	tc := tls.Client(raw, f.id.clientTLS())
-	if err := tc.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+	if err := tc.SetDeadline(time.Now().Add(handshakeTimeout)); err != nil {
 		raw.Close()
 		return nil, err
 	}
-	if err := tc.HandshakeContext(f.ctx); err != nil {
+	if err := tc.HandshakeContext(ctx); err != nil {
 		raw.Close()
 		return nil, fmt.Errorf("mtls %s: %w", addr, err)
 	}
@@ -880,8 +945,10 @@ func (f *fabric) getOrCreatePeer(dst NodeID) (*peer, error) {
 	p.conn = tc
 	f.peers[dst] = p
 
-	go f.writeLoop(p)
-	go f.readLoop(p)
+	// The peer is now owned by the supervisor: both loops live in the group,
+	// so shutdown waits for them instead of racing process exit.
+	f.spawn(func(ctx context.Context) error { return f.writeLoop(ctx, p) })
+	f.spawn(func(ctx context.Context) error { return f.readLoop(ctx, p) })
 
 	// Kick a probe so the remote registers reverse path.
 	_ = f.sendOn(p, cellHdr{
@@ -891,18 +958,22 @@ func (f *fabric) getOrCreatePeer(dst NodeID) (*peer, error) {
 		Prev: f.id.self,
 	}, nil)
 
-	log.Printf("[link] ↑ %s  w=%.3f  %s", dst, p.getWeight(), addr)
+	loggerFrom(ctx).InfoContext(ctx, "link up",
+		slog.String("peer", dst.String()),
+		slog.Float64("weight", p.getWeight()),
+		slog.String("addr", addr),
+		slog.String("dir", "out"))
 	return p, nil
 }
 
 // writeLoop drains sealed frames onto the TLS socket.
-func (f *fabric) writeLoop(p *peer) {
+func (f *fabric) writeLoop(ctx context.Context, p *peer) error {
 	for {
 		select {
-		case <-f.ctx.Done():
-			return
+		case <-ctx.Done():
+			return nil
 		case <-p.closed:
-			return
+			return nil
 		case wire := <-p.sendCh:
 			start := time.Now()
 			p.writeMu.Lock()
@@ -913,28 +984,28 @@ func (f *fabric) writeLoop(p *peer) {
 			if !ok {
 				p.close()
 				f.dropPeer(p.id)
-				return
+				return nil
 			}
 		}
 	}
 }
 
 // readLoop decrypts inbound cells and dispatches them.
-func (f *fabric) readLoop(p *peer) {
+func (f *fabric) readLoop(ctx context.Context, p *peer) error {
 	defer func() {
 		p.close()
 		f.dropPeer(p.id)
 	}()
-	buf := make([]byte, 8192)
+	buf := make([]byte, readBufferSize)
 	for {
 		select {
-		case <-f.ctx.Done():
-			return
+		case <-ctx.Done():
+			return nil
 		case <-p.closed:
-			return
+			return nil
 		default:
 		}
-		_ = p.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		_ = p.conn.SetReadDeadline(time.Now().Add(readIdleTimeout))
 		n, err := p.conn.Read(buf)
 		if err != nil {
 			if err != io.EOF {
@@ -943,11 +1014,11 @@ func (f *fabric) readLoop(p *peer) {
 					continue
 				}
 			}
-			return
+			return nil
 		}
 		wire := make([]byte, n)
 		copy(wire, buf[:n])
-		f.handleWire(p, wire)
+		f.handleWire(ctx, p, wire)
 	}
 }
 
@@ -984,7 +1055,7 @@ func (f *fabric) sendOn(p *peer, hdr cellHdr, payload []byte) error {
 }
 
 // softmaxNextHop selects an outgoing peer by Softmax over SynapticWeights.
-func (f *fabric) softmaxNextHop(exclude map[NodeID]bool) (*peer, error) {
+func (f *fabric) softmaxNextHop(ctx context.Context, exclude map[NodeID]bool) (*peer, error) {
 	cands := routePeers(f.id.self)
 	type pair struct {
 		p *peer
@@ -995,7 +1066,7 @@ func (f *fabric) softmaxNextHop(exclude map[NodeID]bool) (*peer, error) {
 		if exclude != nil && exclude[c] {
 			continue
 		}
-		p, err := f.getOrCreatePeer(c)
+		p, err := f.getOrCreatePeer(ctx, c)
 		if err != nil {
 			continue // dial failed — not a live candidate
 		}
@@ -1017,18 +1088,18 @@ func (f *fabric) softmaxNextHop(exclude map[NodeID]bool) (*peer, error) {
 }
 
 // forwardData performs one hop: choose next via softmax, stamp metrics, send.
-func (f *fabric) forwardData(hdr cellHdr, payload []byte, visited map[NodeID]bool) error {
+func (f *fabric) forwardData(ctx context.Context, hdr cellHdr, payload []byte, visited map[NodeID]bool) error {
 	// Terminal: we are the destination.
 	if hdr.Dst == f.id.self {
-		return f.onDeliver(hdr, payload)
+		return f.onDeliver(ctx, hdr, payload)
 	}
 
 	// At a Master with high measured loss on the ingress path → FEEDBACK.
 	if f.id.self.Tier == tierMaster && hdr.Loss >= feedbackLossThreshold {
-		f.emitFeedback(hdr)
+		f.emitFeedback(ctx, hdr)
 	}
 
-	next, err := f.softmaxNextHop(visited)
+	next, err := f.softmaxNextHop(ctx, visited)
 	if err != nil {
 		return err
 	}
@@ -1047,7 +1118,7 @@ func (f *fabric) forwardData(hdr cellHdr, payload []byte, visited map[NodeID]boo
 }
 
 // onDeliver is the Tier-1 Master sink (or any Dst match).
-func (f *fabric) onDeliver(hdr cellHdr, payload []byte) error {
+func (f *fabric) onDeliver(ctx context.Context, hdr cellHdr, payload []byte) error {
 	// A DATA cell that reached its declared destination here. Counted for every
 	// origin, because the destination is the only place in the protocol where
 	// delivery is observable at all — nothing acknowledges a cell back to the
@@ -1059,11 +1130,14 @@ func (f *fabric) onDeliver(hdr cellHdr, payload []byte) error {
 	if loss == 0 {
 		loss = computeLoss(hdr.LatencyUsToDuration(), hdr.DropRate)
 	}
-	log.Printf("[rx] %s→%s type=%#x loss=%.2f pay=%d",
-		hdr.Src, f.id.self, hdr.Type, loss, len(payload))
+	loggerFrom(ctx).InfoContext(ctx, "cell delivered",
+		slog.String("from", hdr.Src.String()),
+		slog.Uint64("frame_type", uint64(hdr.Type)),
+		slog.Float64("loss", loss),
+		slog.Int("payload_bytes", len(payload)))
 
 	if f.id.self.Tier == tierMaster && loss >= feedbackLossThreshold {
-		f.emitFeedback(hdr)
+		f.emitFeedback(ctx, hdr)
 	}
 	return nil
 }
@@ -1075,7 +1149,7 @@ func (h cellHdr) LatencyUsToDuration() time.Duration {
 
 // emitFeedback sends a FEEDBACK frame backward down the open
 // virtual stream (Prev chain), triggering gradient descent on each hop.
-func (f *fabric) emitFeedback(orig cellHdr) {
+func (f *fabric) emitFeedback(ctx context.Context, orig cellHdr) {
 	f.fbMu.Lock()
 	if time.Since(f.lastFbAt) < time.Second {
 		f.fbMu.Unlock()
@@ -1095,12 +1169,12 @@ func (f *fabric) emitFeedback(orig cellHdr) {
 	}
 	// Payload carries the degraded route for auditing.
 	meta := fmt.Sprintf("fb loss=%.2f src=%s dst=%s", orig.Loss, orig.Src, orig.Dst)
-	_ = f.routeBackward(fb, []byte(meta), map[NodeID]bool{f.id.self: true})
+	_ = f.routeBackward(ctx, fb, []byte(meta), map[NodeID]bool{f.id.self: true})
 }
 
 // routeBackward pushes FEEDBACK toward the origin, applying Gradient
 // Descent on every intermediate SynapticWeight.
-func (f *fabric) routeBackward(hdr cellHdr, payload []byte, visited map[NodeID]bool) error {
+func (f *fabric) routeBackward(ctx context.Context, hdr cellHdr, payload []byte, visited map[NodeID]bool) error {
 	if hdr.Dst == f.id.self {
 		return nil // reached origin
 	}
@@ -1116,7 +1190,7 @@ func (f *fabric) routeBackward(hdr cellHdr, payload []byte, visited map[NodeID]b
 
 	if next == nil {
 		var err error
-		next, err = f.softmaxNextHop(visited)
+		next, err = f.softmaxNextHop(ctx, visited)
 		if err != nil {
 			return err
 		}
@@ -1126,7 +1200,11 @@ func (f *fabric) routeBackward(hdr cellHdr, payload []byte, visited map[NodeID]b
 	oldW := next.getWeight()
 	newW := gradientDescent(oldW, hdr.Loss, learnRateDown)
 	next.setWeight(newW)
-	log.Printf("[bp] %s w %.3f→%.3f  loss=%.2f", next.id, oldW, newW, hdr.Loss)
+	loggerFrom(ctx).InfoContext(ctx, "backprop applied",
+		slog.String("peer", next.id.String()),
+		slog.Float64("weight_before", oldW),
+		slog.Float64("weight_after", newW),
+		slog.Float64("loss", hdr.Loss))
 
 	visited[f.id.self] = true
 	hdr.Prev = f.id.self
@@ -1134,7 +1212,7 @@ func (f *fabric) routeBackward(hdr cellHdr, payload []byte, visited map[NodeID]b
 }
 
 // handleWire decrypts and dispatches an inbound frame.
-func (f *fabric) handleWire(from *peer, wire []byte) {
+func (f *fabric) handleWire(ctx context.Context, from *peer, wire []byte) {
 	plain, err := openCell(f.currentKeys(), wire)
 	if err != nil {
 		// Hour boundary skew: try previous hour once.
@@ -1145,7 +1223,9 @@ func (f *fabric) handleWire(from *peer, wire []byte) {
 			// A real authentication failure on the wire. This is a measurement
 			// about a frame that actually arrived, so it is recorded as such.
 			f.tel.recordAuthFailure()
-			log.Printf("[crypto] open failed from %s: %v", from.id, err)
+			loggerFrom(ctx).ErrorContext(ctx, "cell failed authentication",
+				slog.String("peer", from.id.String()),
+				slog.Any("error", err))
 			return
 		}
 	}
@@ -1172,17 +1252,23 @@ func (f *fabric) handleWire(from *peer, wire []byte) {
 		oldW := from.getWeight()
 		newW := gradientDescent(oldW, hdr.Loss, learnRateDown)
 		from.setWeight(newW)
-		log.Printf("[bp-recv] from=%s w %.3f→%.3f loss=%.2f", hdr.Src, oldW, newW, hdr.Loss)
+		loggerFrom(ctx).InfoContext(ctx, "feedback received",
+			slog.String("from", hdr.Src.String()),
+			slog.Float64("weight_before", oldW),
+			slog.Float64("weight_after", newW),
+			slog.Float64("loss", hdr.Loss))
 		// Continue walking back toward origin.
 		visited := map[NodeID]bool{f.id.self: true}
-		_ = f.routeBackward(hdr, payload, visited)
+		_ = f.routeBackward(ctx, hdr, payload, visited)
 	case frameData:
 		visited := map[NodeID]bool{f.id.self: true}
 		if hdr.Prev != (NodeID{}) {
 			visited[hdr.Prev] = true
 		}
-		if err := f.forwardData(hdr, payload, visited); err != nil {
-			log.Printf("[fwd] err: %v", err)
+		if err := f.forwardData(ctx, hdr, payload, visited); err != nil {
+			loggerFrom(ctx).WarnContext(ctx, "forward failed",
+				slog.String("dst", hdr.Dst.String()),
+				slog.Any("error", err))
 			f.tel.recordInjectError()
 		}
 	default:
@@ -1194,6 +1280,10 @@ func (f *fabric) handleWire(from *peer, wire []byte) {
 // Sink rotates across active Master nodes so every continent in the set
 // exercises final-hop delivery.
 func (f *fabric) Inject(payload []byte) error {
+	return f.inject(f.ctx, payload)
+}
+
+func (f *fabric) inject(ctx context.Context, payload []byte) error {
 	seq := f.seq.Add(1)
 	dstCont := int(f.sink.Add(1)%uint32(activeContinents)) + 1
 	hdr := cellHdr{
@@ -1208,7 +1298,7 @@ func (f *fabric) Inject(payload []byte) error {
 	// node. Counting it in sendOn instead would inflate the figure once per
 	// relay hop, since a forwarded cell passes through every node on the path.
 	f.tel.recordInjected()
-	if err := f.forwardData(hdr, payload, visited); err != nil {
+	if err := f.forwardData(ctx, hdr, payload, visited); err != nil {
 		f.tel.recordInjectError()
 		return err
 	}
@@ -1229,52 +1319,100 @@ func (f *fabric) InjectTo(dst NodeID, payload []byte) error {
 	// node. Counting it in sendOn instead would inflate the figure once per
 	// relay hop, since a forwarded cell passes through every node on the path.
 	f.tel.recordInjected()
-	if err := f.forwardData(hdr, payload, visited); err != nil {
+	if err := f.forwardData(f.ctx, hdr, payload, visited); err != nil {
 		f.tel.recordInjectError()
 		return err
 	}
 	return nil
 }
 
-// listen starts the mTLS server on this node's matrix address.
+// listen binds the mTLS server on this node's matrix address.
 func (f *fabric) listen() error {
 	ln, err := tls.Listen("tcp", f.id.addr, f.id.serverTLS())
 	if err != nil {
 		return fmt.Errorf("listen %s: %w", f.id.addr, err)
 	}
 	f.ln = ln
-	log.Printf("[listen] mTLS 1.3  %s  node=%s", f.id.addr, f.id.self)
-
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				select {
-				case <-f.ctx.Done():
-					return
-				default:
-					log.Printf("[accept] %v", err)
-					continue
-				}
-			}
-			go f.serveConn(conn)
-		}
-	}()
+	f.logger().InfoContext(f.ctx, "mTLS listener bound",
+		slog.String("addr", f.id.addr),
+		slog.String("tls", "1.3"))
 	return nil
 }
 
+// acceptLoop is the node-scoped accept path.
+//
+// Mutation: this was a bare `for { ln.Accept() }` in a goroutine with no
+// supervisor and a `continue` that spun hot on any non-shutdown error. It is
+// now an error-returning member of the errgroup: a closed listener is a clean
+// exit, and shutdown is the only thing that closes it.
+func (f *fabric) acceptLoop(ctx context.Context) error {
+	var backoff time.Duration
+	for {
+		conn, err := f.ln.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			// A refused or reset accept is not fatal, but spinning on it burns
+			// the CPU the routing math needs. Back off, bounded.
+			backoff = nextBackoff(backoff)
+			f.logger().WarnContext(ctx, "accept failed",
+				slog.Any("error", err),
+				slog.Duration("backoff", backoff))
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
+			continue
+		}
+		backoff = 0
+		// Bounded fan-out: shed a stream we have no room for rather than
+		// spawning into unbounded growth. Refusal is logged at warn so an
+		// operator sees shed load, not a silent drop.
+		if !f.limiter.tryAcquire() {
+			_ = conn.Close()
+			f.logger().WarnContext(ctx, "inbound stream refused: at capacity",
+				slog.Int("max_concurrent_streams", maxConcurrentStreams),
+				slog.String("remote", conn.RemoteAddr().String()))
+			continue
+		}
+		f.spawn(func(ctx context.Context) error {
+			defer f.limiter.release()
+			return f.serveConn(ctx, conn)
+		})
+	}
+}
+
+// nextBackoff doubles d up to a 2s ceiling; zero means "no delay yet".
+//
+// The clamp is applied after the doubling, not before: testing d first lets a
+// 1.28s value double to 2.56s and escape the ceiling. A lifecycle test caught
+// exactly that in this generation.
+func nextBackoff(d time.Duration) time.Duration {
+	const ceiling = backoffCeiling
+	if d == 0 {
+		return backoffBase
+	}
+	if d *= 2; d > ceiling {
+		return ceiling
+	}
+	return d
+}
+
 // serveConn handles an inbound mTLS stream (demux side of the multiplexer).
-func (f *fabric) serveConn(conn net.Conn) {
+func (f *fabric) serveConn(ctx context.Context, conn net.Conn) error {
+	defer conn.Close()
 	tc, ok := conn.(*tls.Conn)
 	if !ok {
-		conn.Close()
-		return
+		return nil
 	}
-	_ = tc.SetDeadline(time.Now().Add(5 * time.Second))
+	_ = tc.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := tc.Handshake(); err != nil {
-		log.Printf("[srv] handshake: %v", err)
-		conn.Close()
-		return
+		f.logger().WarnContext(ctx, "inbound handshake rejected",
+			slog.String("remote", conn.RemoteAddr().String()),
+			slog.Any("error", err))
+		return nil
 	}
 	_ = tc.SetDeadline(time.Time{})
 
@@ -1284,8 +1422,7 @@ func (f *fabric) serveConn(conn net.Conn) {
 		remote = parseNodeCN(certs[0].Subject.CommonName)
 	}
 	if remote == (NodeID{}) {
-		conn.Close()
-		return
+		return nil
 	}
 
 	p := newPeer(remote, conn.RemoteAddr().String())
@@ -1293,18 +1430,21 @@ func (f *fabric) serveConn(conn net.Conn) {
 	p.conn = conn
 	f.peerMu.Lock()
 	// Prefer existing outbound peer object; otherwise adopt inbound.
-	if existing, ok := f.peers[remote]; ok {
+	if _, ok := f.peers[remote]; ok {
 		f.peerMu.Unlock()
-		conn.Close()
-		_ = existing
-		return
+		return nil
 	}
 	f.peers[remote] = p
 	f.peerMu.Unlock()
+	f.tel.recordPeerAdded()
 
-	go f.writeLoop(p)
-	go f.readLoop(p)
-	log.Printf("[link] ↓ %s  %s", remote, conn.RemoteAddr())
+	f.spawn(func(ctx context.Context) error { return f.writeLoop(ctx, p) })
+	f.spawn(func(ctx context.Context) error { return f.readLoop(ctx, p) })
+	f.logger().InfoContext(ctx, "link up",
+		slog.String("peer", remote.String()),
+		slog.String("addr", conn.RemoteAddr().String()),
+		slog.String("dir", "in"))
+	return nil
 }
 
 func parseNodeCN(cn string) NodeID {
@@ -1325,73 +1465,94 @@ func parseNodeCN(cn string) NodeID {
 }
 
 // preconnect dials the planned route graph so softmax has live candidates.
-func (f *fabric) preconnect() {
+//
+// Mutation: the dials used to be bare `go` calls that outlived the process if
+// the node was signalled mid-handshake. They are group members now, and a
+// failed dial is a structured warn rather than a formatted line.
+func (f *fabric) preconnect(ctx context.Context) error {
+	eg, egCtx := errgroup.WithContext(ctx)
 	for _, dst := range routePeers(f.id.self) {
-		go func(d NodeID) {
-			if _, err := f.getOrCreatePeer(d); err != nil {
-				log.Printf("[pre] %s: %v", d, err)
+		d := dst
+		eg.Go(func() error {
+			if _, err := f.getOrCreatePeer(egCtx, d); err != nil {
+				f.logger().WarnContext(egCtx, "preconnect dial failed",
+					slog.String("peer", d.String()),
+					slog.Any("error", err))
 			}
-		}(dst)
+			return nil
+		})
 	}
+	return eg.Wait()
 }
 
 // metricsLoop optionally dumps SynapticWeights + Loss.
-func (f *fabric) metricsLoop(ctx context.Context, every time.Duration) {
+func (f *fabric) metricsLoop(ctx context.Context, every time.Duration) error {
 	if os.Getenv("FABRIC_METRICS") == "" {
-		return
+		return nil
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-t.C:
 			f.peerMu.RLock()
 			for id, p := range f.peers {
-				log.Printf("[m] %s w=%.3f lat=%s drop=%.3f loss=%.2f",
-					id, p.getWeight(), p.latency().Round(time.Microsecond),
-					p.dropRate(), p.currentLoss())
+				f.logger().InfoContext(ctx, "peer metrics",
+					slog.String("peer", id.String()),
+					slog.Float64("weight", p.getWeight()),
+					slog.Int64("latency_us", p.latencyUs.Load()),
+					slog.Float64("drop_rate", p.dropRate()),
+					slog.Float64("loss", p.currentLoss()))
 			}
 			f.peerMu.RUnlock()
 			// The node-level line reports only measurements from this node's
 			// real sockets. No simulated or synthetic figure can reach it.
-			log.Print(f.tel.Report())
+			f.logger().InfoContext(ctx, "node telemetry", slog.String("report", f.tel.Report()))
 		}
 	}
 }
 
 // trafficLoop emits a light periodic DATA cell so Loss/Backprop can fire
 // under real loopback RTTs. Rate is deliberately modest (no flood).
-func (f *fabric) trafficLoop(ctx context.Context) {
+func (f *fabric) trafficLoop(ctx context.Context) error {
 	if os.Getenv("FABRIC_TRAFFIC") == "0" {
-		return
+		return nil
 	}
-	t := time.NewTicker(2 * time.Second)
+	t := time.NewTicker(trafficInterval)
 	defer t.Stop()
 	var n uint64
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case <-t.C:
 			// A development build may let the adversarial matrix suppress real
 			// traffic when it reaches its seal. In a release build simGate is
 			// nil and this is never true.
 			if f.simGate != nil && !f.simGate() {
-				log.Printf("[tx] suppressed: fabric-sim fail-closed seal engaged")
+				f.logger().WarnContext(ctx, "traffic suppressed: fabric-sim fail-closed seal engaged")
 				continue
 			}
 			n++
 			msg := []byte(fmt.Sprintf("tick=%d node=%s t=%d", n, f.id.self, time.Now().UnixNano()))
-			if err := f.Inject(msg); err != nil {
-				log.Printf("[tx] %v", err)
+			if err := f.inject(ctx, msg); err != nil {
+				f.logger().WarnContext(ctx, "inject failed",
+					slog.Uint64("tick", n),
+					slog.Any("error", err))
 			}
 		}
 	}
 }
 
-// shutdown tears down listener + peers.
+// shutdown tears down listener + peers, then drains the supervisor.
+//
+// Mutation: the old shutdown cancelled the context, closed the listener and
+// closed every peer, then returned immediately — so the process could exit
+// while writeLoops were mid-write on a socket. Now cancel, close, and then
+// wait for the group with a bounded grace period: a peer whose socket is
+// wedged cannot hold the node hostage, but a healthy one gets to finish.
 func (f *fabric) shutdown() {
 	if f.cancel != nil {
 		f.cancel()
@@ -1411,6 +1572,19 @@ func (f *fabric) shutdown() {
 	}
 	f.peers = make(map[NodeID]*peer)
 	f.peerMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := f.Wait(); err != nil {
+			f.logger().Error("supervisor reported", slog.Any("error", err))
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(drainGrace):
+		f.logger().Warn("drain timed out; exiting with loops still running")
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1418,6 +1592,15 @@ func (f *fabric) shutdown() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("fabric exited", slog.Any("error", err))
+		os.Exit(1)
+	}
+}
+
+// run is the node's whole lifecycle. It returns instead of calling log.Fatal,
+// so every fatal path is one error value the top level logs exactly once.
+func run() error {
 	showMatrix := flag.Bool("matrix", false, "print the active matrix and exit")
 	selfTest := flag.Bool("self-test", false, "run pack/seal/softmax self-test and exit")
 	registerSimFlags()
@@ -1425,67 +1608,76 @@ func main() {
 
 	if *showMatrix {
 		printMatrix()
-		return
+		return nil
 	}
 	if simOpts.topology {
 		printSimTopology()
-		return
+		return nil
 	}
 	if *selfTest {
 		if err := runSelfTest(); err != nil {
-			log.Fatalf("self-test: %v", err)
+			return fmt.Errorf("self-test: %w", err)
 		}
-		log.Println("self-test OK")
-		return
+		newLogger(nil).Info("self-test OK")
+		return nil
 	}
 
 	continent := envInt("ENV_CONTINENT", 1)
 	tier := envInt("ENV_TIER", 1)
 	if continent < 1 || continent > 7 {
-		log.Fatalf("ENV_CONTINENT must be 1..7, got %d", continent)
+		return fmt.Errorf("ENV_CONTINENT must be 1..7, got %d", continent)
 	}
 	if tier < 1 || tier > 4 {
-		log.Fatalf("ENV_TIER must be 1..4, got %d", tier)
+		return fmt.Errorf("ENV_TIER must be 1..4, got %d", tier)
 	}
 	self := NodeID{Continent: continent, Tier: tier}
 	if !isActive(self) {
-		log.Fatalf("node %s not in active matrix (c1..c%d × t1..t%d; set FABRIC_CONTINENTS/FABRIC_TIERS)",
+		return fmt.Errorf("node %s not in active matrix (c1..c%d x t1..t%d; set FABRIC_CONTINENTS/FABRIC_TIERS)",
 			self, activeContinents, activeTiers)
 	}
 
 	seed, err := loadRootSeed()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 	id, err := buildPKI(self, seed)
 	if err != nil {
-		log.Fatalf("pki: %v", err)
+		return fmt.Errorf("pki: %w", err)
 	}
 
 	f, err := newFabric(id)
 	if err != nil {
-		log.Fatalf("fabric: %v", err)
+		return fmt.Errorf("fabric: %w", err)
 	}
 	f.ctx, f.cancel = context.WithCancel(context.Background())
-	f.tel = newTelemetry(4096)
+	defer f.cancel()
+	f.tel = newTelemetry(telemetryRingCapacity)
+
+	// The supervisor owns every long-lived loop from here on.
+	f.start()
 	startFabricSim(f.ctx, f, self)
 
 	if err := f.listen(); err != nil {
-		log.Fatal(err)
+		return err
 	}
-	f.preconnect()
-	go f.keyRotator(f.ctx)
-	go f.metricsLoop(f.ctx, 10*time.Second)
-	go f.trafficLoop(f.ctx)
+	f.spawn(f.acceptLoop)
+	f.spawn(f.keyRotator)
+	f.spawn(func(ctx context.Context) error { return f.metricsLoop(ctx, metricsInterval) })
+	f.spawn(f.trafficLoop)
+	f.spawn(f.preconnect)
 
-	log.Printf("fabric up  node=%s  addr=%s  peers=%v",
-		self, id.addr, routePeers(self))
+	f.logger().Info("fabric up",
+		slog.String("addr", id.addr),
+		slog.Int("candidate_peers", len(routePeers(self))))
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sig)
 	<-sig
-	log.Println("shutting down…")
+
+	f.logger().Info("signal received; draining")
 	f.shutdown()
+	return nil
 }
 
 func printMatrix() {
@@ -1601,7 +1793,7 @@ func loopbackMTLS(server, client *identity) error {
 		}
 		defer c.Close()
 		tc := c.(*tls.Conn)
-		_ = tc.SetDeadline(time.Now().Add(3 * time.Second))
+		_ = tc.SetDeadline(time.Now().Add(loopbackHandshakeTimeout))
 		if err := tc.Handshake(); err != nil {
 			done <- err
 			return
@@ -1616,13 +1808,13 @@ func loopbackMTLS(server, client *identity) error {
 		done <- nil
 	}()
 
-	raw, err := net.DialTimeout("tcp", ln.Addr().String(), 2*time.Second)
+	raw, err := net.DialTimeout("tcp", ln.Addr().String(), loopbackDialTimeout)
 	if err != nil {
 		return err
 	}
 	defer raw.Close()
 	tc := tls.Client(raw, client.clientTLS())
-	_ = tc.SetDeadline(time.Now().Add(3 * time.Second))
+	_ = tc.SetDeadline(time.Now().Add(loopbackHandshakeTimeout))
 	if err := tc.Handshake(); err != nil {
 		return fmt.Errorf("client handshake: %w", err)
 	}
