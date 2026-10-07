@@ -38,5 +38,6 @@ AGENTS.md
 # release binaries are build artifacts, not sources (make release repaints them)
 /release/bin/
 
-# apex hyperkernel epigenetic runtime state (bootstrap writes into data/apex)
+# apex hyperkernel runtime state (bootstrap writes into data/apex)
 /data/apex/
+/apex_live_migration_v8.pkg

@@ -29,6 +29,18 @@ func waitForGoroutines(t *testing.T, want int, within time.Duration) {
 	}
 }
 
+// onEphemeralPort redirects a test identity at an OS-assigned port.
+//
+// Generation 4: these tests used to bind the real matrix address
+// (127.c.1.1:8883), so they failed with "address already in use" the moment a
+// live fabric node was running — which is exactly when they are most useful.
+// Tests must never contend with the system under test, so the port is left to
+// the kernel.
+func onEphemeralPort(t *testing.T, id *identity) {
+	t.Helper()
+	id.addr = "127.0.0.1:0"
+}
+
 // TestLifecycleDrainsWithoutLeaks is the fitness proof for Generation 1.
 //
 // The mutation replaced nine bare `go` statements with one errgroup
@@ -52,6 +64,7 @@ func TestLifecycleDrainsWithoutLeaks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPKI: %v", err)
 	}
+	onEphemeralPort(t, id)
 	f, err := newFabric(id)
 	if err != nil {
 		t.Fatalf("newFabric: %v", err)
@@ -97,6 +110,7 @@ func TestAcceptLoopExitsOnCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPKI: %v", err)
 	}
+	onEphemeralPort(t, id)
 	f, err := newFabric(id)
 	if err != nil {
 		t.Fatalf("newFabric: %v", err)

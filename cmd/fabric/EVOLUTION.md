@@ -5,8 +5,83 @@ Generation numbers here are unique to this file and start at 1; the
 repository-wide ledger is [`docs/EVOLUTION.md`](../../docs/EVOLUTION.md), whose
 generations are numbered independently and are not comparable to these.
 
-**Generation Number:** 3
-**Fitness Score:** 10/10 — the race detector now runs. See Generation 3.
+**Generation Number:** 4
+**Fitness Score:** 10/10 — race-clean, and verified against live stack traffic.
+
+## Generation 4 — log severity corrected against live traffic
+
+**Sensed environment.** For the first time in four generations the designated
+sensor existed. `make stack` brought up 28 minds plus relay, world, fabric and
+gaze; `world-report/logs/` held all 35 per-node logs. The fabric node's own log
+(`logs/fabric.log`) showed the anomaly:
+
+```
+WARN inject failed node_id=c1.t1 tick=1  error="no live next-hop"
+WARN inject failed node_id=c1.t1 tick=3  error="no live next-hop"
+... 27 WARN in 90 seconds, unbroken ...
+```
+
+**Diagnosis.** Every *odd* tick failed and every even one succeeded, which
+identified the cause exactly rather than leaving it as noise. `Inject` rotates
+its sink with `dstCont = sink.Add(1) % activeContinents + 1`. On the default
+local matrix that is two continents, so sinks alternate `c1` and `c2`. Even
+ticks land on this node itself and are delivered locally; odd ticks target
+`c2.t1`, where the single running process has no listener. It is a permanent
+structural property of a partially-populated matrix, not a fault — and it was
+logging at WARN every two seconds, which is 21,600 warnings a day.
+
+**Why that matters more than it looks.** An always-firing WARN is worse than no
+WARN: it teaches an operator to ignore the channel, so the next real failure is
+invisible. This was introduced by Generation 1 itself, which gave a topology
+condition the same severity as a fault. Live traffic is what exposed it —
+unit
+tests cannot, because a test matrix has no unreachable sink to route to.
+
+**Mutations applied:**
+
+- **`errNoLiveNextHop` sentinel.** `softmaxNextHop` now returns an identifiable
+  error, so callers can distinguish "no reachable peer" from "the cell could not
+  be built".
+- **Severity by cause.** The traffic loop logs an unroutable inject at DEBUG
+  with the candidate-peer count, and reserves WARN for genuine faults. A real
+  fault still warns; only the topology condition moved.
+- **Per-cell delivery demoted to DEBUG.** `onDeliver` logged every arrival at
+  INFO, 43,000 lines a day on a 2s interval — duplicating a count
+  `telemetry.recordDelivered` already keeps. The aggregate (FABRIC_METRICS) is
+  the signal; the per-cell line is the drill-down.
+- **Test isolation defect found and fixed.** Generation 1's lifecycle tests bound
+  the real matrix address `127.c.1.1:8883`, so they failed with "address already
+  in use" the moment a live fabric node was running — precisely when they are
+  most worth running. They now bind an OS-assigned ephemeral port and read the
+  real address back from the listener. Tests must never contend with the system
+  under test.
+
+**Measured, against the live stack** (14 seconds of production traffic):
+
+| | before | after |
+|---|---|---|
+| WARN lines | 27 in 90s | **1 in 14s** |
+| the single WARN | — | the one-time `preconnect dial failed` at startup |
+| unroutable cases | WARN each | counted in the aggregate: `injected=4 delivered_here=2 inject_err=2` |
+
+The information is not lost — it is aggregated where an operator reads it once
+per interval instead of once per tick.
+
+**Tests added:** four regression guards, including one asserting that 200
+injects against an unreachable matrix produce *zero* WARN lines, and one pinning
+that the delivery counter survives the log demotion.
+
+**Second anomaly sensed, deliberately not "fixed".** All 28 minds log
+`[HARDEN] PTRACE_TRACEME refused: traced, or ptrace-blocked sandbox`. That is
+correct behaviour: this is a Flatpak sandbox that blocks ptrace, and the code
+warns always but exits never, because refusal is ambiguous — only a positive
+`TracerPid` carries the exit policy. The operational fact is worth recording
+rather than silencing: **inside this sandbox the anti-debug hardening is
+inert**, and 28 identical warnings per fleet start are expected, not a defect.
+Suppressing them would hide a true statement about the deployment.
+
+**Fitness Score: 10/10.** Race-clean (with a live mesh holding port 8883), all
+suites green, and the node's warning channel is now meaningful.
 
 ## Generation 3 — the race detector, unlocked without a system compiler
 

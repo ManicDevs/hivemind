@@ -106,11 +106,12 @@ func TestAcceptRefusesBeyondStreamBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildPKI: %v", err)
 	}
+	onEphemeralPort(t, id)
 	f, err := newFabric(id)
 	if err != nil {
 		t.Fatalf("newFabric: %v", err)
 	}
-	// Exhaustive the budget: one slot, already held.
+	// Exhaust the budget: one slot, already held.
 	f.limiter = newStreamLimiter(1)
 	if !f.limiter.tryAcquire() {
 		t.Fatal("could not take the single slot")
@@ -124,9 +125,10 @@ func TestAcceptRefusesBeyondStreamBudget(t *testing.T) {
 	}
 	f.spawn(f.acceptLoop)
 
-	// A real TCP connection to the matrix address: it completes the TCP
-	// handshake and then meets the exhausted budget.
-	c, err := net.DialTimeout("tcp", f.id.addr, 2*time.Second)
+	// A real TCP connection to the bound address: it completes the TCP
+	// handshake and then meets the exhausted budget. The listener's address is
+	// read back because the bind asked the kernel for an ephemeral port.
+	c, err := net.DialTimeout("tcp", f.ln.Addr().String(), 2*time.Second)
 	if err != nil {
 		t.Fatalf("dial matrix: %v", err)
 	}

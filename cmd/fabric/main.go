@@ -876,6 +876,16 @@ func (f *fabric) Wait() error {
 	return err
 }
 
+// errNoLiveNextHop means routing found no reachable peer to forward through.
+//
+// Generation 4: this is a *topology* condition, not a fault. On the default
+// local matrix (two continents, one process) Inject rotates its sink across
+// both continents, so half its cells target a continent where no node is
+// listening. Live logs showed every one of those as a WARN, 21,600 times a day,
+// which is how a WARN channel stops meaning anything. It is now a sentinel so
+// callers can report it at its real severity.
+var errNoLiveNextHop = errors.New("no live next-hop")
+
 func (f *fabric) currentKeys() *hourKeys { return f.keys.Load() }
 
 // keyRotator swaps keys on the hour boundary.
@@ -1073,7 +1083,7 @@ func (f *fabric) softmaxNextHop(ctx context.Context, exclude map[NodeID]bool) (*
 		live = append(live, pair{p, p.getWeight()})
 	}
 	if len(live) == 0 {
-		return nil, errors.New("no live next-hop")
+		return nil, errNoLiveNextHop
 	}
 	ws := make([]float64, len(live))
 	for i, pr := range live {
@@ -1130,7 +1140,11 @@ func (f *fabric) onDeliver(ctx context.Context, hdr cellHdr, payload []byte) err
 	if loss == 0 {
 		loss = computeLoss(hdr.LatencyUsToDuration(), hdr.DropRate)
 	}
-	loggerFrom(ctx).InfoContext(ctx, "cell delivered",
+	// Per-cell delivery is high-frequency detail, and telemetry.recordDelivered
+	// above already counts every arrival. Logging each one at INFO duplicated
+	// that counter as 43,000 lines a day on a 2s traffic interval; the aggregate
+	// (FABRIC_METRICS) is the signal and this line is the drill-down.
+	loggerFrom(ctx).DebugContext(ctx, "cell delivered",
 		slog.String("from", hdr.Src.String()),
 		slog.Uint64("frame_type", uint64(hdr.Type)),
 		slog.Float64("loss", loss),
@@ -1538,6 +1552,15 @@ func (f *fabric) trafficLoop(ctx context.Context) error {
 			n++
 			msg := []byte(fmt.Sprintf("tick=%d node=%s t=%d", n, f.id.self, time.Now().UnixNano()))
 			if err := f.inject(ctx, msg); err != nil {
+				// Severity by cause. An unreachable next-hop is the expected
+				// state of a partially-populated matrix and must not sit in the
+				// same channel as a genuine failure; anything else is a fault.
+				if errors.Is(err, errNoLiveNextHop) {
+					f.logger().DebugContext(ctx, "inject unroutable: no live next-hop",
+						slog.Uint64("tick", n),
+						slog.Int("candidate_peers", len(routePeers(f.id.self))))
+					continue
+				}
 				f.logger().WarnContext(ctx, "inject failed",
 					slog.Uint64("tick", n),
 					slog.Any("error", err))
