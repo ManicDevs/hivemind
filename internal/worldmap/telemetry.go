@@ -42,6 +42,7 @@ type NodeView struct {
 	Name      string  `json:"name"`
 	Continent string  `json:"continent"`
 	Role      string  `json:"role"`
+	Type      string  `json:"type"`
 	Alive     bool    `json:"alive"`
 	Lives     int     `json:"lives"`
 	Fitness   float64 `json:"fitness"`

@@ -91,6 +91,40 @@ var contColors = []string{
 
 var continentOrder = []string{"eu", "as", "af", "na", "sa", "oc", "an"}
 
+// linkPalette holds the per-node-instance link colours. Each great-circle link
+// is tinted from this set by a stable hash of its node name, so a specific
+// node's path is recognisable across renders instead of every hop looking
+// identical. The hues are chosen to stay legible against the #080b14 ocean and
+// to sit apart from the broker teal (#2dd4bf), which is reserved for the MQTT
+// infrastructure layer — a node link must never be mistaken for a broker arc.
+var linkPalette = []string{
+	"#7aa2f7", "#9ece6a", "#e0af68", "#bb9af7", "#f7768e", "#7dcfff", "#c0caf5",
+}
+
+// linkColorFor returns the stroke colour for a node's great-circle link.
+//
+// FNV-1a over the name gives a stable index: the same node always resolves to
+// the same colour, so a viewer can learn "the purple line is na-toronto"
+// without the renderer storing any state. Hashing the name (rather than the
+// map iteration order) is what makes it reproducible — map order in Go is
+// randomised per run, and a position-derived colour would reshuffle the map on
+// every refresh.
+func linkColorFor(name string) string {
+	if len(linkPalette) == 0 {
+		return "#3a6aaf"
+	}
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	h := uint32(offset32)
+	for i := 0; i < len(name); i++ {
+		h ^= uint32(name[i])
+		h *= prime32
+	}
+	return linkPalette[h%uint32(len(linkPalette))]
+}
+
 func contIndex(c string) int {
 	for i, code := range continentOrder {
 		if code == c {
@@ -277,7 +311,11 @@ func linkArcsSVG(w, h float64, gx, gy float64, linked map[string]bool, posOf map
 		}
 		// Finish at the gaze hub.
 		fmt.Fprintf(&b, "L%.1f,%.1f", gx, gy)
-		b.WriteString(`" fill="none" stroke="#3a6aaf" stroke-width="1.3" stroke-opacity="0.75" stroke-dasharray="5 5"/>`)
+		// Each node instance gets its own hue, derived deterministically from
+		// its name: the same node is always the same colour across renders, and
+		// two nodes never collide by accident of map order.
+		fmt.Fprintf(&b, `" fill="none" stroke="%s" stroke-width="1.3" stroke-opacity="0.75" stroke-dasharray="5 5"/>`,
+			linkColorFor(name))
 	}
 	return b.String()
 }
