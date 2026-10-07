@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// Memory is a scratch allocator handed to modules that need one.
+//
+// It is declared here rather than imported from the platform package so the
+// kernel stays independent of its substrate. Go interfaces are structural, so a
+// platform.Allocator satisfies this without an adapter.
+type Memory interface {
+	Alloc(n int) ([]byte, bool)
+	Free(b []byte)
+}
+
 // Host is the capability-scoped view of the machine handed to a module.
 //
 // This is the seam that answers "make our own": a module never imports os,
@@ -36,6 +46,9 @@ type Host interface {
 	Stat(path string) (os.FileInfo, error)
 	// Getenv reads an environment variable. Requires CapEnv.
 	Getenv(key string) (string, error)
+	// Heap returns the module's scratch allocator. Always available: scratch
+	// memory is not a host privilege, it is the module's own working set.
+	Heap() Memory
 }
 
 // host is the concrete Host. One per module, holding that module's grants.
@@ -53,6 +66,8 @@ type host struct {
 
 	// fs is the underlying reader, injected for the same reason.
 	fs hostFS
+	// mem is the scratch allocator handed to the module.
+	mem Memory
 }
 
 // hostFS is the file access a Host performs, isolated so tests can substitute it.
@@ -89,6 +104,7 @@ var _ Host = (*host)(nil)
 
 func (h *host) Name() string         { return h.name }
 func (h *host) Logger() *slog.Logger { return h.log }
+func (h *host) Heap() Memory         { return h.mem }
 
 func (h *host) Clock() (time.Duration, error) {
 	if !h.caps[CapClock] {
@@ -190,6 +206,8 @@ type hostFactory struct {
 	now     func() time.Duration
 	readEnv func(string) string
 	fs      hostFS
+	// mem is the scratch allocator handed to every module.
+	mem Memory
 }
 
 func (f *hostFactory) forModule(desc Descriptor) Host {
@@ -210,6 +228,7 @@ func (f *hostFactory) forModule(desc Descriptor) Host {
 		now:     f.now,
 		readEnv: f.readEnv,
 		fs:      f.fs,
+		mem:     f.mem,
 	}
 }
 
@@ -219,14 +238,44 @@ var startTime = time.Now()
 
 func realClock() time.Duration { return time.Since(startTime) }
 
-func defaultHostFactory(base *slog.Logger) *hostFactory {
+// defaultHostFactory builds the factory used when no substrate is injected.
+//
+// The scratch allocator defaults to the Go heap: a kernel with no arena yet
+// still gives its modules working memory, so a module is never blocked on
+// kernel plumbing that has not been written yet.
+func defaultHostFactory(base *slog.Logger, mem Memory) *hostFactory {
 	if base == nil {
 		base = slog.Default()
+	}
+	if mem == nil {
+		mem = &goMemory{}
 	}
 	return &hostFactory{
 		base:    base,
 		now:     realClock,
 		readEnv: os.Getenv,
 		fs:      osHostFS{},
+		mem:     mem,
 	}
+}
+
+// goMemory is the fallback scratch allocator over the Go heap.
+type goMemory struct{ live, blocks int }
+
+func (g *goMemory) Alloc(n int) ([]byte, bool) {
+	if n <= 0 {
+		return nil, false
+	}
+	b := make([]byte, n)
+	g.live += n
+	g.blocks++
+	return b, true
+}
+
+func (g *goMemory) Free(b []byte) {
+	if b == nil {
+		return
+	}
+	g.live -= len(b)
+	g.blocks--
 }

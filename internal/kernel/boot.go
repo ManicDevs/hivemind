@@ -28,7 +28,7 @@ func (k *Kernel) Boot(ctx context.Context) error {
 	}
 	k.bootAttempted = true
 	log := k.log
-	factory := defaultHostFactory(log)
+	factory := defaultHostFactory(log, k.Memory)
 	k.mu.Unlock()
 
 	order, err := k.Resolve()

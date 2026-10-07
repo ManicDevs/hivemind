@@ -227,6 +227,12 @@ type Kernel struct {
 
 	log *slog.Logger
 
+	// Memory is the scratch allocator handed to every module. The OS layer sets
+	// it to the platform's allocator so a module's working set is accounted for
+	// against the substrate's ceiling rather than against the Go heap where it
+	// would be invisible. Nil means the Go-heap fallback.
+	Memory Memory
+
 	// drainTimeout bounds how long Shutdown waits for Run loops before
 	// declaring them wedged. Without a bound a stuck module would hold the
 	// process open forever.
