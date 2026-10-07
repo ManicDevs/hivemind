@@ -139,6 +139,11 @@ func runEngine(cfg engine.Config) int {
 		fmt.Printf("📊 [HEALTH] serving /healthz + /metrics on %s\n", cfg.HealthAddr)
 	}
 
+	// Apex hyperkernel phase: epigenetic memory, hive mesh, autonomous JIT,
+	// encrypted QUIC telemetry, and consensus quarantine — pure Go, sandboxed
+	// under ./data/apex. Never fatal to the mesh.
+	bootstrapApexKernel()
+
 	// Live backtraces: SIGQUIT or SIGUSR1 dumps every goroutine's stack to
 	// stderr without killing anything. (Registering SIGQUIT overrides the
 	// runtime's default crash-dump — that is the point: inspect, don't die.)
