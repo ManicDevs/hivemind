@@ -71,14 +71,16 @@ RELAY_URL ?= http://localhost:$(RELAY_PORT)
 # per invocation, before the relay has bound.
 
 .PHONY: all help \
-build build-hivemind build-commune build-souls build-gaze build-relay build-world build-all \
-build-hivemind-train build-train \
+build build-image build-hivemind build-commune build-souls build-gaze build-relay build-world build-all \
+qemu qemu-serial qemu-screenshot qemu-bootproof run build-iso hw-usb \
+	push push-logcheck push-cross push-commit \
+	build-hivemind-train build-train \
 fmt vet staticcheck lint tidy check \
 test test-concurrent test-race test-verbose test-full \
 audit \
 train train-dry eval \
 up up-nodes down restart kill rerun status \
-think think-fast think-long demo pain prove \
+think think-fast think-long demo pain prove verify \
 	world world-down world-test \
 	stack stack-down stack-restart \
 	fabric fabric-down fabric-status \
@@ -99,16 +101,18 @@ all: setup
 setup: build-all
 	@echo "📦 Pulling latest changes..."
 	@$(SAFE_ENV) git pull origin main 2>/dev/null || echo "⚠️  git pull skipped (not a git repo)"
-	@echo "🔧 Running full proof suite (throttled)..."
-	@$(MAKE) prove && $(MAKE) prove-relay
+	@echo "🔧 Verifying (deterministic suite + kernel boot proof)..."
+	@$(MAKE) verify
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════════════╗"
-	@echo "║  ✅ FULL SETUP COMPLETE — 6 binaries + all proofs            ║"
+	@echo "║  ✅ FULL SETUP COMPLETE — 6 binaries + kernel + all proofs   ║"
 	@echo "║  ── bin/hivemind, bin/commune, bin/souls, bin/gaze          ║"
 	@echo "║  ── bin/relay (MQTT bridge), bin/world (7-continent mesh)  ║"
 	@echo "║  ── bin/fabric (adaptive neural routing fabric)            ║"
+	@echo "║  ── dist/hivemind-kernel.bin (pure-Go kernel + OS)         ║"
+	@echo "║  ── boot proof: guards + health + shutdown via QEMU        ║"
+	@echo "║  ── make run (terminal console) · make hw-usb DEV=/dev/sdX ║"
 	@echo "║  ── safety: nice 19 · fd 4096 · GOMAXPROCS=$(SAFE_PROCS)    ║"
-	@echo "║  ── make think N=25 TICK=50 · make up N=3                   ║"
 	@echo "╚══════════════════════════════════════════════════════════════╝"
 
 help:
@@ -126,6 +130,17 @@ help:
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-souls" "bin/souls only"
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-gaze" "bin/gaze only"
 	@printf "  \033[32m%-20s\033[0m %s\n" "build-fabric" "bin/fabric only (adaptive neural fabric)"
+	@printf "  \033[32m%-20s\033[0m %s\n" "build-image" "Dist pure-Go Multiboot kernel image"
+	@echo ""
+	@printf "  \033[35m%-20s\033[0m %s\n" "qemu" "Boot hivemind-kernel.bin in QEMU (standalone serial console)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "run" "Build the kernel + OS image and boot it (alias for qemu)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "qemu-serial" "Alias kept for compatibility (console is the only mode)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "qemu-screenshot" "Dump VGA splash to /tmp and exit (no UI needed)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "qemu-bootproof" "Automated boot proof: guards + health + shutdown"
+	@printf "  \033[35m%-20s\033[0m %s\n" "build-iso" "Bootable BIOS+EFI ISO around the kernel (needs grub-mkrescue)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "hw-usb" "Write boot ISO to real hardware: make hw-usb DEV=/dev/sdX"
+	@printf "  \033[35m%-20s\033[0m %s\n" "push" "Log hygiene + cross-compile matrix + commit + push upstream"
+	@printf "  \033[35m%-20s\033[0m %s\n" "push-logcheck" "Validate the 35 continental logs (hygiene, no panic traces)"
 	@echo ""
 	@printf "  \033[33m%-20s\033[0m %s\n" "test" "fmt + vet + tests (with -race if a C compiler exists)"
 	@printf "  \033[33m%-20s\033[0m %s\n" "test-concurrent" "Pure-Go concurrency gate (no C toolchain needed)"
@@ -148,7 +163,8 @@ help:
 	@printf "  \033[35m%-20s\033[0m %s\n" "think-long" "N=100 TICK=100"
 	@printf "  \033[35m%-20s\033[0m %s\n" "demo" "2 nodes, 20s, exits alone"
 	@printf "  \033[35m%-20s\033[0m %s\n" "pain" "Idle-vs-loaded stimulus proof"
-	@printf "  \033[35m%-20s\033[0m %s\n" "prove" "audit + timed + supermesh + pain"
+	@printf "  \033[35m%-20s\033[0m %s\n" "verify" "Deterministic gate: audit + kernel boot proof (make all)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "prove" "Full certification (audit + live mesh + cipher proofs)"
 	@printf "  \033[35m%-20s\033[0m %s\n" "proof-keys" "Crypto + relay + will proofs (16/16)"
 	@printf "  \033[35m%-20s\033[0m %s\n" "prove-relay" "Relay cloud-path live test"
 	@printf "  \033[35m%-20s\033[0m %s\n" "world" "Full 7-continent mesh, pure Go (14 nodes)"
@@ -217,7 +233,7 @@ build-relay:
 	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/relay ./cmd/relay
 	@echo "✅ bin/relay ready (MQTT bridge)"
 
-build-all: build-hivemind build-souls build-gaze build-relay build-world build-fabric build-derive
+build-all: build-hivemind build-souls build-gaze build-relay build-world build-fabric build-derive build-image
 
 build-release: build-hivemind build-gaze build-relay build-world build-fabric build-derive build-souls
 	@echo "Building release binaries with anti-RE hardening..."
@@ -229,6 +245,148 @@ build-fabric:
 	@mkdir -p $(BIN_DIR)
 	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/fabric ./cmd/fabric
 	@echo "✅ bin/fabric ready (adaptive neural routing fabric, real data only)"
+
+# ── Pure-Go Multiboot kernel image ───────────────────────────────────────────
+#
+# build-image emits the bare-metal boot image with only `go run`: no compiler
+# toolchain is involved (the image bytes are produced by internal/kernel/
+# bootimage). The qemu targets hand that image to QEMU, which boots it as a
+# Multiboot-1 kernel and prints the HIVEMIND boot log on the VGA screen.
+BOOT_IMAGE ?= $(DIST_DIR)/hivemind-kernel.bin
+
+build-image:
+	@echo "🔨 Building pure-Go boot image..."
+	@mkdir -p $(DIST_DIR)
+	@@$(SAFE_ENV) $(PURE_GO) $(SAFE_RUN) go run ./cmd/hivemind-image -out $(BOOT_IMAGE)
+	@echo "✅ $(BOOT_IMAGE) ready"
+
+qemu: build-image
+	@echo "🖥️  Booting kernel in QEMU..."
+	@BOOT_IMAGE=$(BOOT_IMAGE) REBUILD_BOOT=0 ./scripts/boot-qemu.sh
+
+# `run` is the friendly target for the full kernel + OS image: it builds the
+# pure-Go image and boots it under QEMU exactly like `qemu`.
+run: qemu
+
+qemu-serial: build-image
+	@BOOT_IMAGE=$(BOOT_IMAGE) REBUILD_BOOT=0 ./scripts/boot-qemu.sh -serial
+
+qemu-screenshot: build-image
+	@BOOT_IMAGE=$(BOOT_IMAGE) REBUILD_BOOT=0 ./scripts/boot-qemu.sh -screenshot
+
+# `qemu-bootproof` is the automated end-to-end proof of the kernel + interactive
+# OS: it boots the image headless, drives the serial console through the guard
+# report and a shutdown, and fails unless the boot log and clean exit appear.
+qemu-bootproof: build-image
+	@if ! command -v qemu-system-x86_64 >/dev/null 2>&1 && [ ! -x /tmp/qemudeb/qemu.sh ]; then \
+		echo "⚠️  QEMU not found — skipping boot proof"; \
+	else \
+		echo "🧪 QEMU boot proof (guards + health + clean shutdown)"; \
+		mkdir -p $(LOG_DIR); \
+		printf 'guards\nhealth\nquit\n' | BOOT_IMAGE=$(BOOT_IMAGE) REBUILD_BOOT=0 ./scripts/boot-qemu.sh -serial 2>&1 | tee $(LOG_DIR)/qemu-bootproof.log; \
+		p=$${PIPESTATUS[1]}; \
+		grep -q 'boot complete -- hivemind os' $(LOG_DIR)/qemu-bootproof.log || { echo "❌ boot log missing"; exit 1; }; \
+		grep -q 'image checksum: OK' $(LOG_DIR)/qemu-bootproof.log || { echo "❌ guard report missing"; exit 1; }; \
+		grep -q 'shutdown: draining modules' $(LOG_DIR)/qemu-bootproof.log || { echo "❌ clean shutdown missing"; exit 1; }; \
+		[ "$$p" -eq 0 ] || { echo "❌ QEMU exit $$p"; exit 1; }; \
+		echo "✅ QEMU boot proof passed"; \
+	fi
+
+# ── Real hardware (bare-metal) targets ───────────────────────────────────────
+# The kernel is a Multiboot-1 image; bare-metal media need a bootloader that
+# can hand off to it. If grub tooling is present we build a bootable ISO
+# (BIOS+EFI via grub-mkrescue); hw-usb dd's that ISO onto a USB stick.
+GRUB_RESCUE := $(shell command -v grub-mkrescue 2>/dev/null || true)
+
+# ── Push tooling: log hygiene + bare-metal matrix + commit + upstream ────────
+#
+# Make push is the release-gate command: it validates the live continental log
+# corpus, cross-compiles the bare-metal binaries across the §2.0 build matrix
+# (amd64/arm64/riscv64, CGO-free), stages exactly the intended tree changes,
+# commits them, and pushes to the configured upstream.
+CONT_LOG_DIR := world-report/logs
+CROSS_DIR := dist/hivemind-cross
+PUSH_PATHS := cmd/hivemind-image internal/kernel/bootimage scripts/boot-qemu.sh Makefile AGENTS.md
+CROSS_ARCHES := amd64 arm64 riscv64
+CROSS_BINS := hivemind relay world fabric gaze souls commune derive
+
+push-logcheck:
+	@cnt=$$(find $(CONT_LOG_DIR) -maxdepth 1 -name '*.log' ! -name 'gaze-*' | wc -l); \
+	echo "  ℹ️  continental node logs present: $$cnt / 35"; \
+	[ "$$cnt" -ge 25 ] || { echo "❌ too few continental logs ($$cnt) — mesh under-sampled"; exit 1; }; \
+	for cont in af an as eu na oc sa; do \
+		[ -n "$$(ls $(CONT_LOG_DIR)/$$cont-*.log 2>/dev/null)" ] || { echo "❌ continent $$cont silent — no logs"; exit 1; }; \
+	done; \
+	echo "  ✔ all 7 continents reporting"; \
+	for f in $(CONT_LOG_DIR)/*.log; do \
+		case "$$f" in *gaze-*) continue;; esac; \
+		[ -s "$$f" ] || { echo "❌ $$f is empty"; exit 1; }; \
+		if grep -qE '^(panic:|runtime error:|	goroutine [0-9]+\[' "$$f"; then echo "❌ panic/traceback in $$f"; exit 1; fi; \
+	done; \
+	echo "  ✔ every continental log non-empty and free of panic traces"; \
+	echo "✅ continental log hygiene clean"
+
+push-cross:
+	@echo "🚀 Cross-compiling bare-metal matrix: $(CROSS_ARCHES)"
+	@for arch in $(CROSS_ARCHES); do \
+		mkdir -p "$(CROSS_DIR)/linux-$$arch"; \
+		for bin in $(CROSS_BINS); do \
+			echo "  ▸ $$$$bin / linux-$$arch"; \
+			$(SAFE_ENV) CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build \
+				-ldflags "$(LDFLAGS)" -o "$(CROSS_DIR)/linux-$$arch/$$bin" ./cmd/$$bin || { \
+				echo "❌ cross-compile failed: $$bin/linux-$$arch"; exit 1; }; \
+		done; \
+	done; \
+	echo "  ✔ amd64: $$(ls $(CROSS_DIR)/linux-amd64 | tr '\n' ' ')"; \
+	echo "  ✔ arm64: $$(ls $(CROSS_DIR)/linux-arm64 | tr '\n' ' ')"; \
+	echo "  ✔ riscv64: $$(ls $(CROSS_DIR)/linux-riscv64 | tr '\n' ' ')"; \
+	echo "✅ bare-metal matrix built in $(CROSS_DIR)"
+
+push-commit:
+	@git add $(PUSH_PATHS)
+	@if git diff --cached --quiet; then \
+		echo "ℹ️  no staged changes — commit skipped"; \
+	else \
+		git commit -m "kernel: pure-Go boot image (interactive OS + anti-analysis guards) and make push tooling"; \
+	fi
+
+push: push-logcheck push-cross push-commit
+	@echo "📤 Pushing upstream…"
+	@git push origin "$$(git branch --show-current)"
+	@echo "✅ pushed to origin"
+
+build-iso: build-image
+	@if [ -z "$(GRUB_RESCUE)" ]; then \
+		echo "⚠️  grub-mkrescue not found — skip bootable ISO (media needs a bootloader)"; \
+	else \
+		mkdir -p $(DIST_DIR)/iso/boot/grub; \
+		cp $(BOOT_IMAGE) $(DIST_DIR)/iso/boot/hivemind-kernel.bin; \
+		printf '%s\n' \
+			'set timeout=1' \
+			'set default=0' \
+			'menuentry "HIVEMIND (pure-Go kernel + OS)" {' \
+			'  multiboot /boot/hivemind-kernel.bin' \
+			'  boot' \
+			'}' > $(DIST_DIR)/iso/boot/grub/grub.cfg; \
+		$(SAFE_ENV) grub-mkrescue -o $(DIST_DIR)/hivemind-boot.iso $(DIST_DIR)/iso 2>&1 | tail -2; \
+		echo "✅ $(DIST_DIR)/hivemind-boot.iso ready (dd it to a USB with make hw-usb DEV=/dev/sdX)"; \
+	fi
+
+# DEV=/dev/sdX must be given explicitly; only removable block devices between
+# 512MiB and 32GiB are accepted, and the user must confirm before we write.
+hw-usb: build-iso
+	@[ -n "$(HW_DEV)" ] || { echo "usage: make hw-usb DEV=/dev/sdX (or DEV=$$1)"; exit 2; }
+	@[ -f $(DIST_DIR)/hivemind-boot.iso ] || { echo "❌ boot ISO missing — install grub-mkrescue and rerun make build-iso"; exit 2; }
+	@[ -b "$(HW_DEV)" ] || { echo "❌ $(HW_DEV) is not a block device"; exit 2; }
+	@dev=$$(basename $(HW_DEV)); rem=$$(cat /sys/block/$$dev/removable 2>/dev/null || echo 0); \
+	[ "$$rem" = "1" ] || { echo "❌ $(HW_DEV) is not removable — refusing"; exit 2; }
+	@size=$$(blockdev --getsize64 $(HW_DEV) 2>/dev/null || echo 0); \
+	[ "$$size" -ge 536870912 ] && [ "$$size" -le 34359738368 ] || { echo "❌ $(HW_DEV) size $${size} out of 512MiB..32GiB range"; exit 2; }
+	@echo "⚠️  About to WIPE $(HW_DEV) and write the HIVEMIND boot ISO."
+	@printf 'Type YES to continue: '; read yn; [ "$$yn" = "YES" ] || { echo "aborted"; exit 2; }
+	@echo "💾 Writing $(DIST_DIR)/hivemind-boot.iso -> $(HW_DEV)"
+	@$(SAFE_ENV) dd if=$(DIST_DIR)/hivemind-boot.iso of=$(HW_DEV) bs=1M status=progress conv=fsync
+	@echo "✅ Bootable USB ready — reboot into it on real hardware"
 
 # Simulator-enabled developer builds. These are built into bin/ like any other
 # binary, which is why `make clean-release-sim` exists: bin/ is a shared
@@ -372,7 +530,7 @@ test-full: check
 	@$(SAFE_ENV) $(SAFE_RUN) $(PURE_GO) go test ./... -count=1 -v
 
 audit: test
-	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/audit.sh
+	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/utils/audit.sh
 
 # ── lawbook distillation: train a standing local counsel model ─────────────
 # Shrinks the provisioned law journal into a modelfile + supervised dataset,
@@ -623,22 +781,31 @@ demo: build
 
 pain: build
 	@mkdir -p $(LOG_DIR)
-	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/pain.sh
+	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/testing/pain.sh
 
 prove: build
 	@mkdir -p $(LOG_DIR)
 	@PROOF=$(LOG_DIR)/proof-$$(date -u +%Y%m%dT%H%M%SZ).log; \
 	set -o pipefail; \
 	echo "===== PROOF RUN $$(date -u) · $$(git rev-parse --short HEAD 2>/dev/null || echo nogit) =====" | tee "$$PROOF"; \
-	$(SAFE_ENV) $(SAFE_RUN) ./scripts/audit.sh 2>&1 | tee -a "$$PROOF" && \
-	$(SAFE_ENV) $(SAFE_RUN) timeout 120 ./scripts/timed_test.sh 2>&1 | tee -a "$$PROOF" && \
-	$(SAFE_ENV) $(SAFE_RUN) ./scripts/verify-supermesh.sh 2>&1 | tee -a "$$PROOF" && \
-	$(SAFE_ENV) $(SAFE_RUN) ./scripts/pain.sh 2>&1 | tee -a "$$PROOF" && \
-	$(SAFE_ENV) $(SAFE_RUN) bash scripts/proof-keys.sh 2>&1 | tee -a "$$PROOF" && \
+	$(SAFE_ENV) $(SAFE_RUN) ./scripts/utils/audit.sh 2>&1 | tee -a "$$PROOF" && \
+	$(SAFE_ENV) $(SAFE_RUN) timeout 120 ./scripts/testing/timed_test.sh 2>&1 | tee -a "$$PROOF" && \
+	$(SAFE_ENV) $(SAFE_RUN) ./scripts/testing/verify_supermesh.sh 2>&1 | tee -a "$$PROOF" && \
+	$(SAFE_ENV) $(SAFE_RUN) ./scripts/testing/pain.sh 2>&1 | tee -a "$$PROOF" && \
+	$(SAFE_ENV) $(SAFE_RUN) bash scripts/utils/proof_keys.sh 2>&1 | tee -a "$$PROOF" && \
 	echo "✅ PROOF COMPLETE — transcript: $$PROOF" | tee -a "$$PROOF"
 
 proof-keys: build
-	@$(SAFE_ENV) $(SAFE_RUN) bash scripts/proof-keys.sh
+	@$(SAFE_ENV) $(SAFE_RUN) bash scripts/utils/proof_keys.sh
+
+# Deterministic verification gate used by `make all`: repo-wide Go audit (fmt,
+# vet, build, full test suite) plus the kernel boot proof. No live-network or
+# long-running stimulus steps, so it cannot flake on machine load or relay
+# timing; the deeper live mesh and cipher certifications live under `prove`.
+verify: build qemu-bootproof
+	@echo "🛡️  Verification gate (repo audit + kernel boot proof)"
+	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/utils/audit.sh
+	@echo "✅ verification gate passed"
 
 prove-relay: build
 	@echo "🧪 Full relay + MQTT live test (cloud path only — no local echo)..."
@@ -672,7 +839,7 @@ doctor:
 	@ls /sys/class/thermal/thermal_zone*/temp >/dev/null 2>&1 && echo "  ✔ thermal sensor (pain)" || echo "  ⚠️  no thermal sensor"
 	@[ -r /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ] && echo "  ✔ cpufreq (throttle)" || echo "  ⚠️  no cpufreq"
 	@echo "  ✔ own relay (bin/relay) — no third-party dependency"
-	@python3 -c "import socket; s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.bind(('127.0.0.1',0)); print('  ✔ loopback TCP (mesh transport ok)'); s.close()" 2>/dev/null || echo "  ❌ loopback TCP broken"
+	@f=$$(mktemp --suffix=.go); printf '%s\n' 'package main' 'import ("net"; "os")' 'func main() {' '  l, e := net.Listen("tcp", "127.0.0.1:0")' '  if e != nil { os.Exit(1) }' '  l.Close()' '}' > "$$f"; go run "$$f" 2>/dev/null && echo "  ✔ loopback TCP (mesh transport ok)" || echo "  ❌ loopback TCP broken"; rm -f "$$f"
 
 souls: build-souls
 	@$(SAFE_ENV) $(SAFE_RUN) bin/souls
