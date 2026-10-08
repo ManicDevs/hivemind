@@ -73,7 +73,7 @@ RELAY_URL ?= http://localhost:$(RELAY_PORT)
 .PHONY: all help \
 build build-image build-hivemind build-commune build-souls build-gaze build-relay build-world build-all \
 qemu qemu-serial qemu-screenshot qemu-bootproof run build-iso hw-usb \
-	push push-logcheck push-cross push-commit \
+	push push-logcheck push-cross push-commit check-root \
 	build-hivemind-train build-train \
 fmt vet staticcheck lint tidy check \
 test test-concurrent test-race test-verbose test-full \
@@ -91,7 +91,7 @@ release-linux-amd64 release-linux-arm64 release-linux-arm \
 release-darwin-amd64 release-darwin-arm64 release-windows-amd64 \
 release-hardened release-clean dist-clean \
 dev install uninstall \
-clean clean-all clean-souls clean-logs \
+clean clean-all clean-souls clean-logs clean-bin \
 version version-info \
 proof-keys \
 prove-relay setup
@@ -141,6 +141,8 @@ help:
 	@printf "  \033[35m%-20s\033[0m %s\n" "hw-usb" "Write boot ISO to real hardware: make hw-usb DEV=/dev/sdX"
 	@printf "  \033[35m%-20s\033[0m %s\n" "push" "Log hygiene + cross-compile matrix + commit + push upstream"
 	@printf "  \033[35m%-20s\033[0m %s\n" "push-logcheck" "Validate the 35 continental logs (hygiene, no panic traces)"
+	@printf "  \033[35m%-20s\033[0m %s\n" "check-root" "Fail if any binary has leaked into the repo root"
+	@printf "  \033[35m%-20s\033[0m %s\n" "clean" "List clean-* scopes (bin/logs/souls/sim/dist/all)"
 	@echo ""
 	@printf "  \033[33m%-20s\033[0m %s\n" "test" "fmt + vet + tests (with -race if a C compiler exists)"
 	@printf "  \033[33m%-20s\033[0m %s\n" "test-concurrent" "Pure-Go concurrency gate (no C toolchain needed)"
@@ -298,6 +300,18 @@ qemu-bootproof: build-image
 # (BIOS+EFI via grub-mkrescue); hw-usb dd's that ISO onto a USB stick.
 GRUB_RESCUE := $(shell command -v grub-mkrescue 2>/dev/null || true)
 
+# ── Strict root-hygiene guard ─────────────────────────────────────────────────
+# No executable/build output may ever live in the repo root. Every build recipe
+# targets bin/ (host), dist/ (platform bundles), or release/. This guard fails
+# if a stray root-level binary appears (e.g. a bare `go build ./cmd/...`).
+STRAY_ROOT_BINS := hivemind commune souls gaze relay world fabric derive
+
+check-root:
+	@for b in $(STRAY_ROOT_BINS); do \
+		if [ -e "$$b" ]; then echo "❌ stray root artifact ./$$b — canonical output is bin/$$b"; exit 1; fi; \
+	done
+	@echo "✔ no stray binaries in repo root"
+
 # ── Push tooling: log hygiene + bare-metal matrix + commit + upstream ────────
 #
 # Make push is the release-gate command: it validates the live continental log
@@ -306,7 +320,7 @@ GRUB_RESCUE := $(shell command -v grub-mkrescue 2>/dev/null || true)
 # commits them, and pushes to the configured upstream.
 CONT_LOG_DIR := world-report/logs
 CROSS_DIR := dist/hivemind-cross
-PUSH_PATHS := cmd/hivemind-image internal/kernel/bootimage scripts/boot-qemu.sh Makefile AGENTS.md
+PUSH_PATHS := cmd/hivemind-image internal/kernel/bootimage scripts/boot-qemu.sh Makefile AGENTS.md .gitignore
 CROSS_ARCHES := amd64 arm64 riscv64
 CROSS_BINS := hivemind relay world fabric gaze souls commune derive
 
@@ -347,10 +361,10 @@ push-commit:
 	@if git diff --cached --quiet; then \
 		echo "ℹ️  no staged changes — commit skipped"; \
 	else \
-		git commit -m "kernel: pure-Go boot image (interactive OS + anti-analysis guards) and make push tooling"; \
+		git commit -m "kernel: pure-Go boot image (guards + interactive OS), make tooling, clean-* scopes, root-hygiene guard"; \
 	fi
 
-push: push-logcheck push-cross push-commit
+push: push-logcheck check-root push-cross push-commit
 	@echo "📤 Pushing upstream…"
 	@git push origin "$$(git branch --show-current)"
 	@echo "✅ pushed to origin"
@@ -802,7 +816,7 @@ proof-keys: build
 # vet, build, full test suite) plus the kernel boot proof. No live-network or
 # long-running stimulus steps, so it cannot flake on machine load or relay
 # timing; the deeper live mesh and cipher certifications live under `prove`.
-verify: build qemu-bootproof
+verify: build check-root qemu-bootproof
 	@echo "🛡️  Verification gate (repo audit + kernel boot proof)"
 	@$(SAFE_ENV) $(SAFE_RUN) ./scripts/utils/audit.sh
 	@echo "✅ verification gate passed"
@@ -850,15 +864,36 @@ commune: build-commune
 gaze: build-gaze
 	@$(SAFE_ENV) $(SAFE_RUN) bin/gaze
 
+# `make clean` is non-destructive by design: no binary is ever removed without
+# you naming the exact thing. Every cleaning scope is a `clean-*` target, so
+# `make clean` enumerates them and tells you which one to press.
 clean:
-	@rm -rf $(BIN_DIR) $(LOG_DIR)/*.log
-	@go clean -testcache
-	@echo "🧹 Cleaned"
+	@echo ""
+	@echo "🧹 HIVEMIND CLEAN TARGETS — 'make clean' never deletes (pick a scope):"
+	@echo ""
+	@printf '  \033[1m%-22s\033[0m %s\n' 'TARGET' 'WHAT IT REMOVES'
+	@printf '  \033[1m%-22s\033[0m %s\n' '------' '--------------'
+	@printf '  \033[35m%-22s\033[0m %s\n' 'clean-bin' 'bin/ host binaries + go build/test cache'
+	@printf '  \033[35m%-22s\033[0m %s\n' 'clean-logs' 'logs/ *.log only'
+	@printf '  \033[35m%-22s\033[0m %s\n' 'clean-souls' '.hive_memory* (soul memory pools)'
+	@printf '  \033[35m%-22s\033[0m %s\n' 'clean-release-sim' 'simulator-enabled bin/fabric bin/world'
+	@printf '  \033[35m%-22s\033[0m %s\n' 'release-clean / dist-clean' 'dist/ release artifacts'
+	@printf '  \033[32m%-22s\033[0m %s\n' 'clean-all' 'EVERYTHING above — return the repo to pristine'
+	@echo ""
+	@echo "Run:  make clean-all   (full reset, incl. dist/ + .relaykey)"
+	@echo "      make clean-bin   (rebuild host binaries faster: rm bin -> make build)"
+	@echo "      make clean-logs / clean-souls / clean-release-sim"
+	@echo "      make dist-clean  (release artifacts only)"
+	@echo ""
 
-clean-all: clean
-	@rm -rf $(DIST_DIR)
+clean-bin:
+	@rm -rf $(BIN_DIR)
+	@go clean -testcache
+	@echo "🧹 bin/ + build cache cleaned"
+
+clean-all: clean-bin clean-logs clean-souls clean-release-sim release-clean
 	@rm -f $(RELAY_KEY_FILE)
-	@echo "🧹 Deep cleaned"
+	@echo "🧹 Deep cleaned — repo returns to pristine (re-run 'make setup')"
 
 clean-souls:
 	@rm -rf .hive_memory
@@ -869,6 +904,7 @@ clean-logs:
 	@echo "🧹 Logs cleaned"
 
 release: release-linux release-darwin release-windows
+	@cd $(DIST_DIR) && sha256sum hivemind-* > SHA256SUMS && cat SHA256SUMS
 	@cd $(DIST_DIR) && sha256sum hivemind-* > SHA256SUMS && cat SHA256SUMS
 
 release-linux: release-linux-amd64 release-linux-arm64 release-linux-arm

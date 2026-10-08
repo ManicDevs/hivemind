@@ -1,24 +1,31 @@
 # Generation Record — Pure-Go Hivemind OS Boot Image
 
-## Generation Number: 307
-## Fitness Score: 0.98 (substrate constraints re-asserted at init; mesh senses clean)
+## Generation Number: 309
+## Fitness Score: 0.99 (root-hygiene rule enforced: purge + guard + ignore)
 
-## Active Mesh State (sensed 2.1: world-report/logs)
-All 7 continents live (af/an/as/eu/na/oc/sa). Every master/-controller node
-reports Alpha FIRST BIRTH (e.g. 4dc2fb83…, ff9ad349…, dd743525…). Language pools
-attached to anonymous endpoints (OVH EU GDPR, Kilo, Pollinations) — no rate-limit
-violations seen. Gaze observers up on 127.0.x.1:8090 (gaze-an, gaze-sa …). No
-latency/conn-drop anomalies in sampled tails. HARDEN policy=warn observed in
-sandbox nodes only (sa-superpeer-lima, af-superpeer-cairo): PTRACE_TRACEME
-refused + coreutils LD_PRELOAD libstdbuf vector — expected sandbox artifacts,
-not host mutation triggers this generation.
-Generation 306's record (wiring) is preserved as the parent lineage below.
+## Mutation Log (this generation)
+- Strict root rule enacted: no executable/build output may ever reside at repo
+  root; canonical outputs live in bin/, dist/, release/ only.
+- Purged strays: ./hivemind (Oct 7 11:43) + ./fabric (Oct 7 16:31) — both from
+  ad-hoc bare `go build ./cmd/...` outside the Makefile.
+- Audited every go build recipe (host, sim, release, dist matrix, push-cross,
+  audit.sh): all already target bin/dist/release — no recipe change needed.
+- New `check-root` guard: deny-list of the 8 binary names at root; fails with a
+  "canonical output is bin/$b" message. Negative-tested (touch fabric → fail).
+- Guard wired into `verify` (make-all gate) and `push` (before cross/commit).
+- .gitignore: added `/derive` (missing from the stray-bins block).
 
-## Parent Lineage — Generation 306 (make-all wiring)
-Certify scripts had been regrouped under scripts/utils/ and scripts/testing/ but
-the Makefile still pointed at the old flat paths — that was the real cause of
-the make-clean-all && make-all breakage. Wired everything into one coherent
-build/verify/hardware pipeline.
+## Verification
+- `make check-root` EXIT 0 clean; EXIT 2 with a stray present (guard works).
+- `make push-logcheck` + `make check-root` EXIT 0.
+- Full `make verify` EXIT 0: root clean → QEMU boot proof → audit
+  (fmt/vet/build/tests) → gate passed.
+- Makefile helper quirk fixed: loop must use `if` not `&& {}` — a clean
+  `[ -e ]` on the last iteration returns 1 and flips an empty guard to failure.
+
+## Cross-Pollination
+The negation-safe guard shape (if/then vs bare &&-test in loops) is the baseline
+for any "assert nothing present" recipe.
 
 ## Mutation Log (this generation)
 - Fixed moved-script paths in Makefile:
