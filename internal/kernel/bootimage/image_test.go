@@ -52,16 +52,24 @@ func TestEntryClearsTheFramebufferBeforePainting(t *testing.T) {
 	entry := binary.LittleEndian.Uint32(img.Bytes[28:])
 	expect := []byte{
 		0xFA,                         // cli
+		0xFC,                         // cld
 		0xBC, 0x00, 0x00, 0x11, 0x00, // mov $0x110000, %esp
 	}
 	got := img.Bytes[int(entry-0x100000):]
 	if !bytes.HasPrefix(got, expect) {
 		t.Fatalf("entry prologue = %x, want %x", got[:len(expect)], expect)
 	}
-	// The two 32-bit guard calls (checksum, then environment) run next:
-	// call check_checksum ; call check_env
-	if got[len(expect)] != 0xE8 || got[len(expect)+5] != 0xE8 {
-		t.Fatalf("entry must call the two anti-analysis guards, got %x", got[len(expect):len(expect)+10])
+	// The four anti-analysis guards run next. Boot-time loud mode first:
+	// mov $1, %ecx (checksum report) ; mov $1, %edx (code-scan report),
+	// then call check_checksum ; call check_breakpoints ; call check_env ;
+	// call check_timing (four consecutive 32-bit relative calls).
+	pre := []byte{0xB9, 0x01, 0x00, 0x00, 0x00, 0xBA, 0x01, 0x00, 0x00, 0x00}
+	if !bytes.HasPrefix(got[len(expect):], pre) {
+		t.Fatalf("guard preamble = %x, want %x", got[len(expect):len(expect)+len(pre)], pre)
+	}
+	callSeq := got[len(expect)+len(pre):]
+	if callSeq[0] != 0xE8 || callSeq[5] != 0xE8 || callSeq[10] != 0xE8 || callSeq[15] != 0xE8 {
+		t.Fatalf("entry must call the four anti-analysis guards, got %x", callSeq[:20])
 	}
 }
 

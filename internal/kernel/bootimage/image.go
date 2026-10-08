@@ -33,6 +33,7 @@ func Build() (*Image, error) {
 	}
 	// Loaded image extends from 0x100000 to just past its final byte.
 	patchImm("imageEndPatch", 0x00100000+uint32(b.Offset()))
+	patchImm("imageEndPatch2", 0x00100000+uint32(b.Offset()))
 	// The skip-compare's own immediate is a fixed address and participates in
 	// the sum on both sides; only the 4-byte expected-value slot is excluded,
 	// otherwise the value it stores would be self-referential.
@@ -47,6 +48,17 @@ func Build() (*Image, error) {
 		sum += uint32(b.buf[i])
 	}
 	patchImm("guardExpectedSum", sum)
+	// The runtime anti-rootkit scan flags any 0xCC (INT3) or 0xCD (INT) byte in
+	// the image, so the emitter must guarantee such a byte is never produced
+	// (instructions here never use those opcodes, every marker is built at
+	// runtime: |0xCD | no instruction encodes them, and no message string
+	// contains them as raw bytes). Build() enforces this or the first scan
+	// would false-halt the OS.
+	for i, bb := range b.buf {
+		if bb == 0xCC || bb == 0xCD {
+			return nil, fmt.Errorf("bootimage: byte %#02x at offset %d would trip the rootkit scan", bb, i)
+		}
+	}
 	return &Image{Bytes: b.buf, EntryRVA: main}, nil
 }
 
@@ -74,6 +86,8 @@ const (
 	osBufIdx     = 0x00040048 // u8 index of the next byte in the command buffer
 	osGuardImage = 0x0004004C // u8 1 = runtime image checksum verified at boot
 	osGuardEnv   = 0x0004004D // u8 1 = hypervisor/emulator detected via CPUID
+	osGuardInt   = 0x0004004E // u8 1 = breakpoint/rootkit byte scan clean
+	osGuardDbg   = 0x0004004F // u8 1 = timing anomaly (debugger suspected)
 )
 
 type reloc struct {
@@ -167,7 +181,7 @@ func (a *asm) build() {
 		"[os] module graph resolved: identity -> platform -> apex-mesh\n" +
 		"[os] capabilities exposed: clock fs:read fs:write log proc guard\n" +
 		"[os] apex subsystem registered (tick 250ms)\n" +
-		"[os] guard layer armed: image integrity + environment\n" +
+		"[os] guard layer armed: integrity + environment + rootkit scan + timing\n" +
 		"[os] scheduler running: 3 goroutines, heap ceiling 64MiB\n" +
 		"[os] boot complete -- hivemind os 0.1.0\n\n"
 	a.emitStr(serialMsg)
@@ -196,7 +210,7 @@ func (a *asm) build() {
 	a.mark("healthCaps")
 	a.emitStr("  capabilities: clock fs:read fs:write log proc guard\n")
 	a.mark("healthGuard")
-	a.emitStr("  guards: integrity OK, environment monitored\n")
+	a.emitStr("  guards: integrity OK, environment monitored, rootkit scan OK, timing nominal\n")
 	a.mark("healthUpPrefix")
 	a.emitStr("  uptime: ")
 	a.mark("healthUpSuffix")
@@ -219,6 +233,22 @@ func (a *asm) build() {
 	a.emitStr("  environment: virtualized\n")
 	a.mark("envNativeLine")
 	a.emitStr("  environment: native\n")
+	a.mark("guardBpClean")
+	a.emitStr("[guard] code scan: clean (no 0xCC/0xCD breakpoint bytes)\n")
+	a.mark("guardBpBad")
+	a.emitStr("[guard] ROOTKIT marker detected (0xCC/0xCD present) - halting\n")
+	a.mark("guardTmgOK")
+	a.emitStr("[guard] timing probe: nominal\n")
+	a.mark("guardTmgAnom")
+	a.emitStr("[guard] timing probe: ANOMALY (debugger suspected)\n")
+	a.mark("guardBpOKLine")
+	a.emitStr("  code scan: OK\n")
+	a.mark("guardBpBadLine")
+	a.emitStr("  code scan: FAILED\n")
+	a.mark("guardTmgOKLine")
+	a.emitStr("  timing: nominal\n")
+	a.mark("guardTmgAnomLine")
+	a.emitStr("  timing: ANOMALY\n")
 	a.mark("shutdownMsg")
 	a.emitStr("shutdown: draining modules, heap released\n")
 	for _, c := range []string{"help", "boot", "modules", "caps", "uptime", "health", "banner", "guards", "quit", "shutdown"} {
@@ -309,9 +339,14 @@ func (a *asm) build() {
 	a.emit(0xC6, 0x05)      // mov $1, byte ($osGuardImage)
 	a.imm32(osGuardImage)
 	a.emit(0x01)
-	a.emit(0xBE) // mov $guardImgOK, %esi
+	// ECX selects print mode: nonzero prints the OK confirmation (boot),
+	// zero keeps the runtime re-verification strand silent.
+	a.emit(0x85, 0xC9)         // test %ecx, %ecx
+	a.jrel8(0x74, "ck_silent") // je ck_silent
+	a.emit(0xBE)               // mov $guardImgOK, %esi
 	a.imm32(a.labels["guardImgOK"])
 	a.call("serial_print")
+	a.mark("ck_silent")
 	a.emit(0xC3) // ret
 	a.mark("ckfail")
 	a.emit(0xC6, 0x05) // mov $0, byte ($osGuardImage)
@@ -345,6 +380,86 @@ func (a *asm) build() {
 	a.emit(0x00)
 	a.emit(0xBE) // mov $envNativeMsg, %esi
 	a.imm32(a.labels["envNativeMsg"])
+	a.call("serial_print")
+	a.emit(0xC3) // ret
+
+	// check_breakpoints: anti-rootkit guard. Scans every byte of the loaded
+	// image for 0xCC (INT3) and 0xCD (INT) markers: patching a breakpoint or
+	// planting an interrupt-vector hook changes the bytes and trips. Build()
+	// asserts the emitted image contains no such byte, so the scan is exact.
+	a.mark("check_breakpoints")
+	a.emit(0xBE) // mov $0x100000, %esi
+	a.imm32(0x00100000)
+	// No literal 0xCC/0xCD bytes may appear in the image, so the marker
+	// bytes are composed arithmetically at runtime: CL = 0xC0+0x0C, DL =
+	// 0xC9+0x04. (The scan would otherwise trip on its own compare immediates.)
+	a.emit(0xB0, 0xC0) // mov $0xC0, %al
+	a.emit(0x04, 0x0C) // add $0x0C, %al
+	a.emit(0x88, 0xC1) // mov %al, %cl (CL = 0xCC)
+	a.emit(0xB0, 0xC9) // mov $0xC9, %al
+	a.emit(0x04, 0x04) // add $4, %al
+	a.emit(0x8A, 0xD0) // mov %al, %dl (DL = 0xCD)
+	a.mark("bp_loop")
+	a.emit(0xAC)       // lodsb
+	a.emit(0x38, 0xC8) // cmp %cl, %al
+	a.jrel8(0x74, "bp_bad")
+	a.emit(0x38, 0xD0) // cmp %dl, %al
+	a.jrel8(0x74, "bp_bad")
+	a.emit(0x81, 0xFE) // cmp $imageEnd, %esi
+	a.labels["imageEndPatch2"] = a.base + uint32(a.b.Offset())
+	a.imm32(0)               // patched by Build
+	a.jrel8(0x72, "bp_loop") // jb bp_loop
+	a.emit(0xC6, 0x05)       // mov $1, byte ($osGuardInt)
+	a.imm32(osGuardInt)
+	a.emit(0x01)
+	a.emit(0x85, 0xD2)      // test %edx, %edx
+	a.jrel8(0x74, "bp_sil") // je bp_sil (EDX=0 silent)
+	a.emit(0xBE)            // mov $guardBpClean, %esi
+	a.imm32(a.labels["guardBpClean"])
+	a.call("serial_print")
+	a.mark("bp_sil")
+	a.emit(0xC3) // ret
+	a.mark("bp_bad")
+	a.emit(0xC6, 0x05) // mov $0, byte ($osGuardInt)
+	a.imm32(osGuardInt)
+	a.emit(0x00)
+	a.emit(0xBE) // mov $guardBpBad, %esi
+	a.imm32(a.labels["guardBpBad"])
+	a.call("serial_print")
+	a.jrel8(0xEB, "guard_halt") // jmp guard_halt (shared halt from check_checksum)
+
+	// check_timing: anti-analysis guard. Two RDTSC samples bracket a fixed
+	// 4096-iteration work loop; a debugger that single-steps through the window
+	// inflates the cycle count past the threshold and is flagged. The threshold
+	// is deliberately generous so emulated/TCG timing stays nominal.
+	a.mark("check_timing")
+	a.emit(0x0F, 0x31) // rdtsc
+	a.emit(0x89, 0xC1) // mov %eax, %ecx (t0)
+	a.emit(0xBB)       // mov $4096, %ebx
+	a.imm32(4096)
+	a.mark("tl_loop")
+	a.emit(0x69, 0xC0, 0x05, 0x00, 0x00, 0x00) // imul $5, %eax, %eax
+	a.emit(0x05, 0x01, 0x00, 0x00, 0x00)       // add $1, %eax
+	a.emit(0x4B)                               // dec %ebx
+	a.jrel8(0x75, "tl_loop")                   // jnz tl_loop
+	a.emit(0x0F, 0x31)                         // rdtsc
+	a.emit(0x29, 0xC8)                         // sub %ecx, %eax (delta)
+	a.emit(0x3D)                               // cmp $8000000, %eax
+	a.imm32(8000000)
+	a.jrel8(0x72, "tmg_nominal") // jb nominal
+	a.emit(0xC6, 0x05)           // mov $1, byte ($osGuardDbg)
+	a.imm32(osGuardDbg)
+	a.emit(0x01)
+	a.emit(0xBE) // mov $guardTmgAnom, %esi
+	a.imm32(a.labels["guardTmgAnom"])
+	a.call("serial_print")
+	a.emit(0xC3) // ret
+	a.mark("tmg_nominal")
+	a.emit(0xC6, 0x05) // mov $0, byte ($osGuardDbg)
+	a.imm32(osGuardDbg)
+	a.emit(0x00)
+	a.emit(0xBE) // mov $guardTmgOK, %esi
+	a.imm32(a.labels["guardTmgOK"])
 	a.call("serial_print")
 	a.emit(0xC3) // ret
 
@@ -525,10 +640,36 @@ func (a *asm) build() {
 	a.emit(0xBE)                  // mov $envVirtLine, %esi
 	a.imm32(a.labels["envVirtLine"])
 	a.call("serial_print")
-	a.jnear(0xEB, "g_ret") // jmp g_ret
+	a.jnear(0xEB, "g_scan") // jmp g_scan
 	a.mark("g_env_native")
 	a.emit(0xBE) // mov $envNativeLine, %esi
 	a.imm32(a.labels["envNativeLine"])
+	a.call("serial_print")
+	a.mark("g_scan")
+	a.emit(0xA0) // mov byte ($osGuardInt), %al
+	a.imm32(osGuardInt)
+	a.emit(0x84, 0xC0)          // test %al, %al
+	a.jnear(0x74, "g_scan_bad") // je g_scan_bad
+	a.emit(0xBE)                // mov $guardBpOKLine, %esi
+	a.imm32(a.labels["guardBpOKLine"])
+	a.call("serial_print")
+	a.jnear(0xEB, "g_timing") // jmp g_timing
+	a.mark("g_scan_bad")
+	a.emit(0xBE) // mov $guardBpBadLine, %esi
+	a.imm32(a.labels["guardBpBadLine"])
+	a.call("serial_print")
+	a.mark("g_timing")
+	a.emit(0xA0) // mov byte ($osGuardDbg), %al
+	a.imm32(osGuardDbg)
+	a.emit(0x84, 0xC0)          // test %al, %al
+	a.jnear(0x74, "g_time_nom") // je g_time_nom
+	a.emit(0xBE)                // mov $guardTmgAnomLine, %esi
+	a.imm32(a.labels["guardTmgAnomLine"])
+	a.call("serial_print")
+	a.jnear(0xEB, "g_ret") // jmp g_ret
+	a.mark("g_time_nom")
+	a.emit(0xBE) // mov $guardTmgOKLine, %esi
+	a.imm32(a.labels["guardTmgOKLine"])
 	a.call("serial_print")
 	a.mark("g_ret")
 	a.emit(0xC3) // ret
@@ -552,12 +693,18 @@ func (a *asm) build() {
 	// until a quit/shutdown command or QEMU is closed.
 	a.mark("main")
 	a.emit(0xFA) // cli
+	a.emit(0xFC) // cld (Multiboot leaves DF undefined; all scans use postfix)
 	a.emit(0xBC) // mov $0x110000, %esp
 	a.imm32(0x00110000)
-	// Anti-analysis guards run before anything is painted: a tampered image
-	// or an emulator is reported, and the integrity check can refuse to boot.
+	// Anti-analysis guards run before anything is painted: the image checksum
+	// and the breakpoint scan can refuse to boot, the environment and timing
+	// probes report virtualization/debugger presence. Loud mode (ECX=1, EDX=1).
+	a.emit(0xB9, 0x01, 0x00, 0x00, 0x00) // mov $1, %ecx (loud integrity)
+	a.emit(0xBA, 0x01, 0x00, 0x00, 0x00) // mov $1, %edx (loud code scan)
 	a.call("check_checksum")
+	a.call("check_breakpoints")
 	a.call("check_env")
+	a.call("check_timing")
 	a.emit(0xBF) // mov $0xB8000, %edi
 	a.imm32(0x000B8000)
 	a.emit(0xB8) // mov $0x0F200F20, %eax
@@ -587,6 +734,11 @@ func (a *asm) build() {
 	a.call("serial_print")
 
 	a.mark("main_loop")
+	// Runtime anti-rootkit strand: silently re-verify the whole image every
+	// poll iteration. A post-boot in-memory patch (even one that fixed the
+	// boot-time checksum) changes the live bytes and halts here.
+	a.emit(0x31, 0xC9) // xor %ecx, %ecx (silent re-verify)
+	a.call("check_checksum")
 	// Device poll: is there a byte ready on the COM1 receiver?
 	a.emit(0xBA, 0xFD, 0x03, 0x00, 0x00) // mov $0x3FD, %edx (LSR)
 	a.emit(0xEC)                         // in %al, %dx
