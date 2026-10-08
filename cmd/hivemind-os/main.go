@@ -10,6 +10,8 @@
 //	hivemind-os                 boot, run the built-in modules, wait for Ctrl-C
 //	hivemind-os -health         print the health snapshot and exit
 //	hivemind-os -platform fake  run against the deterministic fake substrate
+//	hivemind-os -platform serial -serial-path /dev/ttyS0  boot onto the host
+//	                          console device
 //	hivemind-os -uptime 5s      exit automatically after a duration
 package main
 
@@ -25,25 +27,27 @@ import (
 
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/kernel"
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/kernel/boot"
+	"gitlab.torproject.org/cerberus-droid/hivemind/internal/kernel/modules/apex"
 	"gitlab.torproject.org/cerberus-droid/hivemind/internal/kernel/platform"
 )
 
 func main() {
 	var (
-		platformName = flag.String("platform", "host", "substrate: host | fake")
+		platformName = flag.String("platform", "host", "substrate: host | fake | serial")
 		healthOnly   = flag.Bool("health", false, "print health as JSON and exit")
 		runFor       = flag.Duration("uptime", 0, "exit after this long (0 = until signalled)")
 		heapLimit    = flag.Int("heap", 64<<20, "heap limit in bytes (0 = unbounded)")
+		serialPath   = flag.String("serial-path", "/dev/ttyS0", "path used by -platform serial")
 	)
 	flag.Parse()
 
-	if err := run(*platformName, *healthOnly, *runFor, *heapLimit); err != nil {
+	if err := run(*platformName, *healthOnly, *runFor, *heapLimit, *serialPath); err != nil {
 		fmt.Fprintf(os.Stderr, "hivemind-os: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(platformName string, healthOnly bool, runFor time.Duration, heapLimit int) error {
+func run(platformName string, healthOnly bool, runFor time.Duration, heapLimit int, serialPath string) error {
 	var p platform.Platform
 	switch platformName {
 	case "host":
@@ -54,12 +58,23 @@ func run(platformName string, healthOnly bool, runFor time.Duration, heapLimit i
 		// operator sees no banner and no boot report at all.
 		f.MirrorTo(os.Stdout)
 		p = f
+	case "serial":
+		s, err := platform.NewSerialPath(serialPath, heapLimit)
+		if err != nil {
+			return err
+		}
+		p = s
 	default:
-		return fmt.Errorf("unknown platform %q: want host or fake", platformName)
+		return fmt.Errorf("unknown platform %q: want host, fake, or serial", platformName)
 	}
 
 	k := kernel.New()
 	registerModules(k)
+	// Ambient apex substrate: gives the kernel a real subsystem to supervise,
+	// without requiring the full hivemind engine or an external mesh.
+	if err := apex.Register(k, apex.Config{Tick: 250 * time.Millisecond}); err != nil {
+		panic(err)
+	}
 
 	// Ctrl-C drains the OS rather than killing it, so the shutdown path runs
 	// exactly as it would in a booted kernel.
@@ -115,6 +130,7 @@ func registerModules(k *kernel.Kernel) {
 		Requires:     []string{"identity"},
 		Capabilities: []kernel.Capability{kernel.CapClock, kernel.CapLog},
 	}, func(h kernel.Host) kernel.Module { return &platformModule{} })
+
 }
 
 // identityModule publishes the node identity. It is the root provider: nothing

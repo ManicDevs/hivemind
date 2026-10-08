@@ -41,3 +41,7 @@ AGENTS.md
 # apex hyperkernel runtime state (bootstrap writes into data/apex)
 /data/apex/
 /apex_live_migration_v8.pkg
+
+# hivemind-os runtime state
+/.hivemind/
+/hivemind-os
