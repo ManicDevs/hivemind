@@ -321,7 +321,7 @@ push-logcheck:
 	for f in $(CONT_LOG_DIR)/*.log; do \
 		case "$$f" in *gaze-*) continue;; esac; \
 		[ -s "$$f" ] || { echo "❌ $$f is empty"; exit 1; }; \
-		if grep -qE '^(panic:|runtime error:|	goroutine [0-9]+\[' "$$f"; then echo "❌ panic/traceback in $$f"; exit 1; fi; \
+		if grep -qE '^(panic:|runtime error:|	goroutine [0-9]+\[)' "$$f"; then echo "❌ panic/traceback in $$f"; exit 1; fi; \
 	done; \
 	echo "  ✔ every continental log non-empty and free of panic traces"; \
 	echo "✅ continental log hygiene clean"
@@ -331,7 +331,7 @@ push-cross:
 	@for arch in $(CROSS_ARCHES); do \
 		mkdir -p "$(CROSS_DIR)/linux-$$arch"; \
 		for bin in $(CROSS_BINS); do \
-			echo "  ▸ $$$$bin / linux-$$arch"; \
+			echo "  ▸ $$bin / linux-$$arch"; \
 			$(SAFE_ENV) CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build \
 				-ldflags "$(LDFLAGS)" -o "$(CROSS_DIR)/linux-$$arch/$$bin" ./cmd/$$bin || { \
 				echo "❌ cross-compile failed: $$bin/linux-$$arch"; exit 1; }; \
